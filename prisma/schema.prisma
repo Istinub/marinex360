@@ -1,0 +1,123 @@
+// ============================================================================
+//  MarineX360 — prisma/schema.prisma
+// ============================================================================
+//  OWNERSHIP:
+//   - The `datasource` and `generator` blocks below are the DevOps CONFIG SEAM.
+//     They are env-driven (DATABASE_URL / SHADOW_DATABASE_URL) so local Postgres
+//     and AWS RDS are the same code, different .env. DO edit these via DevOps.
+//
+//   - Everything under "TEMPORARY BASELINE MODELS" is a stand-in ONLY. It mirrors
+//     INTERFACE_CONTRACT v1.0 §2-3 for the 6 core entities so that `prisma migrate`,
+//     `prisma db seed`, and CI are demonstrably runnable BEFORE TL/BE commit the
+//     canonical ~24-model schema. TL/BE's canonical model definitions REPLACE this
+//     section wholesale. Do NOT build features against these baseline models, and do
+//     NOT treat them as a contract change — they only reproduce existing contract
+//     conventions (version column, money as <field>AmountMinor+<field>Currency,
+//     opId idempotency via ProcessedOp, branch index, soft-delete via deletedAt).
+// ============================================================================
+
+datasource db {
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ----------------------------------------------------------------------------
+//  TEMPORARY BASELINE MODELS  (replaced by TL/BE canonical schema)
+// ----------------------------------------------------------------------------
+
+model Contact {
+  // Personal data lives ONLY here, referenced by ID elsewhere (OD-03).
+  id         String   @id @default(uuid())
+  name       String
+  email      String?
+  phone      String?
+  anonymised Boolean  @default(false)
+  version    Int      @default(0)
+  deletedAt  DateTime?
+  clients    Client[]
+}
+
+model Client {
+  id               String   @id @default(uuid())
+  branch           String
+  name             String
+  address          String?
+  creditTerms      String?
+  status           String   @default("ACTIVE")
+  primaryContact   Contact? @relation(fields: [primaryContactId], references: [id])
+  primaryContactId String?
+  vessels          Vessel[]
+  jobOrders        JobOrder[]
+  version          Int      @default(0)
+  deletedAt        DateTime?
+
+  @@index([branch])
+}
+
+model Vessel {
+  id             String     @id @default(uuid())
+  client         Client     @relation(fields: [clientId], references: [id])
+  clientId       String
+  imoNumber      String     @unique
+  name           String
+  type           String?
+  flag           String?
+  classification String?
+  jobOrders      JobOrder[]
+  version        Int        @default(0)
+  deletedAt      DateTime?
+}
+
+model JobOrder {
+  id                    String             @id @default(uuid())
+  joNumber              String             @unique
+  branch                String
+  client                Client             @relation(fields: [clientId], references: [id])
+  clientId              String
+  vessel                Vessel             @relation(fields: [vesselId], references: [id])
+  vesselId              String
+  serviceCategories     String[]
+  port                  String?
+  scopeSummary          String
+  origin                String             @default("MANUAL")
+  externalQuoteRef      String?
+  externalRfqRef        String?
+  // Money = integer minor units + ISO-4217 code (frozen quoted baseline; OD-02).
+  quotedAmountMinor     Int
+  quotedCurrency        String
+  state                 String             @default("DRAFT")
+  assignedTechnicianIds String[]
+  plannedStartDate      DateTime?
+  version               Int                @default(0)
+  createdBy             String
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  statusHistory         JobStatusHistory[]
+
+  @@index([branch, state])
+}
+
+model JobStatusHistory {
+  // Immutable transition log (FR-13).
+  id         String   @id @default(uuid())
+  jobOrder   JobOrder @relation(fields: [jobOrderId], references: [id])
+  jobOrderId String
+  fromState  String
+  toState    String
+  actorId    String
+  at         DateTime @default(now())
+}
+
+model ProcessedOp {
+  // Idempotency ledger for offline-originated writes (OD-04). Re-sending the same
+  // opId is a no-op that returns the original result.
+  opId       String   @id
+  entity     String
+  resultHash String?
+  processedAt DateTime @default(now())
+}

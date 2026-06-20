@@ -1,0 +1,45 @@
+{
+  "name": "marinex360",
+  "version": "0.0.0",
+  "private": true,
+  "description": "MarineX360 — internal digital field management system for TKMR. Local-first dev stack (D-001).",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "scripts": {
+    "dev:up": "docker compose up -d --wait",
+    "dev:down": "docker compose down",
+    "dev:reset": "docker compose down -v && docker compose up -d --wait",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:generate": "prisma generate",
+    "db:seed": "prisma db seed",
+    "smoke:s3": "tsx packages/storage/scripts/s3-smoke.ts",
+    "smoke:pdf": "node apps/worker/scripts/render-smoke.mjs",
+    "lint": "eslint .",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "setup": "cp -n .env.example .env || true && docker compose up -d --wait && prisma migrate dev && prisma db seed"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "dotenv": "^16.4.0",
+    "eslint": "^9.12.0",
+    "prisma": "^5.20.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "@faker-js/faker": "^9.0.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.20.0"
+  }
+}

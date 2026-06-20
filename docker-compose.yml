@@ -1,0 +1,81 @@
+# MarineX360 — local dev stack (D-001 local-first).
+# Each service is the local stand-in for a future AWS managed service. The app talks to
+# all of them only through env vars (see .env.example) so the cloud move is config-only:
+#   postgres -> AWS RDS PostgreSQL (ap-southeast-1)
+#   redis    -> AWS ElastiCache (BullMQ + cache)
+#   minio    -> AWS S3 (ap-southeast-1)            [S3_FORCE_PATH_STYLE flips to false]
+#   maildev  -> SendGrid / SES (transactional mail)
+#
+# PDPA / INFRA-1: this stack runs synthetic seed data ONLY. No real client or personal
+# data on local machines until SG-region hosting is in place.
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: marinex
+      POSTGRES_PASSWORD: localdev
+      POSTGRES_DB: marinex360
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Creates the shadow DB Prisma needs for `migrate dev` (see SHADOW_DATABASE_URL).
+      - ./infra/postgres/init-shadow-db.sh:/docker-entrypoint-initdb.d/init-shadow-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marinex -d marinex360"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+    # NOTE: recent minio server images ship without curl/wget, so a reliable HTTP
+    # healthcheck isn't portable. Readiness is proven instead by `minio-init` completing
+    # (it loops on `mc alias set` until MinIO answers) and by `npm run smoke:s3`.
+
+  # One-shot: waits for MinIO, creates the local bucket, then exits 0 (readiness gate).
+  minio-init:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: >
+      /bin/sh -c "
+        until mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 1; done &&
+        mc mb -p local/marinex360-local || true &&
+        echo 'bucket marinex360-local ready'
+      "
+
+  maildev:
+    image: maildev/maildev
+    restart: unless-stopped
+    ports:
+      - "1080:1080"   # web UI
+      - "1025:1025"   # SMTP
+
+volumes:
+  pgdata:
+  miniodata:

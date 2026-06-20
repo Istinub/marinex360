@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: marinex
+          POSTGRES_PASSWORD: localdev
+          POSTGRES_DB: marinex360
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U marinex -d marinex360"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    env:
+      # CI uses service containers, not MinIO. The S3 client is mocked in unit tests.
+      DATABASE_URL: postgresql://marinex:localdev@localhost:5432/marinex360
+      SHADOW_DATABASE_URL: postgresql://marinex:localdev@localhost:5432/marinex360_shadow
+      REDIS_URL: redis://localhost:6379
+      S3_ENDPOINT: http://localhost:9000
+      S3_REGION: ap-southeast-1
+      S3_BUCKET: marinex360-ci
+      S3_FORCE_PATH_STYLE: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Create shadow database
+        run: PGPASSWORD=localdev psql -h localhost -U marinex -d marinex360 -c "CREATE DATABASE marinex360_shadow;" || true
+
+      - name: Prisma validate
+        run: npx prisma validate
+
+      - name: Prisma generate
+        run: npx prisma generate
+
+      - name: Apply migrations
+        # `migrate deploy` applies committed migrations. Until TL/BE commit the canonical
+        # schema + initial migration, this is a no-op on a fresh DB; `prisma validate`
+        # above still guards the schema on every PR.
+        run: npx prisma migrate deploy
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+  docker-build:
+    # Sanity-check both images build (incl. Chromium layer). Does not push.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API image
+        run: docker build -f apps/api/Dockerfile -t marinex-api:ci .
+      - name: Build worker image
+        run: docker build -f apps/worker/Dockerfile -t marinex-worker:ci .

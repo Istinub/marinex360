@@ -1,0 +1,27 @@
+# Secrets / env (PDPA / INFRA-1: never commit real config or data)
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Prisma generated client
+node_modules/.prisma/
+prisma/generated/
+
+# Test / coverage
+coverage/
+
+# Logs & OS
+*.log
+.DS_Store
+
+# Local artifacts (e.g. smoke-test PDFs)
+*.local.pdf
+tmp/
