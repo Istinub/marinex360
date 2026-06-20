@@ -5,7 +5,7 @@
 # (pulls its own runtime libs), add CJK + base fonts for correct PDF rendering, and point
 # Puppeteer at the system binary via PUPPETEER_EXECUTABLE_PATH — so puppeteer-core never
 # downloads a second browser. ("Chrome deps baked into the image" — SRS §9.)
-FROM node:22-bookworm-slim AS build
+FROM node:26-bookworm-slim AS build
 WORKDIR /app
 COPY package*.json ./
 COPY apps/worker/package.json apps/worker/
@@ -16,7 +16,7 @@ COPY tsconfig.base.json ./
 COPY apps/worker ./apps/worker
 RUN npm run build -w @marinex360/worker && npm prune --omit=dev
 
-FROM node:22-bookworm-slim
+FROM node:26-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
