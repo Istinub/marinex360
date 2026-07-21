@@ -1,137 +1,64 @@
-/**
- * MarineX360 — local seed (synthetic data ONLY; PDPA / INFRA-1).
- *
- * No real client or personal data, ever, on local machines or in commits. This script
- * generates fake records with @faker-js/faker.
- *
- * Written against the TEMPORARY BASELINE models (the 6 core contract entities). When
- * TL/BE's canonical ~24-model schema lands, extend this to cover the new models and
- * reconcile any renamed fields. Run: `npm run db:seed`.
- */
-import { PrismaClient } from "@prisma/client";
-import { faker } from "@faker-js/faker";
+// Synthetic seed (S0-7). PDPA/INFRA-1: SYNTHETIC DATA ONLY — no real client or personal data.
+// One user per role, 2 clients, 2 vessels, 2 Job Orders in different states (+ status history).
+import { PrismaClient } from '@prisma/client';
+import { hashPassword } from '../apps/api/src/auth/password.js';
 
-const prisma = new PrismaClient();
-
-const BRANCHES = ["SG", "MY", "ID", "BD"] as const;
-const CURRENCIES = ["SGD", "USD", "MYR", "IDR"] as const;
-const SERVICE_CATEGORIES = [
-  "PROPULSION_MACHINERY",
-  "FLUID_THERMAL",
-  "ELECTRICAL_AUTOMATION",
-  "DECK_HYDRAULICS_STRUCTURAL",
-  "FLEET_OPS_SUPPORT",
-  "ADVISORY_COMPLIANCE",
-] as const;
-const STATES = ["DRAFT", "SCHEDULED", "IN_PROGRESS", "PENDING_REVIEW", "COMPLETED"] as const;
-
-function pick<T>(arr: readonly T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
+// Seed runs as the owner (DIRECT_DATABASE_URL) so it can reset append-only tables.
+const prisma = new PrismaClient({
+  datasources: { db: { url: process.env.DIRECT_DATABASE_URL ?? process.env.DATABASE_URL } },
+});
+const PW = 'MarineX360-dev!'; // local synthetic only
 
 async function main() {
-  faker.seed(42); // deterministic local data
+  const pwHash = await hashPassword(PW);
+  const mk = (email: string, name: string, roles: string[], branch: string, extra: Record<string, unknown> = {}) =>
+    prisma.user.upsert({ where: { email }, update: {}, create: { email, name, passwordHash: pwHash, roles, branch, ...extra } });
 
-  // Clean slate (idempotent local seed). Order respects FKs.
-  await prisma.jobStatusHistory.deleteMany();
-  await prisma.jobOrder.deleteMany();
-  await prisma.vessel.deleteMany();
-  await prisma.client.deleteMany();
-  await prisma.contact.deleteMany();
-  await prisma.processedOp.deleteMany();
+  const admin = await mk('admin@tkmr.local', 'Ava Admin', ['SYSTEM_ADMIN'], 'SG', { mfaEnrolled: false });
+  const finance = await mk('finance@tkmr.local', 'Finn Finance', ['FINANCE'], 'SG', { mfaEnrolled: false });
+  const supervisor = await mk('ops@tkmr.local', 'Suri Supervisor', ['OPS_SUPERVISOR'], 'SG');
+  const director = await mk('director@tkmr.local', 'Dinesh Director', ['DIRECTOR'], 'SG');
+  const tech = await mk('tech@tkmr.local', 'Tariq Technician', ['TECHNICIAN'], 'SG',
+    { skills: ['welding', 'hydraulics'], baseLocation: 'Jurong', available: true, designation: 'Senior Field Technician' });
 
-  let joCounter = 1;
+  const contactA = await prisma.contact.create({ data: { name: 'Operations Desk (Pacific Lines)', email: 'ops@pacificlines.example', phone: '+65-6000-0001' } });
+  const contactB = await prisma.contact.create({ data: { name: 'Fleet Manager (Straits Bulk)', email: 'fleet@straitsbulk.example', phone: '+65-6000-0002' } });
 
-  for (const branch of BRANCHES) {
-    for (let c = 0; c < 4; c++) {
-      const contact = await prisma.contact.create({
-        data: {
-          name: faker.person.fullName(),
-          email: faker.internet.email(),
-          phone: faker.phone.number(),
-        },
-      });
+  const clientA = await prisma.client.create({ data: { branch: 'SG', name: 'Pacific Lines Pte Ltd', address: '1 Maritime Sq, Singapore', creditTerms: 'NET30', primaryContactId: contactA.id } });
+  const clientB = await prisma.client.create({ data: { branch: 'SG', name: 'Straits Bulk Carriers', address: '9 Keppel Rd, Singapore', creditTerms: 'NET45', primaryContactId: contactB.id } });
 
-      const client = await prisma.client.create({
-        data: {
-          branch,
-          name: `${faker.company.name()} Shipping`,
-          address: faker.location.streetAddress({ useFullAddress: true }),
-          creditTerms: pick(["NET30", "NET45", "NET60"]),
-          status: pick(["ACTIVE", "PROSPECT", "INACTIVE"]),
-          primaryContactId: contact.id,
-        },
-      });
+  const vesselA = await prisma.vessel.create({ data: { clientId: clientA.id, imoNumber: '9251986', name: 'MV Pacific Dawn', type: 'Bulk Carrier', flag: 'SG', classification: 'ABS' } });
+  const vesselB = await prisma.vessel.create({ data: { clientId: clientB.id, imoNumber: '9411406', name: 'MV Straits Pioneer', type: 'Tanker', flag: 'SG', classification: 'DNV' } });
 
-      const vesselCount = faker.number.int({ min: 1, max: 3 });
-      for (let v = 0; v < vesselCount; v++) {
-        const vessel = await prisma.vessel.create({
-          data: {
-            clientId: client.id,
-            imoNumber: faker.string.numeric(7),
-            name: `MV ${faker.word.noun()} ${faker.string.alpha({ length: 2, casing: "upper" })}`,
-            type: pick(["Bulk Carrier", "Tanker", "Container", "Offshore Supply"]),
-            flag: pick(["Singapore", "Panama", "Liberia", "Marshall Islands"]),
-            classification: pick(["ABS", "DNV", "Lloyd's Register", "BV"]),
-          },
-        });
+  // JO #1 — DRAFT
+  await prisma.jobOrder.create({
+    data: {
+      joNumber: 'SG-2026-0001', branch: 'SG', clientId: clientA.id, vesselId: vesselA.id,
+      serviceCategories: ['mechanical'], port: 'Singapore', scopeSummary: 'Main engine cooling pump overhaul',
+      origin: 'MANUAL', externalQuoteRef: 'EXT-Q-5521', quotedAmountMinor: 4500000, quotedCurrency: 'SGD',
+      labourRateAmountMinor: 9000, labourRateCurrency: 'SGD', state: 'DRAFT', createdBy: supervisor.id,
+    },
+  });
 
-        const joPerVessel = faker.number.int({ min: 1, max: 3 });
-        for (let j = 0; j < joPerVessel; j++) {
-          const state = pick(STATES);
-          const currency = pick(CURRENCIES);
-          const jo = await prisma.jobOrder.create({
-            data: {
-              joNumber: `${branch}-JO-${String(joCounter++).padStart(5, "0")}`,
-              branch,
-              clientId: client.id,
-              vesselId: vessel.id,
-              serviceCategories: faker.helpers.arrayElements(SERVICE_CATEGORIES, { min: 1, max: 2 }),
-              port: pick(["Singapore", "Port Klang", "Tanjung Priok", "Chittagong"]),
-              scopeSummary: faker.lorem.sentence(),
-              origin: "MANUAL",
-              externalQuoteRef: faker.datatype.boolean() ? `RFQ-${faker.string.numeric(6)}` : null,
-              quotedAmountMinor: faker.number.int({ min: 50_000, max: 50_000_00 }),
-              quotedCurrency: currency,
-              state,
-              assignedTechnicianIds:
-                state === "DRAFT" ? [] : [faker.string.uuid()],
-              plannedStartDate: faker.date.soon({ days: 30 }),
-              createdBy: faker.string.uuid(),
-            },
-          });
+  // JO #2 — IN_PROGRESS, owned by the technician, with realistic status history.
+  const jo2 = await prisma.jobOrder.create({
+    data: {
+      joNumber: 'SG-2026-0002', branch: 'SG', clientId: clientB.id, vesselId: vesselB.id,
+      serviceCategories: ['electrical', 'inspection'], port: 'Singapore', scopeSummary: 'Switchboard thermal survey + breaker service',
+      origin: 'MANUAL', quotedAmountMinor: 2800000, quotedCurrency: 'SGD',
+      labourRateAmountMinor: 9000, labourRateCurrency: 'SGD', state: 'IN_PROGRESS',
+      assignedTechnicianIds: [tech.id], executionOwnerId: tech.id, createdBy: supervisor.id,
+    },
+  });
+  await prisma.jobStatusHistory.createMany({
+    data: [
+      { jobOrderId: jo2.id, fromState: 'DRAFT', toState: 'SCHEDULED', actorId: supervisor.id },
+      { jobOrderId: jo2.id, fromState: 'SCHEDULED', toState: 'IN_PROGRESS', actorId: tech.id },
+    ],
+  });
 
-          // A couple of immutable transition records for non-DRAFT jobs.
-          if (state !== "DRAFT") {
-            await prisma.jobStatusHistory.create({
-              data: {
-                jobOrderId: jo.id,
-                fromState: "DRAFT",
-                toState: "SCHEDULED",
-                actorId: faker.string.uuid(),
-              },
-            });
-          }
-        }
-      }
-    }
-  }
-
-  const counts = {
-    contacts: await prisma.contact.count(),
-    clients: await prisma.client.count(),
-    vessels: await prisma.vessel.count(),
-    jobOrders: await prisma.jobOrder.count(),
-    history: await prisma.jobStatusHistory.count(),
-  };
-  console.log("Seed complete (synthetic data only):", counts);
+  console.log('Seeded: 5 users, 2 contacts, 2 clients, 2 vessels, 2 job orders (DRAFT + IN_PROGRESS).');
+  console.log(`Local login password for all seed users: ${PW}`);
 }
 
-main()
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+main().catch((e) => { console.error(e); process.exit(1); }).finally(() => prisma.$disconnect());

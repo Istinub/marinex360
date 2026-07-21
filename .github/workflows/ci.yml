@@ -35,7 +35,8 @@ jobs:
 
     env:
       # CI uses service containers, not MinIO. The S3 client is mocked in unit tests.
-      DATABASE_URL: postgresql://marinex:localdev@localhost:5432/marinex360
+      DATABASE_URL: postgresql://marinex_app:localdev_app@localhost:5432/marinex360   # runtime/tests
+      DIRECT_DATABASE_URL: postgresql://marinex:localdev@localhost:5432/marinex360    # migrate/studio
       SHADOW_DATABASE_URL: postgresql://marinex:localdev@localhost:5432/marinex360_shadow
       REDIS_URL: redis://localhost:6379
       S3_ENDPOINT: http://localhost:9000
@@ -56,6 +57,12 @@ jobs:
 
       - name: Create shadow database
         run: PGPASSWORD=localdev psql -h localhost -U marinex -d marinex360 -c "CREATE DATABASE marinex360_shadow;" || true
+
+      - name: Provision non-owner app role
+        run: |
+          PGPASSWORD=localdev psql -h localhost -U marinex -d marinex360 \
+            -v app_password="'localdev_app'" \
+            -f infra/postgres/provision-app-role.sql
 
       - name: Prisma validate
         run: npx prisma validate

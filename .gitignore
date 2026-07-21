@@ -25,3 +25,4 @@ coverage/
 # Local artifacts (e.g. smoke-test PDFs)
 *.local.pdf
 tmp/
+prisma/seed.js

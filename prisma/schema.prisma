@@ -1,123 +1,376 @@
-// ============================================================================
-//  MarineX360 — prisma/schema.prisma
-// ============================================================================
-//  OWNERSHIP:
-//   - The `datasource` and `generator` blocks below are the DevOps CONFIG SEAM.
-//     They are env-driven (DATABASE_URL / SHADOW_DATABASE_URL) so local Postgres
-//     and AWS RDS are the same code, different .env. DO edit these via DevOps.
+// MarineX360 — Canonical Prisma schema  (v1.1)
+// Author: Tech Lead · Supersedes v1.0. Additive only — no breaking change to v1.0 shapes.
 //
-//   - Everything under "TEMPORARY BASELINE MODELS" is a stand-in ONLY. It mirrors
-//     INTERFACE_CONTRACT v1.0 §2-3 for the 6 core entities so that `prisma migrate`,
-//     `prisma db seed`, and CI are demonstrably runnable BEFORE TL/BE commit the
-//     canonical ~24-model schema. TL/BE's canonical model definitions REPLACE this
-//     section wholesale. Do NOT build features against these baseline models, and do
-//     NOT treat them as a contract change — they only reproduce existing contract
-//     conventions (version column, money as <field>AmountMinor+<field>Currency,
-//     opId idempotency via ProcessedOp, branch index, soft-delete via deletedAt).
-// ============================================================================
-
+// v1.1 adds (S0-8): User/Technician profile fields (G-3), TOTP enrolment fields (G-2),
+// checklist schema documented (G-4), labourRate ratified (CC-3, default SGD 90/hr applied at
+// service layer, D-004), SYNC-13 reviewState on offline execution rows (D-002 + CC-MOB-2),
+// client-suppliable row id on offline creates (CC-MOB-1). executionOwnerId + InvoiceLine are
+// now RATIFIED (CC-1/CC-2), no longer proposed.
+//
+// CONVENTIONS:
+//  - Every mutable model carries `version Int @default(0)` (OD-05 optimistic concurrency).
+//  - Money = two columns: <field>AmountMinor Int + <field>Currency String (ISO-4217). Never float.
+//  - IDs are UUID. For OFFLINE creates the client MAY supply the row `id` (client UUID, CC-MOB-1);
+//    the server persists it, so resultRef == payload.id. Replay is caught by opId (ProcessedOp).
+//  - Soft delete (deletedAt) on operational/financial rows; never hard-deleted (OD-03).
+//  - AuditEntry + JobStatusHistory are append-only AND DB-immutable (app role has no UPDATE/DELETE
+//    grant) — QA Part-F, applied in the S0-7 migration.
+//  - All access via the service layer: branch scope checked BEFORE version; cross-branch direct-ID
+//    access returns NOT_FOUND (no existence enumeration) — QA Part-F.
+ 
 datasource db {
   provider          = "postgresql"
   url               = env("DATABASE_URL")
+  directUrl         = env("DIRECT_DATABASE_URL")
   shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
 generator client {
   provider = "prisma-client-js"
 }
-
-// ----------------------------------------------------------------------------
-//  TEMPORARY BASELINE MODELS  (replaced by TL/BE canonical schema)
-// ----------------------------------------------------------------------------
-
-model Contact {
-  // Personal data lives ONLY here, referenced by ID elsewhere (OD-03).
-  id         String   @id @default(uuid())
-  name       String
-  email      String?
-  phone      String?
-  anonymised Boolean  @default(false)
-  version    Int      @default(0)
-  deletedAt  DateTime?
-  clients    Client[]
-}
-
-model Client {
-  id               String   @id @default(uuid())
-  branch           String
-  name             String
-  address          String?
-  creditTerms      String?
-  status           String   @default("ACTIVE")
-  primaryContact   Contact? @relation(fields: [primaryContactId], references: [id])
-  primaryContactId String?
-  vessels          Vessel[]
-  jobOrders        JobOrder[]
-  version          Int      @default(0)
-  deletedAt        DateTime?
-
+ 
+// ===================== AUTH & USERS (G-2, G-3) =====================
+model User {
+  id                String   @id @default(uuid())
+  email             String   @unique
+  name              String
+  passwordHash      String
+  roles             String[]
+  branch            String
+  designation       String?
+  baseLocation      String?          // G-3
+  skills            String[]         // G-3 technician skills
+  available         Boolean  @default(true)  // G-3 roster availability
+  totpSecret        String?          // active secret (NFR-07; enforced for admin/finance)
+  totpPendingSecret String?          // set during enrolment, promoted on confirm (G-2)
+  mfaEnrolled       Boolean  @default(false)
+  recoveryCodes     String[]         // HASHED single-use recovery codes (G-2)
+  active            Boolean  @default(true)
+  version           Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  refreshTokens     RefreshToken[]
   @@index([branch])
 }
-
+model RefreshToken {
+  id        String    @id @default(uuid())
+  user      User      @relation(fields: [userId], references: [id])
+  userId    String
+  tokenHash String    @unique
+  family    String
+  longLived Boolean   @default(false)  // OD-04 mobile multi-day session
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+  @@index([userId])
+}
+ 
+// ===================== CRM (OD-03) =====================
+model Contact {
+  id String @id @default(uuid())
+  name String
+  email String?
+  phone String?
+  anonymised Boolean @default(false)
+  version Int @default(0)
+  clients Client[]
+}
+model Client {
+  id String @id @default(uuid())
+  branch String
+  name String
+  address String?
+  creditTerms String?
+  status String @default("ACTIVE")
+  primaryContact Contact? @relation(fields: [primaryContactId], references: [id])
+  primaryContactId String?
+  deletedAt DateTime?
+  version Int @default(0)
+  vessels Vessel[]
+  @@index([branch])
+}
 model Vessel {
-  id             String     @id @default(uuid())
-  client         Client     @relation(fields: [clientId], references: [id])
-  clientId       String
-  imoNumber      String     @unique
-  name           String
-  type           String?
-  flag           String?
+  id String @id @default(uuid())
+  client Client @relation(fields: [clientId], references: [id])
+  clientId String
+  imoNumber String @unique
+  name String
+  type String?
+  flag String?
   classification String?
-  jobOrders      JobOrder[]
-  version        Int        @default(0)
-  deletedAt      DateTime?
+  deletedAt DateTime?
+  version Int @default(0)
+  @@index([clientId])
 }
-
+ 
+// ===================== JOB ORDER (OD-02/05, CC-1, CC-3) =====================
 model JobOrder {
-  id                    String             @id @default(uuid())
-  joNumber              String             @unique
-  branch                String
-  client                Client             @relation(fields: [clientId], references: [id])
-  clientId              String
-  vessel                Vessel             @relation(fields: [vesselId], references: [id])
-  vesselId              String
-  serviceCategories     String[]
-  port                  String?
-  scopeSummary          String
-  origin                String             @default("MANUAL")
-  externalQuoteRef      String?
-  externalRfqRef        String?
-  // Money = integer minor units + ISO-4217 code (frozen quoted baseline; OD-02).
-  quotedAmountMinor     Int
-  quotedCurrency        String
-  state                 String             @default("DRAFT")
+  id                String   @id @default(uuid())
+  joNumber          String   @unique
+  branch            String
+  clientId          String
+  vesselId          String
+  serviceCategories String[]
+  port              String?
+  scopeSummary      String
+  origin            String  @default("MANUAL")   // JobOrigin (OD-02)
+  externalQuoteRef  String?
+  externalRfqRef    String?
+  quotedAmountMinor Int                           // frozen baseline (OD-02)
+  quotedCurrency    String
+  labourRateAmountMinor Int?                       // CC-3 RATIFIED; service layer defaults 9000 (SGD 90.00/hr, D-004)
+  labourRateCurrency    String? @default("SGD")
+  state                 String  @default("DRAFT") // JobState (ADR-2 adjacency)
   assignedTechnicianIds String[]
-  plannedStartDate      DateTime?
-  version               Int                @default(0)
-  createdBy             String
-  createdAt             DateTime           @default(now())
-  updatedAt             DateTime           @updatedAt
-  statusHistory         JobStatusHistory[]
-
+  executionOwnerId      String?                    // CC-1 RATIFIED — single owner of execution data (OD-05)
+  plannedStartDate DateTime?
+  deletedAt        DateTime?
+  version          Int       @default(0)
+  createdBy        String
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  statusHistory JobStatusHistory[]
+  materials     MaterialLine[]
+  variations    Variation[]
+  worklogs      WorkLog[]
+  photos        Photo[]
+  observations  Observation[]
+  checklists    ChecklistInstance[]
+  invoices      Invoice[]
+  signature     ESignature?
   @@index([branch, state])
+  @@index([clientId])
+  @@index([vesselId])
 }
-
-model JobStatusHistory {
-  // Immutable transition log (FR-13).
-  id         String   @id @default(uuid())
-  jobOrder   JobOrder @relation(fields: [jobOrderId], references: [id])
+model JobStatusHistory {              // append-only + DB-immutable
+  id String @id @default(uuid())
+  jobOrder JobOrder @relation(fields: [jobOrderId], references: [id])
   jobOrderId String
-  fromState  String
-  toState    String
-  actorId    String
-  at         DateTime @default(now())
+  fromState String
+  toState String
+  actorId String
+  at DateTime @default(now())
+  @@index([jobOrderId])
 }
-
-model ProcessedOp {
-  // Idempotency ledger for offline-originated writes (OD-04). Re-sending the same
-  // opId is a no-op that returns the original result.
-  opId       String   @id
-  entity     String
-  resultHash String?
+model Variation {                     // D-003: EVERY variation needs Director approval (no threshold)
+  id String @id @default(uuid())
+  jobOrder JobOrder @relation(fields: [jobOrderId], references: [id])
+  jobOrderId String
+  reason String
+  amountMinor Int
+  amountCurrency String
+  status String @default("PROPOSED")  // PROPOSED -> APPROVED | REJECTED (Director only)
+  approverId String?                  // must resolve to a Director role
+  version Int @default(0)
+  createdAt DateTime @default(now())
+  lines MaterialLine[]
+}
+ 
+// ===================== MATERIALS (OD-01) =====================
+model MaterialLine {
+  id String @id @default(uuid())
+  jobOrder JobOrder? @relation(fields: [jobOrderId], references: [id])
+  jobOrderId String?
+  variation Variation? @relation(fields: [variationId], references: [id])
+  variationId String?
+  partCatalog PartCatalog? @relation(fields: [partCatalogId], references: [id])
+  partCatalogId String?
+  description String
+  quantity Decimal @db.Decimal(12,3)
+  unit String
+  unitCostAmountMinor Int
+  unitCostCurrency String
+  source String                        // OFFICE | FIELD
+  addedById String
+  opId String? @unique                 // offline idempotency (OD-04)
+  reviewState String?                  // SYNC-13/D-002: null|PENDING_SUPERVISOR_REVIEW|ACCEPTED|REJECTED
+  deletedAt DateTime?
+  version Int @default(0)
+  createdAt DateTime @default(now())
+  @@index([jobOrderId])
+}
+model PartCatalog {
+  id String @id @default(uuid())
+  partNumber String @unique
+  description String
+  makerModel String?
+  unit String
+  costPriceAmountMinor Int
+  costPriceCurrency String
+  scrapSourceFlag Boolean @default(false)
+  deletedAt DateTime?
+  version Int @default(0)
+  materials MaterialLine[]
+}
+ 
+// ===================== FIELD EXECUTION (OD-04) — offline-writable: opId + reviewState =====================
+model WorkLog {
+  id String @id @default(uuid())
+  jobOrder JobOrder @relation(fields: [jobOrderId], references: [id])
+  jobOrderId String
+  technicianId String
+  startedAt DateTime
+  endedAt DateTime?
+  opId String? @unique
+  reviewState String?
+  version Int @default(0)
+  @@index([jobOrderId])
+}
+model Photo {
+  id String @id @default(uuid())
+  jobOrder JobOrder @relation(fields: [jobOrderId], references: [id])
+  jobOrderId String
+  s3Key String?                        // null until binary uploaded (two-phase presign)
+  phase String                         // BEFORE | DURING | AFTER
+  geoLat Float?
+  geoLng Float?
+  takenAt DateTime
+  capturedById String
+  opId String? @unique
+  reviewState String?
+  @@index([jobOrderId])
+}
+model Observation {
+  id String @id @default(uuid())
+  jobOrder JobOrder @relation(fields: [jobOrderId], references: [id])
+  jobOrderId String
+  templateKey String?
+  body String
+  authorId String
+  opId String? @unique
+  reviewState String?
+  createdAt DateTime @default(now())
+  @@index([jobOrderId])
+}
+model ChecklistTemplate {             // G-4 — items shape in INTERFACE_CONTRACT §2
+  id String @id @default(uuid())
+  name String
+  serviceCategory String?
+  jobType String?
+  items Json
+  active Boolean @default(true)
+  version Int @default(0)
+  instances ChecklistInstance[]
+}
+model ChecklistInstance {             // G-4 — results shape in INTERFACE_CONTRACT §2
+  id String @id @default(uuid())
+  jobOrder JobOrder @relation(fields: [jobOrderId], references: [id])
+  jobOrderId String
+  template ChecklistTemplate @relation(fields: [templateId], references: [id])
+  templateId String
+  results Json
+  completedById String?
+  completedAt DateTime?
+  opId String? @unique
+  reviewState String?
+  version Int @default(0)
+  @@index([jobOrderId])
+}
+model ESignature {                    // OD-06 evidence RESERVED; Mobile confirmed offline feasibility (S0-6 §8)
+  id String @id @default(uuid())
+  jobOrder JobOrder @relation(fields: [jobOrderId], references: [id])
+  jobOrderId String @unique
+  imageS3Key String?
+  signerName String?
+  signerRole String?
+  signedAt DateTime?
+  deviceId String?
+  geoLat Float?
+  geoLng Float?
+  documentHash String?                 // SHA-256 of signed completion PDF
+  opId String? @unique
+  reviewState String?
+}
+ 
+// ===================== FINANCE (OD-03, CC-2) =====================
+model Invoice {
+  id String @id @default(uuid())
+  invoiceNumber String @unique
+  jobOrder JobOrder @relation(fields: [jobOrderId], references: [id])
+  jobOrderId String
+  branch String
+  status String @default("DRAFT")
+  billToName String
+  billToAddress String?
+  gstAmountMinor Int?
+  gstCurrency String?
+  totalAmountMinor Int
+  totalCurrency String
+  issuedAt DateTime?
+  version Int @default(0)
+  createdAt DateTime @default(now())
+  lines InvoiceLine[]                  // CC-2 RATIFIED
+  @@index([branch, status])
+}
+model InvoiceLine {                    // frozen at issue (OD-03)
+  id String @id @default(uuid())
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+  invoiceId String
+  kind String                          // LABOUR | MATERIAL | VARIATION | OTHER
+  description String
+  quantity Decimal @db.Decimal(12,3)
+  unit String?
+  unitPriceAmountMinor Int
+  unitPriceCurrency String
+  lineTotalAmountMinor Int
+  lineTotalCurrency String
+  @@index([invoiceId])
+}
+ 
+// ===================== DOCS / CERTS / NOTIFY =====================
+model Document {
+  id String @id @default(uuid())
+  ownerType String                     // JOB | VESSEL
+  ownerId String
+  s3Key String
+  filename String
+  mimeType String
+  uploadedById String
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([ownerType, ownerId])
+}
+model Certificate {                    // technician (G-3), vessel/company (FR-21/48)
+  id String @id @default(uuid())
+  ownerType String                     // TECHNICIAN | VESSEL | COMPANY
+  ownerId String
+  certType String
+  identifier String?
+  issuedAt DateTime?
+  expiresAt DateTime
+  s3Key String?
+  version Int @default(0)
+  @@index([ownerType, ownerId])
+  @@index([expiresAt])
+}
+model Notification {
+  id String @id @default(uuid())
+  recipientId String
+  kind String
+  title String
+  body String
+  readAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([recipientId, readAt])
+}
+ 
+// ===================== CROSS-CUTTING =====================
+model AuditEntry {                     // append-only + DB-immutable (QA Part-F)
+  id String @id @default(uuid())
+  entityType String
+  entityId String
+  action String
+  actorId String
+  at DateTime @default(now())
+  diff Json?
+  @@index([entityType, entityId])
+  @@index([at])
+}
+model ProcessedOp {                    // OD-04 idempotency registry, keyed on opId (QA Part-F)
+  opId String @id
+  entity String
+  action String
+  resultRef String?                    // == created row id (CC-MOB-1)
+  status String                        // APPLIED | APPLIED_FLAGGED
   processedAt DateTime @default(now())
 }

@@ -1,21 +1,35 @@
-/**
- * PLACEHOLDER API entrypoint owned by DevOps only to (a) give the container a real
- * healthcheck target and (b) give CI something to build + test. BE replaces/extends this
- * with the real routes, auth, branch-scoping middleware, and service layer (P1-*).
- * Keep the `/api/v1/health` contract — the Docker HEALTHCHECK and Uptime Robot use it.
- */
-import Fastify, { FastifyInstance } from "fastify";
+// Fastify app assembly. Dependencies are injected so tests can pass a mock Prisma / presigner.
+import Fastify, { type FastifyInstance } from 'fastify';
+import type { PrismaClient } from '@prisma/client';
+import { registerErrorHandler } from './plugins/errorHandler.js';
+import { registerAuthn } from './plugins/authn.js';
+import { authRoutes } from './routes/auth.js';
+import { crmRoutes } from './routes/crm.js';
+import { jobOrderRoutes } from './routes/jobOrders.js';
+import { variationRoutes } from './routes/variations.js';
+import { reviewQueueRoutes } from './routes/reviewQueue.js';
+import { checklistRoutes } from './routes/checklists.js';
+import { uploadRoutes, type PresignPut } from './routes/uploads.js';
+import { syncRoutes } from './routes/sync.js';
 
-export function buildApp(): FastifyInstance {
-  const app = Fastify({
-    logger: { level: process.env.LOG_LEVEL ?? "info" },
-  });
+export interface AppDeps { prisma: PrismaClient; accessSecret: string; presignPut: PresignPut; }
 
-  app.get("/api/v1/health", async () => ({
-    status: "ok",
-    service: "marinex360-api",
-    time: new Date().toISOString(),
-  }));
+export function buildApp(deps: AppDeps): FastifyInstance {
+  const app = Fastify({ logger: true });
+  registerErrorHandler(app);
+  registerAuthn(app, { accessSecret: deps.accessSecret });
+
+  // Contract with DevOps (apps/api Dockerfile HEALTHCHECK + Uptime Robot): keep this path/shape.
+  app.get('/api/v1/health', async () => ({ status: 'ok', service: 'marinex360-api', time: new Date().toISOString() }));
+
+  authRoutes(app, deps.prisma, deps.accessSecret);
+  crmRoutes(app, deps.prisma);
+  jobOrderRoutes(app, deps.prisma);
+  variationRoutes(app, deps.prisma);
+  reviewQueueRoutes(app, deps.prisma);
+  checklistRoutes(app, deps.prisma);
+  uploadRoutes(app, deps.prisma, deps.presignPut);
+  syncRoutes(app, deps.prisma);
 
   return app;
 }
