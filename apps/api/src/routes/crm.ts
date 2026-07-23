@@ -4,7 +4,18 @@ import type { FastifyInstance } from 'fastify';
 import type { PrismaClient } from '@prisma/client';
 import { AppError } from '../lib/errors.js';
 import { scopeWhere, assertBranchAccess, branchForCreate } from '../services/branchScope.js';
+import { isCrossBranch } from '../domain/rbac.js';
 import { appendAudit } from '../services/audit.js';
+
+// D-019: Contact has no `branch` column by design (can serve Clients across branches).
+// Non-cross-branch roles may access a Contact only if it's `primaryContactId` for a Client
+// in the caller's branch; cross-branch roles (DIRECTOR/SYSTEM_ADMIN) are unrestricted.
+// 404 NOT_FOUND otherwise — same existence-masking convention as everywhere else.
+async function assertContactAccessible(prisma: PrismaClient, ctx: { roles: string[]; branch: string }, contactId: string): Promise<void> {
+  if (isCrossBranch(ctx.roles as any)) return;
+  const linked = await prisma.client.findFirst({ where: { primaryContactId: contactId, branch: ctx.branch, deletedAt: null } });
+  if (!linked) throw new AppError('NOT_FOUND');
+}
 
 export function crmRoutes(app: FastifyInstance, prisma: PrismaClient): void {
   const w = (a: string) => ({ preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction(a as any)] });
@@ -19,6 +30,30 @@ export function crmRoutes(app: FastifyInstance, prisma: PrismaClient): void {
       return contact;
     });
     return reply.status(201).send(c);
+  });
+
+  app.get('/api/v1/contacts/:id', w('contact:read'), async (req) => {
+    const { id } = req.params as any;
+    const c = await prisma.contact.findUnique({ where: { id } });
+    if (!c) throw new AppError('NOT_FOUND');
+    await assertContactAccessible(prisma, req.ctx, id); // D-019
+    return c;
+  });
+
+  app.patch('/api/v1/contacts/:id', w('contact:write'), async (req) => {
+    const { id } = req.params as any; const b = (req.body ?? {}) as any;
+    if (typeof b.version !== 'number') throw new AppError('VALIDATION_ERROR', 'version required');
+    return prisma.$transaction(async (tx) => {
+      const c = await tx.contact.findUnique({ where: { id } });
+      if (!c) throw new AppError('NOT_FOUND');
+      await assertContactAccessible(tx as any, req.ctx, id); // D-019, checked before version (CC-05 convention)
+      const data: any = {};
+      for (const f of ['name', 'email', 'phone']) if (f in b) data[f] = b[f];
+      const res = await tx.contact.updateMany({ where: { id, version: b.version }, data: { ...data, version: { increment: 1 } } });
+      if (res.count === 0) throw new AppError('VERSION_CONFLICT');
+      await appendAudit(tx, req.ctx, { entityType: 'Contact', entityId: id, action: 'UPDATE', diff: data });
+      return tx.contact.findUnique({ where: { id } });
+    });
   });
 
   // ---- Clients ----
