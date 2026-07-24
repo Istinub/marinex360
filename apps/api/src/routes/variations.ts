@@ -33,7 +33,9 @@ export function variationRoutes(app: FastifyInstance, prisma: PrismaClient): voi
         const variation = await tx.variation.findUnique({ where: { id }, include: { jobOrder: true } });
         if (!variation) throw new AppError('NOT_FOUND');
         assertBranchAccess(req.ctx, variation.jobOrder.branch);
-        if (variation.status !== 'PROPOSED') throw new AppError('VALIDATION_ERROR', `variation already ${variation.status}`);
+        // D-021: variation decisions are ONE-WAY. A second approve/reject attempt on an
+        // already-decided variation is an illegal state transition, not a validation error.
+        if (variation.status !== 'PROPOSED') throw new AppError('STATE_TRANSITION_INVALID', `variation already ${variation.status}`);
         const res = await tx.variation.updateMany({ where: { id, version }, data: { status, approverId: req.ctx.userId, version: { increment: 1 } } });
         if (res.count === 0) throw new AppError('VERSION_CONFLICT');
         await appendAudit(tx, req.ctx, { entityType: 'Variation', entityId: id, action: status === 'APPROVED' ? 'APPROVE' : 'REJECT', diff: { reason: reason ?? null } });
