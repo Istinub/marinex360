@@ -4,6 +4,7 @@
 // Prisma per TL's note (contract-type fix, not a schema change).
 import type { FastifyInstance } from 'fastify';
 import type { PrismaClient } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { AppError } from '../lib/errors.js';
 import { assertBranchAccess } from '../services/branchScope.js';
 import { appendAudit } from '../services/audit.js';
@@ -22,7 +23,7 @@ export function checklistRoutes(app: FastifyInstance, prisma: PrismaClient): voi
     if (!b.name) throw new AppError('VALIDATION_ERROR', 'name required');
     const items = validateItemDefs(b.items);
     const tpl = await prisma.$transaction(async (tx) => {
-      const t = await tx.checklistTemplate.create({ data: { name: b.name, serviceCategory: b.serviceCategory ?? null, jobType: b.jobType ?? null, items } });
+      const t = await tx.checklistTemplate.create({ data: { name: b.name, serviceCategory: b.serviceCategory ?? null, jobType: b.jobType ?? null, items: items as unknown as Prisma.InputJsonValue } });
       await appendAudit(tx, req.ctx, { entityType: 'ChecklistTemplate', entityId: t.id, action: 'CREATE' });
       return t;
     });
@@ -68,7 +69,7 @@ export function checklistRoutes(app: FastifyInstance, prisma: PrismaClient): voi
       const validated = validateResults(defs, results);   // throws VALIDATION_ERROR on any mismatch
       const res = await tx.checklistInstance.updateMany({
         where: { id, version },
-        data: { results: validated, completedById: req.ctx.userId, completedAt: new Date(), version: { increment: 1 } },
+        data: { results: validated as unknown as Prisma.InputJsonValue, completedById: req.ctx.userId, completedAt: new Date(), version: { increment: 1 } },
       });
       if (res.count === 0) throw new AppError('VERSION_CONFLICT');
       await appendAudit(tx, req.ctx, { entityType: 'ChecklistInstance', entityId: id, action: 'SUBMIT' });

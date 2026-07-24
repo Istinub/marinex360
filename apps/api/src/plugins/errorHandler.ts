@@ -9,7 +9,8 @@ export function registerErrorHandler(app: FastifyInstance): void {
       return reply.status(err.status).send({ error: { code: err.code, message: err.message, details: err.details } });
     }
     if ((err as any).validation) {
-      return reply.status(400).send({ error: { code: 'VALIDATION_ERROR', message: err.message } });
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.status(400).send({ error: { code: 'VALIDATION_ERROR', message } });
     }
     app.log.error(err);
     return reply.status(500).send({ error: { code: 'INTERNAL', message: 'internal error' } });
