@@ -34,9 +34,8 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
 
     env:
-      # CI uses service containers, not MinIO. The S3 client is mocked in unit tests.
-      DATABASE_URL: postgresql://marinex_app:localdev_app@localhost:5432/marinex360   # runtime/tests
-      DIRECT_DATABASE_URL: postgresql://marinex:localdev@localhost:5432/marinex360    # migrate/studio
+      DATABASE_URL: postgresql://marinex_app:localdev_app@localhost:5432/marinex360
+      DIRECT_DATABASE_URL: postgresql://marinex:localdev@localhost:5432/marinex360
       SHADOW_DATABASE_URL: postgresql://marinex:localdev@localhost:5432/marinex360_shadow
       REDIS_URL: redis://localhost:6379
       S3_ENDPOINT: http://localhost:9000
@@ -46,7 +45,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -71,9 +69,12 @@ jobs:
         run: npx prisma generate
 
       - name: Apply migrations
-        # `migrate deploy` applies committed migrations using directUrl (owner `marinex`),
-        # per the datasource config seam in prisma/schema.prisma.
         run: npx prisma migrate deploy
+
+      - name: Seed database
+        # Integration tests below expect fixture users (ops/tech/admin/director) to
+        # exist. Seed runs via DIRECT_DATABASE_URL (owner marinex) — see prisma/seed.ts.
+        run: npm run db:seed
 
       - name: Lint
         run: npm run lint
@@ -85,9 +86,6 @@ jobs:
         run: npm run test
 
       - name: Integration tests
-        # Runs apps/api/test/integration/** against the postgres service container above.
-        # Connects as marinex_app (DATABASE_URL) — the same non-owner role the app uses
-        # at runtime — so these tests also exercise the S0-7 privilege boundary.
         env:
           RUN_DB_TESTS: "1"
         run: npm run test
@@ -96,7 +94,6 @@ jobs:
         run: npm run build
 
   docker-build:
-    # Sanity-check both images build (incl. Chromium layer). Does not push.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
