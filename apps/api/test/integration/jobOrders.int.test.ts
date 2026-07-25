@@ -19,13 +19,20 @@ const bearer = (u: { id: string; roles: string[]; branch: string }) =>
 const JO_ID = 'jo-inttest-jobs';
 
 run('Job Orders (integration)', () => {
-  const prisma = new PrismaClient();
-  const presignPut = async () => ({ uploadUrl: 'http://minio/local', headers: {} });
-  const app = buildApp({ prisma, accessSecret: SECRET, presignPut });
+  // CI FIX (OPS finding, corrected mechanism): Vitest calls this describe callback's
+  // synchronous body during collection EVEN when the suite is describe.skip'd — only the
+  // registered beforeAll/it/afterAll bodies are actually skipped from running. PrismaClient
+  // construction must therefore live INSIDE beforeAll, not here, or it executes unconditionally
+  // (including in the "Unit tests" CI step where DATABASE_URL/RUN_DB_TESTS aren't set).
+  let prisma: PrismaClient;
+  let app: ReturnType<typeof buildApp>;
 
   let sup: any, tech: any, otherTech: any, jo: any;
 
   beforeAll(async () => {
+    prisma = new PrismaClient();
+    const presignPut = async () => ({ uploadUrl: 'http://minio/local', headers: {} });
+    app = buildApp({ prisma, accessSecret: SECRET, presignPut });
     await app.ready();
     sup = await prisma.user.findUniqueOrThrow({ where: { email: 'ops@tkmr.local' } });
     tech = await prisma.user.findUniqueOrThrow({ where: { email: 'tech@tkmr.local' } });
