@@ -1,6 +1,6 @@
 # marinex360-api — Fastify API.  Build from REPO ROOT:
 #   docker build -f apps/api/Dockerfile -t marinex-api .
-FROM node:22-alpine AS build
+FROM node:25-alpine AS build
 WORKDIR /app
 # Workspace manifests first for layer caching
 COPY package*.json ./
@@ -15,7 +15,7 @@ COPY apps/api ./apps/api
 RUN npm run build -w @marinex360/storage && npm run build -w @marinex360/api \
     && npm prune --omit=dev
 
-FROM node:22-alpine
+FROM node:25-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 RUN addgroup -S app && adduser -S app -G app
