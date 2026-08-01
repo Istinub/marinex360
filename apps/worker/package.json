@@ -11,7 +11,7 @@
     "smoke:pdf": "node scripts/render-smoke.mjs"
   },
   "dependencies": {
-    "@prisma/client": "^5.20.0",
+    "@prisma/client": "^7.9.1",
     "bullmq": "^5.13.0",
     "ioredis": "^5.4.0",
     "puppeteer-core": "^23.4.0",
