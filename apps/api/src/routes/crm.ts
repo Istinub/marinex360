@@ -109,6 +109,20 @@ export function crmRoutes(app: FastifyInstance, prisma: PrismaClient): void {
   });
 
   // ---- Vessels (P1-4). imoNumber unique; duplicate -> VALIDATION_ERROR (FR-02) ----
+
+  // GET /vessels — flat, branch-scoped list (D-029/CC-10). Vessels have no own `branch`; scope
+  // flows through the owning Client (client: { branch }), same join pattern as D-019. Cross-branch
+  // roles see all. Optional ?clientId= filter narrows to one client. Unpaginated (matches /clients).
+  // NOTE: a non-cross-branch caller passing another branch's clientId gets [] (the branch join
+  // matches nothing) — list endpoints return empty for out-of-scope filters, not 404 (404 masking
+  // is for direct-ID access, per RBAC-SCOPE-2).
+  app.get('/api/v1/vessels', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('vessel:read')] }, async (req) => {
+    const { clientId } = (req.query ?? {}) as any;
+    const where: any = { deletedAt: null, client: { ...scopeWhere(req.ctx) } };
+    if (clientId) where.clientId = clientId;
+    return prisma.vessel.findMany({ where, orderBy: { name: 'asc' } });
+  });
+
   app.post('/api/v1/vessels', w('vessel:write'), async (req, reply) => {
     const b = (req.body ?? {}) as any;
     if (!b.clientId || !b.imoNumber || !b.name) throw new AppError('VALIDATION_ERROR', 'clientId, imoNumber, name required');
@@ -116,7 +130,7 @@ export function crmRoutes(app: FastifyInstance, prisma: PrismaClient): void {
     if (!client) throw new AppError('NOT_FOUND', 'client not found');
     assertBranchAccess(req.ctx, client.branch);
     const existing = await prisma.vessel.findUnique({ where: { imoNumber: b.imoNumber } });
-    if (existing) throw new AppError('VALIDATION_ERROR', 'imoNumber already registered');
+    if (existing) throw new AppError('VALIDATION_ERROR', 'imoNumber already registered', { field: 'imoNumber', reason: 'duplicate' });
     const v = await prisma.$transaction(async (tx) => {
       const vessel = await tx.vessel.create({ data: { clientId: b.clientId, imoNumber: b.imoNumber, name: b.name, type: b.type ?? null, flag: b.flag ?? null, classification: b.classification ?? null } });
       await appendAudit(tx, req.ctx, { entityType: 'Vessel', entityId: vessel.id, action: 'CREATE' });

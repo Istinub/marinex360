@@ -68,7 +68,7 @@ run('Vessel APIs (integration)', () => {
     expect(await prisma.auditEntry.count({ where: { entityType: 'Vessel' } })).toBe(before + 1);
   });
 
-  it('FR-02: duplicate imoNumber is rejected -> 400 VALIDATION_ERROR', async () => {
+  it('FR-02 / D-024: duplicate imoNumber is rejected -> 400 VALIDATION_ERROR with structured details (not just a message string)', async () => {
     const res = await app.inject({
       method: 'POST', url: '/api/v1/vessels', headers: { authorization: bearer(sup) },
       payload: { clientId: clientSG.id, imoNumber: `9${imoUniq}`, name: 'MV Duplicate Attempt' }, // same IMO as above
@@ -76,6 +76,8 @@ run('Vessel APIs (integration)', () => {
     expect(res.statusCode).toBe(400);
     expect(res.json().error.code).toBe('VALIDATION_ERROR');
     expect(res.json().error.message).toMatch(/already registered/);
+    // D-024: machine-readable details so WEB doesn't have to string-match the message.
+    expect(res.json().error.details).toEqual({ field: 'imoNumber', reason: 'duplicate' });
   });
 
   it('branch scope on CREATE: an SG actor cannot register a vessel against a MY Client -> 404 NOT_FOUND', async () => {
@@ -137,5 +139,55 @@ run('Vessel APIs (integration)', () => {
   it('GET /vessels/:id/job-orders for a nonexistent vessel id -> 404 NOT_FOUND', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/v1/vessels/00000000-0000-0000-0000-000000000000/job-orders', headers: { authorization: bearer(sup) } });
     expect(res.statusCode).toBe(404);
+  });
+
+  // ---- D-029 / CC-10: GET /vessels flat branch-scoped list + optional ?clientId= filter ----
+  // Self-contained: creates one known SG vessel and one known MY vessel via upsert (idempotent on
+  // imoNumber) so these tests don't depend on the create-tests above having run first.
+  it('D-029: SG actor sees SG vessels but NOT MY vessels (branch-scoped via owning Client)', async () => {
+    const sgVessel = await prisma.vessel.upsert({
+      where: { imoNumber: `1${imoUniq}` }, update: {},
+      create: { clientId: clientSG.id, imoNumber: `1${imoUniq}`, name: 'MV List Test SG' },
+    });
+    const myVessel = await prisma.vessel.upsert({
+      where: { imoNumber: `2${imoUniq}` }, update: {},
+      create: { clientId: clientMY.id, imoNumber: `2${imoUniq}`, name: 'MV List Test MY' },
+    });
+    const res = await app.inject({ method: 'GET', url: '/api/v1/vessels', headers: { authorization: bearer(sup) } });
+    expect(res.statusCode).toBe(200);
+    const imos = res.json().map((v: any) => v.imoNumber);
+    expect(imos).toContain(sgVessel.imoNumber);
+    expect(imos).not.toContain(myVessel.imoNumber); // MY vessel invisible to an SG-scoped caller
+  });
+
+  it('D-029: cross-branch role (Director) sees vessels across ALL branches', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/v1/vessels', headers: { authorization: bearer(director) } });
+    expect(res.statusCode).toBe(200);
+    const imos = res.json().map((v: any) => v.imoNumber);
+    expect(imos).toContain(`1${imoUniq}`); // SG
+    expect(imos).toContain(`2${imoUniq}`); // MY — visible to cross-branch role
+  });
+
+  it('D-029: ?clientId= filter narrows the list to that client (within scope)', async () => {
+    const res = await app.inject({ method: 'GET', url: `/api/v1/vessels?clientId=${clientSG.id}`, headers: { authorization: bearer(sup) } });
+    expect(res.statusCode).toBe(200);
+    const rows = res.json();
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((v: any) => v.clientId === clientSG.id)).toBe(true);
+  });
+
+  it('D-029: SG actor filtering by a MY clientId gets [] (empty, not 404 — list-endpoint scope convention)', async () => {
+    const res = await app.inject({ method: 'GET', url: `/api/v1/vessels?clientId=${clientMY.id}`, headers: { authorization: bearer(sup) } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([]); // branch join matches nothing; not a 404
+  });
+
+  it('D-029: soft-deleted vessels are excluded from the list', async () => {
+    const doomed = await prisma.vessel.upsert({
+      where: { imoNumber: `3${imoUniq}` }, update: { deletedAt: new Date() },
+      create: { clientId: clientSG.id, imoNumber: `3${imoUniq}`, name: 'MV Soon Deleted', deletedAt: new Date() },
+    });
+    const res = await app.inject({ method: 'GET', url: '/api/v1/vessels', headers: { authorization: bearer(sup) } });
+    expect(res.json().map((v: any) => v.imoNumber)).not.toContain(doomed.imoNumber);
   });
 });
