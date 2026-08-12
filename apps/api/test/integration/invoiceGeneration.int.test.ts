@@ -248,4 +248,151 @@ run('Invoice generation (integration)', () => {
     expect(labourLine.unitPriceAmountMinor).toBe(8000);
     expect(labourLine.lineTotalAmountMinor).toBe(1 * 8000);
   });
+
+  it('D-031: a currency mismatch in a line source is rejected at the API level, and the JO transition itself rolls back (same transaction)', async () => {
+    const jo = await prisma.jobOrder.create({
+      data: {
+        joNumber: `SG-INVTEST-CURMISMATCH-${uniq}`,
+        branch: 'SG',
+        clientId: clientSG.id,
+        vesselId: vesselSG.id,
+        scopeSummary: 'Currency mismatch fixture',
+        origin: 'MANUAL',
+        quotedAmountMinor: 100000,
+        quotedCurrency: 'SGD',
+        state: 'DRAFT',
+        createdBy: sup.id,
+        assignedTechnicianIds: [tech.id],
+        executionOwnerId: tech.id,
+      },
+    });
+    await prisma.materialLine.create({
+      data: {
+        jobOrderId: jo.id,
+        description: 'Mis-currency part',
+        quantity: 1,
+        unit: 'pcs',
+        unitCostAmountMinor: 5000,
+        unitCostCurrency: 'MYR',
+        source: 'FIELD',
+        addedById: tech.id,
+      },
+    });
+
+    let v = jo.version;
+    const sched = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${jo.id}/transition`,
+      headers: { authorization: bearer(sup) },
+      payload: { to: 'SCHEDULED', version: v },
+    });
+    expect(sched.statusCode).toBe(200);
+    v = sched.json().version;
+
+    const started = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${jo.id}/transition`,
+      headers: { authorization: bearer(tech) },
+      payload: { to: 'IN_PROGRESS', version: v },
+    });
+    expect(started.statusCode).toBe(200);
+    v = started.json().version;
+
+    const review = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${jo.id}/transition`,
+      headers: { authorization: bearer(tech) },
+      payload: { to: 'PENDING_REVIEW', version: v },
+    });
+    expect(review.statusCode).toBe(200);
+    v = review.json().version;
+
+    const completed = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${jo.id}/transition`,
+      headers: { authorization: bearer(sup) },
+      payload: { to: 'COMPLETED', version: v },
+    });
+
+    expect(completed.statusCode).toBe(400);
+    expect(completed.json().error.code).toBe('VALIDATION_ERROR');
+    expect(completed.json().error.message).toMatch(/does not match invoice currency/);
+
+    const freshJo = await prisma.jobOrder.findUniqueOrThrow({ where: { id: jo.id } });
+    expect(freshJo.state).toBe('PENDING_REVIEW');
+    expect(freshJo.version).toBe(v);
+    expect(await prisma.invoice.count({ where: { jobOrderId: jo.id } })).toBe(0);
+  });
+
+  it('D-031: attempting to generate an invoice for an unsupported branch (non-SG) is rejected explicitly', async () => {
+    const admin = await prisma.user.findUniqueOrThrow({ where: { email: 'admin@tkmr.local' } });
+    const clientMY = await prisma.client.upsert({
+      where: { id: 'client-inttest-invoice-my' },
+      update: {},
+      create: { id: 'client-inttest-invoice-my', branch: 'MY', name: 'Invoice Test MY Client' },
+    });
+    const vesselMY = await prisma.vessel.upsert({
+      where: { imoNumber: `4${uniq}` },
+      update: {},
+      create: { clientId: clientMY.id, imoNumber: `4${uniq}`, name: 'MV Invoice Test MY' },
+    });
+    const joMY = await prisma.jobOrder.create({
+      data: {
+        joNumber: `MY-INVTEST-${uniq}`,
+        branch: 'MY',
+        clientId: clientMY.id,
+        vesselId: vesselMY.id,
+        scopeSummary: 'Unsupported-branch invoice fixture',
+        origin: 'MANUAL',
+        quotedAmountMinor: 100000,
+        quotedCurrency: 'MYR',
+        state: 'DRAFT',
+        createdBy: admin.id,
+        assignedTechnicianIds: [admin.id],
+        executionOwnerId: admin.id,
+      },
+    });
+
+    let v = joMY.version;
+    const sched = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${joMY.id}/transition`,
+      headers: { authorization: bearer(admin) },
+      payload: { to: 'SCHEDULED', version: v },
+    });
+    expect(sched.statusCode).toBe(200);
+    v = sched.json().version;
+
+    const started = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${joMY.id}/transition`,
+      headers: { authorization: bearer(admin) },
+      payload: { to: 'IN_PROGRESS', version: v },
+    });
+    expect(started.statusCode).toBe(200);
+    v = started.json().version;
+
+    const review = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${joMY.id}/transition`,
+      headers: { authorization: bearer(admin) },
+      payload: { to: 'PENDING_REVIEW', version: v },
+    });
+    expect(review.statusCode).toBe(200);
+    v = review.json().version;
+
+    const completed = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${joMY.id}/transition`,
+      headers: { authorization: bearer(admin) },
+      payload: { to: 'COMPLETED', version: v },
+    });
+
+    expect(completed.statusCode).toBe(400);
+    expect(completed.json().error.message).toMatch(/not yet supported for auto-invoicing/);
+    const freshJoMY = await prisma.jobOrder.findUniqueOrThrow({ where: { id: joMY.id } });
+    expect(freshJoMY.state).toBe('PENDING_REVIEW');
+    expect(freshJoMY.version).toBe(v);
+    expect(await prisma.invoice.count({ where: { jobOrderId: joMY.id } })).toBe(0);
+  });
 });
