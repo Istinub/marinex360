@@ -116,9 +116,10 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
       });
       const res = await tx.jobOrder.updateMany({ where: { id, version }, data: { state: target, version: { increment: 1 } } });
       if (res.count === 0) throw new AppError('VERSION_CONFLICT'); // CC-04 concurrent transition loser
-      await tx.jobStatusHistory.create({ data: { jobOrderId: id, fromState: jo.state, toState: target, actorId: req.ctx.userId } });
-      // JOSM-8: mandatory reason for side transitions is preserved in the immutable audit diff
-      // (JobStatusHistory has no reason column in canonical v1.1 — see HANDOFF contract note).
+      await tx.jobStatusHistory.create({ data: { jobOrderId: id, fromState: jo.state, toState: target, actorId: req.ctx.userId, reason: reason ?? null } });
+      // D-006 (closed): reason is now first-class on JobStatusHistory itself, not just the
+      // audit diff. Kept in the audit diff too for redundancy — cheap, and audit stays the
+      // fuller record of "what happened and why" independent of any one table.
       await appendAudit(tx, req.ctx, { entityType: 'JobOrder', entityId: id, action: 'STATE_TRANSITION', diff: { from: jo.state, to: target, reason: reason ?? null } });
       // FR-40: auto-generate a DRAFT invoice the moment a JO reaches COMPLETED. Same
       // transaction as the state change — a failure here rolls back the transition too,

@@ -97,4 +97,37 @@ run('Job Orders (integration)', () => {
     const row = await prisma.auditEntry.findFirstOrThrow({ where: { entityId: jo.id } });
     await expect(prisma.auditEntry.update({ where: { id: row.id }, data: { action: 'TAMPER' } })).rejects.toThrow();
   });
+
+  it('D-006: JobStatusHistory.reason is persisted as a first-class column on side transitions', async () => {
+    const fixture = await prisma.jobOrder.create({
+      data: {
+        joNumber: `SG-INTTEST-REASON-${Date.now()}`,
+        branch: 'SG',
+        clientId: jo.clientId,
+        vesselId: jo.vesselId,
+        scopeSummary: 'JobStatusHistory reason fixture',
+        origin: 'MANUAL',
+        quotedAmountMinor: 100000,
+        quotedCurrency: 'SGD',
+        state: 'SCHEDULED',
+        createdBy: sup.id,
+        assignedTechnicianIds: [tech.id],
+        executionOwnerId: tech.id,
+      },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${fixture.id}/transition`,
+      headers: { authorization: bearer(sup) },
+      payload: { to: 'ON_HOLD', version: fixture.version, reason: 'Awaiting parts delivery' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const history = await prisma.jobStatusHistory.findFirstOrThrow({
+      where: { jobOrderId: fixture.id, toState: 'ON_HOLD' },
+      orderBy: { at: 'desc' },
+    });
+    expect(history.reason).toBe('Awaiting parts delivery');
+  });
 });

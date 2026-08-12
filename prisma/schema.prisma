@@ -149,6 +149,7 @@ model JobStatusHistory {              // append-only + DB-immutable
   fromState String
   toState String
   actorId String
+  reason String?
   at DateTime @default(now())
   @@index([jobOrderId])
 }
