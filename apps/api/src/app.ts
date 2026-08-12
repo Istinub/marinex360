@@ -7,6 +7,7 @@ import { authRoutes } from './routes/auth.js';
 import { crmRoutes } from './routes/crm.js';
 import { jobOrderRoutes } from './routes/jobOrders.js';
 import { variationRoutes } from './routes/variations.js';
+import { invoiceRoutes } from './routes/invoices.js';
 import { reviewQueueRoutes } from './routes/reviewQueue.js';
 import { checklistRoutes } from './routes/checklists.js';
 import { uploadRoutes, type PresignPut } from './routes/uploads.js';
@@ -26,6 +27,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   crmRoutes(app, deps.prisma);
   jobOrderRoutes(app, deps.prisma);
   variationRoutes(app, deps.prisma);
+  invoiceRoutes(app, deps.prisma);
   reviewQueueRoutes(app, deps.prisma);
   checklistRoutes(app, deps.prisma);
   uploadRoutes(app, deps.prisma, deps.presignPut);
