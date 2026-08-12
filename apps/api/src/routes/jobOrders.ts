@@ -5,9 +5,10 @@ import type { PrismaClient } from '@prisma/client';
 import { AppError } from '../lib/errors.js';
 import { assertBranchAccess, scopeWhere, branchForCreate } from '../services/branchScope.js';
 import { appendAudit } from '../services/audit.js';
-import { nextJoNumber } from '../services/numbering.js';
+import { nextInvoiceNumber, nextJoNumber } from '../services/numbering.js';
 import { DEFAULT_LABOUR_RATE } from '../lib/money.js';
 import { assertTransition, isHeaderLocked, type JoState } from '../domain/josm.js';
+import { buildDraftInvoice } from '../domain/invoice.js';
 
 const HEADER_FIELDS = ['scopeSummary', 'port', 'serviceCategories', 'plannedStartDate', 'externalQuoteRef', 'externalRfqRef'];
 const isTech = (roles: string[]) => roles.includes('TECHNICIAN') && roles.length === 1;
@@ -119,6 +120,64 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
       // JOSM-8: mandatory reason for side transitions is preserved in the immutable audit diff
       // (JobStatusHistory has no reason column in canonical v1.1 — see HANDOFF contract note).
       await appendAudit(tx, req.ctx, { entityType: 'JobOrder', entityId: id, action: 'STATE_TRANSITION', diff: { from: jo.state, to: target, reason: reason ?? null } });
+      // FR-40: auto-generate a DRAFT invoice the moment a JO reaches COMPLETED. Same
+      // transaction as the state change — a failure here rolls back the transition too,
+      // which is correct (never leave a JO COMPLETED with no invoice).
+      if (target === 'COMPLETED') {
+        type InvoiceWorkLogRow = {
+          startedAt: Date;
+          endedAt: Date | null;
+          labourRateAmountMinor: number | null;
+          labourRateCurrency: string | null;
+        };
+        const [workLogs, materialLines, variations, client] = await Promise.all([
+          tx.$queryRaw<InvoiceWorkLogRow[]>`
+            SELECT "startedAt", "endedAt", "labourRateAmountMinor", "labourRateCurrency"
+            FROM "WorkLog"
+            WHERE "jobOrderId" = ${id}
+          `,
+          tx.materialLine.findMany({ where: { jobOrderId: id, deletedAt: null } }),
+          tx.variation.findMany({ where: { jobOrderId: id } }),
+          tx.client.findUniqueOrThrow({ where: { id: jo.clientId } }),
+        ]);
+        const draft = buildDraftInvoice({
+          branch: jo.branch,
+          workLogs: workLogs.map((workLog) => ({
+            startedAt: workLog.startedAt,
+            endedAt: workLog.endedAt,
+            labourRateAmountMinor: workLog.labourRateAmountMinor,
+            labourRateCurrency: workLog.labourRateCurrency,
+          })),
+          materialLines: materialLines.map((materialLine) => ({
+            description: materialLine.description,
+            quantity: Number(materialLine.quantity),
+            unit: materialLine.unit,
+            unitCostAmountMinor: materialLine.unitCostAmountMinor,
+            unitCostCurrency: materialLine.unitCostCurrency,
+          })),
+          variations: variations.map((variation) => ({
+            reason: variation.reason,
+            status: variation.status,
+            amountMinor: variation.amountMinor,
+            amountCurrency: variation.amountCurrency,
+          })),
+        });
+        const invoiceNumber = await nextInvoiceNumber(tx, jo.branch);
+        const invoice = await tx.invoice.create({
+          data: {
+            invoiceNumber, jobOrderId: id, branch: jo.branch, status: 'DRAFT',
+            billToName: client.name, billToAddress: client.address ?? null,
+            gstAmountMinor: draft.gstAmountMinor, gstCurrency: draft.gstCurrency,
+            totalAmountMinor: draft.totalAmountMinor, totalCurrency: draft.currency,
+            lines: { create: draft.lines.map((line) => ({
+              kind: line.kind, description: line.description, quantity: line.quantity, unit: line.unit,
+              unitPriceAmountMinor: line.unitPriceAmountMinor, unitPriceCurrency: line.unitPriceCurrency,
+              lineTotalAmountMinor: line.lineTotalAmountMinor, lineTotalCurrency: line.lineTotalCurrency,
+            })) },
+          },
+        });
+        await appendAudit(tx, req.ctx, { entityType: 'Invoice', entityId: invoice.id, action: 'CREATE', diff: { jobOrderId: id, totalAmountMinor: draft.totalAmountMinor, lineCount: draft.lines.length } });
+      }
       return tx.jobOrder.findUnique({ where: { id } });
     });
   });

@@ -9,6 +9,7 @@ import ClientDetailView from '@/views/clients/ClientDetailView.vue';
 import ClientFormView from '@/views/clients/ClientFormView.vue';
 import ClientListView from '@/views/clients/ClientListView.vue';
 import ContactEditView from '@/views/contacts/ContactEditView.vue';
+import DashboardView from '@/views/dashboard/DashboardView.vue';
 import JobOrderDetailView from '@/views/job-orders/JobOrderDetailView.vue';
 import JobOrderFormView from '@/views/job-orders/JobOrderFormView.vue';
 import JobOrderListView from '@/views/job-orders/JobOrderListView.vue';
@@ -45,6 +46,12 @@ const routes = [
       {
         path: '',
         redirect: '/clients',
+      },
+      {
+        path: 'dashboard',
+        name: 'dashboard',
+        component: DashboardView,
+        meta: { requireAuth: true, requireMfaEnrolled: true },
       },
       {
         path: 'clients',

@@ -4,6 +4,7 @@ import { RouterLink, RouterView, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 
 const navItems = [
+  { label: 'Dashboard', to: '/dashboard' },
   { label: 'Clients', to: '/clients' },
   { label: 'Vessels', to: '/vessels' },
   { label: 'Job Orders', to: '/job-orders' },

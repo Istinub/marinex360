@@ -187,6 +187,7 @@ model MaterialLine {
   deletedAt DateTime?
   version Int @default(0)
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
   @@index([jobOrderId])
 }
 model PartCatalog {
@@ -211,9 +212,13 @@ model WorkLog {
   technicianId String
   startedAt DateTime
   endedAt DateTime?
+  labourRateAmountMinor Int? // CC-9: snapshotted from JobOrder.labourRate at CREATE time — never re-resolved.
+  labourRateCurrency String? @default("SGD")
   opId String? @unique
   reviewState String?
   version Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
   @@index([jobOrderId])
 }
 model Photo {
@@ -228,6 +233,8 @@ model Photo {
   capturedById String
   opId String? @unique
   reviewState String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
   @@index([jobOrderId])
 }
 model Observation {
@@ -240,6 +247,7 @@ model Observation {
   opId String? @unique
   reviewState String?
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
   @@index([jobOrderId])
 }
 model ChecklistTemplate {             // G-4 — items shape in INTERFACE_CONTRACT §2
@@ -264,6 +272,8 @@ model ChecklistInstance {             // G-4 — results shape in INTERFACE_CONT
   opId String? @unique
   reviewState String?
   version Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
   @@index([jobOrderId])
 }
 model ESignature {                    // OD-06 evidence RESERVED; Mobile confirmed offline feasibility (S0-6 §8)
@@ -280,6 +290,8 @@ model ESignature {                    // OD-06 evidence RESERVED; Mobile confirm
   documentHash String?                 // SHA-256 of signed completion PDF
   opId String? @unique
   reviewState String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 }
  
 // ===================== FINANCE (OD-03, CC-2) =====================

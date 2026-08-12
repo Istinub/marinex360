@@ -25,6 +25,13 @@ export async function nextJoNumber(tx: Prisma.TransactionClient, branch: string,
 
 export async function nextInvoiceNumber(tx: Prisma.TransactionClient, branch: string, now = new Date()): Promise<string> {
   const y = now.getUTCFullYear();
-  const n = await nextSeq(tx, 'Invoice', 'invoiceNumber', branch, y);
+  await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(hashtext($1))`, `Invoice:${branch}:${y}`);
+  const prefix = `INV-${branch}-${y}-`;
+  const rows = await tx.$queryRawUnsafe<{ max: string | null }[]>(
+    `SELECT MAX(CAST(split_part("invoiceNumber", '-', 4) AS INTEGER)) AS max
+       FROM "Invoice" WHERE "invoiceNumber" LIKE $1`,
+    `${prefix}%`,
+  );
+  const n = (rows[0]?.max ? Number(rows[0].max) : 0) + 1;
   return `INV-${branch}-${y}-${String(n).padStart(4, '0')}`;
 }
