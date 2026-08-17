@@ -23,19 +23,6 @@ export function computeDueAt(issuedAt: Date, creditTerms: string | null | undefi
 }
 
 /**
- * D-034: OVERDUE is computed-on-read for immediate correctness — the STORED status may still
- * say SENT/PARTIAL until the BullMQ reconciliation job catches up and persists OVERDUE. This
- * function is what read endpoints call to report the CURRENT effective status, without
- * mutating the row. OVERDUE is automatic-only — never a manual transition target.
- */
-export function effectiveStatus(stored: { status: string; dueAt: Date | null }, now: Date = new Date()): string {
-  if ((stored.status === 'SENT' || stored.status === 'PARTIAL') && stored.dueAt && stored.dueAt < now) {
-    return 'OVERDUE';
-  }
-  return stored.status;
-}
-
-/**
  * DRAFT -> SENT is the only manual lifecycle transition this module knows about right now
  * (PARTIAL/PAID are explicitly D-035/Payment-model scope, not yet ratified).
  */

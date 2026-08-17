@@ -88,8 +88,8 @@ run('Invoices (integration)', () => {
     expect(await prisma.auditEntry.count({ where: { entityType: 'Invoice', entityId: invoice.id, action: 'ISSUE' } })).toBe(1);
   });
 
-  it('D-034: read endpoints report computed OVERDUE without mutating stored invoice status', async () => {
-    const invoice = await createInvoiceFixture('OVERDUE');
+  it('D-034 (corrected): a SENT invoice past dueAt still reads as SENT via the API — no computed-on-read override, stored-status-only', async () => {
+    const invoice = await createInvoiceFixture('STORED');
     await prisma.invoice.update({
       where: { id: invoice.id },
       data: { status: 'SENT', issuedAt: new Date('2020-01-01T00:00:00Z'), dueAt: new Date('2020-01-31T00:00:00Z') },
@@ -102,7 +102,7 @@ run('Invoices (integration)', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json().status).toBe('OVERDUE');
+    expect(res.json().status).toBe('SENT');
     const stored = await prisma.invoice.findUniqueOrThrow({ where: { id: invoice.id } });
     expect(stored.status).toBe('SENT');
   });

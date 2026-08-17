@@ -5,17 +5,16 @@ import type { PrismaClient } from '@prisma/client';
 import { AppError } from '../lib/errors.js';
 import { scopeWhere, assertBranchAccess } from '../services/branchScope.js';
 import { appendAudit } from '../services/audit.js';
-import { effectiveStatus, computeDueAt, assertCanIssue, deriveStatusFromSum } from '../domain/invoiceLifecycle.js';
+import { computeDueAt, assertCanIssue, deriveStatusFromSum } from '../domain/invoiceLifecycle.js';
 
 export function invoiceRoutes(app: FastifyInstance, prisma: PrismaClient): void {
   const w = (action: string) => ({ preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction(action as any)] });
 
   app.get('/api/v1/invoices', w('invoice:read'), async (req) => {
-    const rows = await prisma.invoice.findMany({
+    return prisma.invoice.findMany({
       where: scopeWhere(req.ctx),
       orderBy: { createdAt: 'desc' },
     });
-    return rows.map((invoice) => ({ ...invoice, status: effectiveStatus(invoice) }));
   });
 
   app.get('/api/v1/invoices/:id', w('invoice:read'), async (req) => {
@@ -23,7 +22,7 @@ export function invoiceRoutes(app: FastifyInstance, prisma: PrismaClient): void 
     const invoice = await prisma.invoice.findFirst({ where: { id }, include: { lines: true } });
     if (!invoice) throw new AppError('NOT_FOUND');
     assertBranchAccess(req.ctx, invoice.branch);
-    return { ...invoice, status: effectiveStatus(invoice) };
+    return invoice;
   });
 
   // D-034: DRAFT -> SENT. Computes dueAt from the Client's creditTerms. Freezes the invoice
