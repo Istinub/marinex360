@@ -44,3 +44,13 @@ export function assertCanIssue(status: string): void {
     throw new AppError('STATE_TRANSITION_INVALID', `invoice must be DRAFT to issue, was ${status}`);
   }
 }
+
+/**
+ * D-035: sum=0 (or negative, from a reversal exceeding prior payments) -> SENT;
+ * 0<sum<total -> PARTIAL; sum>=total -> PAID (SENT can jump straight to PAID).
+ */
+export function deriveStatusFromSum(sumMinor: number, totalMinor: number): 'SENT' | 'PARTIAL' | 'PAID' {
+  if (sumMinor <= 0) return 'SENT';
+  if (sumMinor >= totalMinor) return 'PAID';
+  return 'PARTIAL';
+}

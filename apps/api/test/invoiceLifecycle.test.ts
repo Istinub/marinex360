@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { parseCreditTermsDays, computeDueAt, effectiveStatus, assertCanIssue } from '../src/domain/invoiceLifecycle.js';
+import {
+  parseCreditTermsDays,
+  computeDueAt,
+  effectiveStatus,
+  assertCanIssue,
+  deriveStatusFromSum,
+} from '../src/domain/invoiceLifecycle.js';
 
 describe('parseCreditTermsDays (D-034)', () => {
   it('parses common formats', () => {
@@ -47,5 +53,24 @@ describe('assertCanIssue', () => {
   it('allows DRAFT, rejects everything else with STATE_TRANSITION_INVALID', () => {
     expect(() => assertCanIssue('DRAFT')).not.toThrow();
     expect(() => assertCanIssue('SENT')).toThrowError(/STATE_TRANSITION_INVALID|must be DRAFT/);
+  });
+});
+
+describe('deriveStatusFromSum (D-035)', () => {
+  it('sum=0 -> SENT', () => {
+    expect(deriveStatusFromSum(0, 100000)).toBe('SENT');
+  });
+
+  it('negative sum (reversal exceeds prior payments) -> SENT, not an error', () => {
+    expect(deriveStatusFromSum(-500, 100000)).toBe('SENT');
+  });
+
+  it('0<sum<total -> PARTIAL', () => {
+    expect(deriveStatusFromSum(50000, 100000)).toBe('PARTIAL');
+  });
+
+  it('sum>=total -> PAID (SENT can jump straight to PAID)', () => {
+    expect(deriveStatusFromSum(100000, 100000)).toBe('PAID');
+    expect(deriveStatusFromSum(150000, 100000)).toBe('PAID');
   });
 });

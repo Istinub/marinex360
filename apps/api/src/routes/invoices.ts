@@ -1,11 +1,11 @@
-// Invoice routes (FR-40 generation already exists in jobOrders.ts; this file owns read + the
-// D-034 issue transition). PARTIAL/PAID (D-035/Payment model) are explicitly NOT here yet.
+// Invoice routes (FR-40 generation already exists in jobOrders.ts; this file owns read, issue,
+// and D-035 payment recording).
 import type { FastifyInstance } from 'fastify';
 import type { PrismaClient } from '@prisma/client';
 import { AppError } from '../lib/errors.js';
 import { scopeWhere, assertBranchAccess } from '../services/branchScope.js';
 import { appendAudit } from '../services/audit.js';
-import { effectiveStatus, computeDueAt, assertCanIssue } from '../domain/invoiceLifecycle.js';
+import { effectiveStatus, computeDueAt, assertCanIssue, deriveStatusFromSum } from '../domain/invoiceLifecycle.js';
 
 export function invoiceRoutes(app: FastifyInstance, prisma: PrismaClient): void {
   const w = (action: string) => ({ preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction(action as any)] });
@@ -49,6 +49,56 @@ export function invoiceRoutes(app: FastifyInstance, prisma: PrismaClient): void 
       if (res.count === 0) throw new AppError('VERSION_CONFLICT');
       await appendAudit(tx, req.ctx, { entityType: 'Invoice', entityId: id, action: 'ISSUE', diff: { issuedAt, dueAt } });
       return tx.invoice.findUniqueOrThrow({ where: { id } });
+    });
+  });
+
+  // D-035: record a payment (or reversal via negative amountMinor). Insert-only Payment row,
+  // then recompute status from the full payment sum in the same transaction.
+  app.post('/api/v1/invoices/:id/payments', w('invoice:recordPayment'), async (req) => {
+    const { id } = req.params as any;
+    const { amountMinor, currency, paidAt, method, reference, version } = (req.body ?? {}) as any;
+    if (typeof amountMinor !== 'number' || !Number.isInteger(amountMinor) || amountMinor === 0) {
+      throw new AppError('VALIDATION_ERROR', 'amountMinor must be a non-zero integer');
+    }
+    if (!currency) throw new AppError('VALIDATION_ERROR', 'currency required');
+    if (typeof version !== 'number') throw new AppError('VALIDATION_ERROR', 'version required');
+
+    return prisma.$transaction(async (tx) => {
+      const invoice = await tx.invoice.findFirst({ where: { id } });
+      if (!invoice) throw new AppError('NOT_FOUND');
+      assertBranchAccess(req.ctx, invoice.branch);
+      if (invoice.status === 'DRAFT') throw new AppError('VALIDATION_ERROR', 'invoice must be issued before recording payments');
+      if (currency !== invoice.totalCurrency) {
+        throw new AppError('VALIDATION_ERROR', 'payment currency does not match invoice currency (no conversion, D-031 convention)');
+      }
+
+      const payment = await tx.payment.create({
+        data: {
+          invoiceId: id,
+          amountMinor,
+          currency,
+          paidAt: paidAt ? new Date(paidAt) : new Date(),
+          recordedById: req.ctx.userId,
+          method: method ?? null,
+          reference: reference ?? null,
+        },
+      });
+      const agg = await tx.payment.aggregate({ where: { invoiceId: id }, _sum: { amountMinor: true } });
+      const sum = agg._sum.amountMinor ?? 0;
+      const newStatus = deriveStatusFromSum(sum, invoice.totalAmountMinor);
+
+      const res = await tx.invoice.updateMany({
+        where: { id, version },
+        data: { status: newStatus, version: { increment: 1 } },
+      });
+      if (res.count === 0) throw new AppError('VERSION_CONFLICT');
+      await appendAudit(tx, req.ctx, {
+        entityType: 'Payment',
+        entityId: payment.id,
+        action: 'RECORD_PAYMENT',
+        diff: { invoiceId: id, amountMinor, newStatus, sum },
+      });
+      return tx.invoice.findUniqueOrThrow({ where: { id }, include: { payments: true } });
     });
   });
 }

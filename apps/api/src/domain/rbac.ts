@@ -13,7 +13,7 @@ export type Action =
   | 'jobOrder:read' | 'jobOrder:create' | 'jobOrder:updateHeader' | 'jobOrder:assign'
   | 'variation:create' | 'variation:approve' | 'variation:reject'
   | 'review:read' | 'review:resolve'
-  | 'invoice:read' | 'invoice:create' | 'invoice:issue'
+  | 'invoice:read' | 'invoice:create' | 'invoice:issue' | 'invoice:recordPayment'
   | 'material:write'
   | 'audit:read'
   | 'user:admin';
@@ -30,20 +30,20 @@ const MATRIX: Record<Role, ReadonlySet<Action>> = {
     'client:read', 'client:write', 'contact:read', 'contact:write', 'vessel:read', 'vessel:write',
     'jobOrder:read', 'jobOrder:create', 'jobOrder:updateHeader', 'jobOrder:assign',
     'variation:create', 'variation:approve', 'variation:reject',
-    'review:read', 'review:resolve', 'invoice:read', 'invoice:create', 'invoice:issue',
+    'review:read', 'review:resolve', 'invoice:read', 'invoice:create', 'invoice:issue', 'invoice:recordPayment',
     'material:write', 'audit:read', 'user:admin',
   ]),
   // Director: approves/rejects EVERY variation (D-003) [CONTRACT]; consolidated cross-branch
   // READ (RBAC-CROSS-1) [CONTRACT]. Not wired for routine CRUD [INFERRED].
   DIRECTOR: new Set<Action>([
     'client:read', 'contact:read', 'vessel:read', 'jobOrder:read',
-    'variation:approve', 'variation:reject', 'review:read', 'invoice:read', 'audit:read',
+    'variation:approve', 'variation:reject', 'review:read', 'invoice:read', 'invoice:recordPayment', 'audit:read',
   ]),
   // Finance: invoicing only; MUST NOT edit job scope (RBAC-FIN-1) [CONTRACT] -> no jobOrder
   // header/assign, no variation:create/approve.
   FINANCE: new Set<Action>([
     'client:read', 'vessel:read', 'jobOrder:read',
-    'invoice:read', 'invoice:create', 'invoice:issue', 'audit:read',
+    'invoice:read', 'invoice:create', 'invoice:issue', 'invoice:recordPayment', 'audit:read',
   ]),
   // Ops supervisor: office CRUD + JO lifecycle + variation PROPOSE + review queue [INFERRED,
   // consistent with JOSM gating in contract]. NOT variation:approve (Director only) [CONTRACT].

@@ -314,6 +314,7 @@ model Invoice {
   version Int @default(0)
   createdAt DateTime @default(now())
   lines InvoiceLine[]                  // CC-2 RATIFIED
+  payments Payment[]                   // D-035/CC-12 immutable ledger rows
   @@index([branch, status])
 }
 model InvoiceLine {                    // frozen at issue (OD-03)
@@ -328,6 +329,19 @@ model InvoiceLine {                    // frozen at issue (OD-03)
   unitPriceCurrency String
   lineTotalAmountMinor Int
   lineTotalCurrency String
+  @@index([invoiceId])
+}
+model Payment {                        // D-035/CC-12: immutable ledger, extends D-014's DB-level immutability
+  id           String   @id @default(uuid())
+  invoice      Invoice  @relation(fields: [invoiceId], references: [id])
+  invoiceId    String
+  amountMinor  Int                      // negative = reversal (corrections never edit/delete, same pattern as D-021)
+  currency     String
+  paidAt       DateTime
+  recordedById String
+  method       String?
+  reference    String?
+  createdAt    DateTime @default(now())
   @@index([invoiceId])
 }
  
