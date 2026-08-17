@@ -9,7 +9,8 @@
  * bundled ioredis, which avoids a dual-package type clash between the top-level `ioredis`
  * and the copy nested under `bullmq`.
  */
-import { Worker } from "bullmq";
+import { Queue, Worker } from "bullmq";
+import { reconcileOverdueInvoices } from "./jobs/overdueReconciliation.js";
 
 const redisUrl = new URL(process.env.REDIS_URL ?? "redis://localhost:6379");
 const connection = {
@@ -29,3 +30,27 @@ const worker = new Worker(
 
 worker.on("ready", () => console.log("[worker] connected to Redis; awaiting jobs"));
 worker.on("failed", (job, err) => console.error(`[worker] job ${job?.id} failed`, err));
+
+// D-034: recurring OVERDUE reconciliation, every 15 minutes. The Queue schedules the repeatable
+// job at startup; this Worker is the processor that persists overdue status and emits alerts.
+const overdueQueue = new Queue("invoice-overdue-reconciliation", { connection });
+await overdueQueue.add(
+  "reconcile",
+  {},
+  {
+    repeat: { every: 15 * 60 * 1000 },
+    jobId: "overdue-reconciliation-recurring",
+  },
+);
+
+const overdueWorker = new Worker(
+  "invoice-overdue-reconciliation",
+  async () => {
+    const result = await reconcileOverdueInvoices();
+    console.log(`[worker] overdue reconciliation: ${result.reconciled} invoice(s) marked OVERDUE`);
+    return result;
+  },
+  { connection },
+);
+
+overdueWorker.on("failed", (_job, err) => console.error("[worker] overdue reconciliation job failed", err));
