@@ -9,12 +9,14 @@ FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY package*.json ./
 COPY apps/worker/package.json apps/worker/
+COPY packages/storage/package.json packages/storage/
 RUN npm ci
 COPY prisma ./prisma
 RUN npx prisma generate
 COPY tsconfig.base.json ./
+COPY packages/storage ./packages/storage
 COPY apps/worker ./apps/worker
-RUN npm run build -w @marinex360/worker && npm prune --omit=dev
+RUN npm run build -w @marinex360/storage && npm run build -w @marinex360/worker && npm prune --omit=dev
 
 FROM node:22-bookworm-slim
 WORKDIR /app
@@ -28,6 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN groupadd -r app && useradd -r -g app -G audio,video app
 COPY --from=build --chown=app:app /app/node_modules ./node_modules
+COPY --from=build --chown=app:app /app/packages/storage ./packages/storage
 COPY --from=build --chown=app:app /app/apps/worker/dist ./apps/worker/dist
 COPY --from=build --chown=app:app /app/apps/worker/scripts ./apps/worker/scripts
 COPY --from=build --chown=app:app /app/prisma ./prisma

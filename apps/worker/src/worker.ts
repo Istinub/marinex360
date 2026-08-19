@@ -10,6 +10,7 @@
  * and the copy nested under `bullmq`.
  */
 import { Queue, Worker } from "bullmq";
+import { generateInvoicePdf } from "./jobs/generateInvoicePdf.js";
 import { reconcileOverdueInvoices } from "./jobs/overdueReconciliation.js";
 
 const redisUrl = new URL(process.env.REDIS_URL ?? "redis://localhost:6379");
@@ -54,3 +55,14 @@ const overdueWorker = new Worker(
 );
 
 overdueWorker.on("failed", (_job, err) => console.error("[worker] overdue reconciliation job failed", err));
+
+const invoicePdfQueueName = "invoice-pdf-generation";
+const invoicePdfWorker = new Worker(
+  invoicePdfQueueName,
+  async (job) => {
+    const { invoiceId } = job.data as { invoiceId: string };
+    return generateInvoicePdf(invoiceId);
+  },
+  { connection },
+);
+invoicePdfWorker.on("failed", (_job, err) => console.error("[worker] invoice PDF generation failed", err));

@@ -1,6 +1,7 @@
 // Integration tests for invoice lifecycle routes. Guarded so unit runs stay DB-free.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { PrismaClient } from '@prisma/client';
+import { Queue } from 'bullmq';
 import { buildApp } from '../../src/app.js';
 import { signAccessToken } from '../../src/auth/tokens.js';
 
@@ -12,6 +13,7 @@ const bearer = (user: { id: string; roles: string[]; branch: string }) =>
 run('Invoices (integration)', () => {
   let prisma: PrismaClient;
   let app: ReturnType<typeof buildApp>;
+  let pdfQueue: Queue;
   let admin: any;
   let uniq: string;
 
@@ -20,11 +22,16 @@ run('Invoices (integration)', () => {
     const presignPut = async () => ({ uploadUrl: 'http://minio/local', headers: {} });
     app = buildApp({ prisma, accessSecret: SECRET, presignPut });
     await app.ready();
+    const redisUrl = new URL(process.env.REDIS_URL ?? 'redis://localhost:6379');
+    pdfQueue = new Queue('invoice-pdf-generation', {
+      connection: { host: redisUrl.hostname, port: Number(redisUrl.port || 6379) },
+    });
     admin = await prisma.user.findUniqueOrThrow({ where: { email: 'admin@tkmr.local' } });
     uniq = Date.now().toString().slice(-9);
   });
 
   afterAll(async () => {
+    await pdfQueue?.close();
     await app.close();
     await prisma.$disconnect();
   });
@@ -86,6 +93,8 @@ run('Invoices (integration)', () => {
     expect(Math.round((dueAt.getTime() - issuedAt.getTime()) / 86_400_000)).toBe(45);
     expect(body.version).toBe(invoice.version + 1);
     expect(await prisma.auditEntry.count({ where: { entityType: 'Invoice', entityId: invoice.id, action: 'ISSUE' } })).toBe(1);
+    const jobs = await pdfQueue.getJobs(['waiting', 'delayed', 'prioritized', 'paused']);
+    expect(jobs.some((job) => job.name === 'generate' && job.data.invoiceId === body.id)).toBe(true);
   });
 
   it('D-034 (corrected): a SENT invoice past dueAt still reads as SENT via the API — no computed-on-read override, stored-status-only', async () => {

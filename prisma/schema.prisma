@@ -311,6 +311,7 @@ model Invoice {
   totalCurrency String
   issuedAt DateTime?
   dueAt DateTime? // CC-11/D-034: computed at issue (DRAFT->SENT), issuedAt + N days
+  pdfObjectKey String? // CC-13/D-037: the ONE narrow exception to post-issue freeze
   version Int @default(0)
   createdAt DateTime @default(now())
   lines InvoiceLine[]                  // CC-2 RATIFIED

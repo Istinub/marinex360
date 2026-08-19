@@ -6,6 +6,7 @@ import { AppError } from '../lib/errors.js';
 import { scopeWhere, assertBranchAccess } from '../services/branchScope.js';
 import { appendAudit } from '../services/audit.js';
 import { computeDueAt, assertCanIssue, deriveStatusFromSum } from '../domain/invoiceLifecycle.js';
+import { enqueueInvoicePdfGeneration } from '../services/invoicePdfQueue.js';
 
 export function invoiceRoutes(app: FastifyInstance, prisma: PrismaClient): void {
   const w = (action: string) => ({ preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction(action as any)] });
@@ -32,7 +33,7 @@ export function invoiceRoutes(app: FastifyInstance, prisma: PrismaClient): void 
     const { version } = (req.body ?? {}) as any;
     if (typeof version !== 'number') throw new AppError('VALIDATION_ERROR', 'version required');
 
-    return prisma.$transaction(async (tx) => {
+    const issued = await prisma.$transaction(async (tx) => {
       const invoice = await tx.invoice.findFirst({ where: { id }, include: { jobOrder: true } });
       if (!invoice) throw new AppError('NOT_FOUND');
       assertBranchAccess(req.ctx, invoice.branch);
@@ -49,6 +50,8 @@ export function invoiceRoutes(app: FastifyInstance, prisma: PrismaClient): void 
       await appendAudit(tx, req.ctx, { entityType: 'Invoice', entityId: id, action: 'ISSUE', diff: { issuedAt, dueAt } });
       return tx.invoice.findUniqueOrThrow({ where: { id } });
     });
+    await enqueueInvoicePdfGeneration(issued.id);
+    return issued;
   });
 
   // D-035: record a payment (or reversal via negative amountMinor). Insert-only Payment row,
