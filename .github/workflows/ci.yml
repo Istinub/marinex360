@@ -79,6 +79,9 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Build storage package
+        run: npm run build -w @marinex360/storage
+
       - name: Typecheck
         run: npm run typecheck
 
