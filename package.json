@@ -11,6 +11,7 @@
     "node": ">=22 <23"
   },
   "scripts": {
+    "postinstall": "npm run build -w @marinex360/storage",
     "dev:up": "docker compose up -d --wait",
     "dev:down": "docker compose down",
     "dev:reset": "docker compose down -v && docker compose up -d --wait",
