@@ -35,11 +35,30 @@ export interface BuildDraftInvoiceInput {
   variations: VariationInput[];
 }
 
+export interface ActualCostLines {
+  currency: string;
+  lines: DraftInvoiceLine[];
+  totalAmountMinor: number;
+}
+
 function fail(msg: string): never {
   throw new AppError('VALIDATION_ERROR', `invoice generation: ${msg}`);
 }
 
 export function buildDraftInvoice(input: BuildDraftInvoiceInput): DraftInvoice {
+  const actual = computeActualCostLines(input);
+  const gstAmountMinor = Math.round(actual.totalAmountMinor * (GST_RATE_PERCENT / 100));
+
+  return {
+    currency: actual.currency,
+    lines: actual.lines,
+    totalAmountMinor: actual.totalAmountMinor,
+    gstAmountMinor,
+    gstCurrency: actual.currency,
+  };
+}
+
+export function computeActualCostLines(input: BuildDraftInvoiceInput): ActualCostLines {
   const currency = BRANCH_CURRENCY[input.branch];
   if (!currency) fail(`branch "${input.branch}" not yet supported for auto-invoicing (D-031: SG-only for MVP)`);
 
@@ -103,7 +122,6 @@ export function buildDraftInvoice(input: BuildDraftInvoiceInput): DraftInvoice {
   }
 
   const totalAmountMinor = lines.reduce((sum, line) => sum + line.lineTotalAmountMinor, 0);
-  const gstAmountMinor = Math.round(totalAmountMinor * (GST_RATE_PERCENT / 100));
 
-  return { currency, lines, totalAmountMinor, gstAmountMinor, gstCurrency: currency };
+  return { currency, lines, totalAmountMinor };
 }

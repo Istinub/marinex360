@@ -9,6 +9,7 @@ import { nextInvoiceNumber, nextJoNumber } from '../services/numbering.js';
 import { DEFAULT_LABOUR_RATE } from '../lib/money.js';
 import { assertTransition, isHeaderLocked, type JoState } from '../domain/josm.js';
 import { buildDraftInvoice } from '../domain/invoice.js';
+import { buildFinancialSummary } from '../domain/financialSummary.js';
 
 const HEADER_FIELDS = ['scopeSummary', 'port', 'serviceCategories', 'plannedStartDate', 'externalQuoteRef', 'externalRfqRef'];
 const isTech = (roles: string[]) => roles.includes('TECHNICIAN') && roles.length === 1;
@@ -58,6 +59,57 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
     assertBranchAccess(req.ctx, jo.branch);                 // scope BEFORE anything else (CC-05)
     if (isTech(req.ctx.roles) && !assignedToMe(jo, req.ctx.userId)) throw new AppError('NOT_FOUND');
     return jo;
+  });
+
+  app.get('/api/v1/job-orders/:id/financial-summary', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('jobOrder:read')] }, async (req) => {
+    const { id } = req.params as any;
+    const jo = await prisma.jobOrder.findFirst({ where: { id, deletedAt: null } });
+    if (!jo) throw new AppError('NOT_FOUND');
+    assertBranchAccess(req.ctx, jo.branch);
+    if (isTech(req.ctx.roles) && !assignedToMe(jo, req.ctx.userId)) throw new AppError('NOT_FOUND');
+
+    type InvoiceWorkLogRow = {
+      startedAt: Date;
+      endedAt: Date | null;
+      labourRateAmountMinor: number | null;
+      labourRateCurrency: string | null;
+    };
+    const [workLogs, materialLines, variations, invoice] = await Promise.all([
+      prisma.$queryRaw<InvoiceWorkLogRow[]>`
+        SELECT "startedAt", "endedAt", "labourRateAmountMinor", "labourRateCurrency"
+        FROM "WorkLog"
+        WHERE "jobOrderId" = ${id}
+      `,
+      prisma.materialLine.findMany({ where: { jobOrderId: id, deletedAt: null } }),
+      prisma.variation.findMany({ where: { jobOrderId: id } }),
+      prisma.invoice.findFirst({ where: { jobOrderId: id }, orderBy: { createdAt: 'desc' } }),
+    ]);
+
+    return buildFinancialSummary({
+      branch: jo.branch,
+      baselineAmountMinor: jo.quotedAmountMinor,
+      baselineCurrency: jo.quotedCurrency,
+      workLogs: workLogs.map((workLog) => ({
+        startedAt: workLog.startedAt,
+        endedAt: workLog.endedAt,
+        labourRateAmountMinor: workLog.labourRateAmountMinor,
+        labourRateCurrency: workLog.labourRateCurrency,
+      })),
+      materialLines: materialLines.map((materialLine) => ({
+        description: materialLine.description,
+        quantity: Number(materialLine.quantity),
+        unit: materialLine.unit,
+        unitCostAmountMinor: materialLine.unitCostAmountMinor,
+        unitCostCurrency: materialLine.unitCostCurrency,
+      })),
+      variations: variations.map((variation) => ({
+        reason: variation.reason,
+        status: variation.status,
+        amountMinor: variation.amountMinor,
+        amountCurrency: variation.amountCurrency,
+      })),
+      invoice: invoice ? { totalAmountMinor: invoice.totalAmountMinor, totalCurrency: invoice.totalCurrency } : null,
+    });
   });
 
   // PATCH header (CC-02/JOSM-6 header lock; scope changes go via Variation)
