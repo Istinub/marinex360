@@ -42,6 +42,8 @@ jobs:
       S3_REGION: ap-southeast-1
       S3_BUCKET: marinex360-ci
       S3_FORCE_PATH_STYLE: "true"
+      S3_ACCESS_KEY_ID: minioadmin
+      S3_SECRET_ACCESS_KEY: minioadmin
 
     steps:
       - uses: actions/checkout@v4
@@ -52,6 +54,17 @@ jobs:
 
       - name: Install
         run: npm ci
+
+      - name: Start MinIO
+        # GH Actions' `services:` block can't override a container's start command, and
+        # MinIO needs one (`server /data ...`) — same reason local docker-compose.yml
+        # sets `command:` explicitly. Running it directly with `docker run` gives full
+        # control and mirrors the local image/env/command exactly.
+        run: |
+          docker run -d --name minio-ci \
+            -p 9000:9000 -p 9001:9001 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio server /data --console-address ":9001"
 
       - name: Create shadow database
         run: PGPASSWORD=localdev psql -h localhost -U marinex -d marinex360 -c "CREATE DATABASE marinex360_shadow;" || true
@@ -72,15 +85,29 @@ jobs:
         run: npx prisma migrate deploy
 
       - name: Seed database
-        # Integration tests below expect fixture users (ops/tech/admin/director) to
-        # exist. Seed runs via DIRECT_DATABASE_URL (owner marinex) — see prisma/seed.ts.
         run: npm run db:seed
+
+      - name: Wait for MinIO
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:9000/minio/health/live >/dev/null; then
+              echo "MinIO ready"; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::MinIO did not become ready in time"
+          docker logs minio-ci || true
+          exit 1
+
+      - name: Create MinIO bucket
+        # aws-cli is preinstalled on GitHub-hosted ubuntu-latest runners; pointed at the
+        # MinIO endpoint with its (synthetic, local-only) credentials, `s3 mb` works
+        # against any S3-compatible store. `|| true` keeps this idempotent across reruns.
+        run: |
+          aws --endpoint-url http://localhost:9000 s3 mb s3://marinex360-ci || true
 
       - name: Lint
         run: npm run lint
-
-      - name: Build storage package
-        run: npm run build -w @marinex360/storage
 
       - name: Typecheck
         run: npm run typecheck
@@ -88,9 +115,26 @@ jobs:
       - name: Unit tests
         run: npm run test
 
+      - name: Install Chrome for worker PDF tests
+        # Ubuntu's `apt install chromium` is a snap-only stub with no real binary on
+        # GitHub's runner (confirmed empirically — see D-038 handoff). Puppeteer's own
+        # Chrome-for-Testing downloader sidesteps the Debian/Ubuntu packaging split
+        # entirely. Independent of the Chromium baked into apps/worker/Dockerfile's
+        # production image — doesn't need to match it byte-for-byte, just be a
+        # compatible, runnable Chrome build.
+        run: |
+          npx puppeteer@23 browsers install chrome
+          CHROME_BIN=$(find "$HOME/.cache/puppeteer/chrome" -maxdepth 3 -type f -name chrome | head -1)
+          if [ -z "$CHROME_BIN" ]; then
+            echo "::error::Chrome binary not found after install"; exit 1
+          fi
+          "$CHROME_BIN" --version
+          echo "PUPPETEER_EXECUTABLE_PATH=$CHROME_BIN" >> "$GITHUB_ENV"
+
       - name: Integration tests
         env:
           RUN_DB_TESTS: "1"
+          RUN_WORKER_TESTS: "1"
         run: npm run test
 
       - name: Build
