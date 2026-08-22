@@ -191,7 +191,7 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
           `,
           tx.materialLine.findMany({ where: { jobOrderId: id, deletedAt: null } }),
           tx.variation.findMany({ where: { jobOrderId: id } }),
-          tx.client.findUniqueOrThrow({ where: { id: jo.clientId } }),
+          tx.client.findUniqueOrThrow({ where: { id: jo.clientId }, include: { primaryContact: true } }),
         ]);
         const draft = buildDraftInvoice({
           branch: jo.branch,
@@ -219,7 +219,7 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
         const invoice = await tx.invoice.create({
           data: {
             invoiceNumber, jobOrderId: id, branch: jo.branch, status: 'DRAFT',
-            billToName: client.name, billToAddress: client.address ?? null,
+            billToName: client.name, billToAddress: client.address ?? null, billToEmail: client.primaryContact?.email ?? null,
             gstAmountMinor: draft.gstAmountMinor, gstCurrency: draft.gstCurrency,
             totalAmountMinor: draft.totalAmountMinor, totalCurrency: draft.currency,
             lines: { create: draft.lines.map((line) => ({

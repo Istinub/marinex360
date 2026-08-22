@@ -31,7 +31,7 @@ const MATRIX: Record<Role, ReadonlySet<Action>> = {
   SYSTEM_ADMIN: new Set<Action>([
     'client:read', 'client:write', 'contact:read', 'contact:write', 'vessel:read', 'vessel:write',
     'jobOrder:read', 'jobOrder:create', 'jobOrder:updateHeader', 'jobOrder:assign',
-    'variation:create', 'variation:approve', 'variation:reject',
+    'variation:create',
     'review:read', 'review:resolve', 'invoice:read', 'invoice:create', 'invoice:issue', 'invoice:recordPayment',
     'document:read', 'document:write', 'certificate:read', 'certificate:write',
     'material:write', 'audit:read', 'user:admin',

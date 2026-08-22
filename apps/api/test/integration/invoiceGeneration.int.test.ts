@@ -103,6 +103,10 @@ run('Invoice generation (integration)', () => {
   }
 
   it('generates one DRAFT invoice with labour, material, approved variation lines when a JO reaches COMPLETED', async () => {
+    const billingContact = await prisma.contact.create({
+      data: { name: `Invoice Billing ${uniq}`, email: `invoice-billing-${uniq}@example.test` },
+    });
+    await prisma.client.update({ where: { id: clientSG.id }, data: { primaryContactId: billingContact.id } });
     const jo = await createDraftJobOrder('FULL');
     const startedAt = new Date('2026-07-01T00:00:00.000Z');
     const endedAt = new Date('2026-07-01T04:00:00.000Z');
@@ -136,10 +140,12 @@ run('Invoice generation (integration)', () => {
     const invoices = await prisma.invoice.findMany({ where: { jobOrderId: jo.id }, include: { lines: true } });
     expect(invoices).toHaveLength(1);
     const invoice = invoices[0];
+    await prisma.contact.update({ where: { id: billingContact.id }, data: { email: `changed-${uniq}@example.test` } });
     expect(invoice.status).toBe('DRAFT');
     expect(invoice.issuedAt).toBeNull();
     expect(invoice.billToName).toBe(clientSG.name);
     expect(invoice.billToAddress).toBe(clientSG.address);
+    expect(invoice.billToEmail).toBe(`invoice-billing-${uniq}@example.test`);
     expect(invoice.totalCurrency).toBe('SGD');
     expect(invoice.gstCurrency).toBe('SGD');
 

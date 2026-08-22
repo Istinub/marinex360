@@ -7,6 +7,7 @@ import { scopeWhere, assertBranchAccess } from '../services/branchScope.js';
 import { appendAudit } from '../services/audit.js';
 import { computeDueAt, assertCanIssue, deriveStatusFromSum } from '../domain/invoiceLifecycle.js';
 import { enqueueInvoicePdfGeneration } from '../services/invoicePdfQueue.js';
+import { enqueueInvoiceEmailDelivery } from '../services/invoiceEmailQueue.js';
 
 export function invoiceRoutes(app: FastifyInstance, prisma: PrismaClient): void {
   const w = (action: string) => ({ preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction(action as any)] });
@@ -20,7 +21,7 @@ export function invoiceRoutes(app: FastifyInstance, prisma: PrismaClient): void 
 
   app.get('/api/v1/invoices/:id', w('invoice:read'), async (req) => {
     const { id } = req.params as any;
-    const invoice = await prisma.invoice.findFirst({ where: { id }, include: { lines: true } });
+    const invoice = await prisma.invoice.findFirst({ where: { id }, include: { lines: true, payments: true } });
     if (!invoice) throw new AppError('NOT_FOUND');
     assertBranchAccess(req.ctx, invoice.branch);
     return invoice;
@@ -51,6 +52,19 @@ export function invoiceRoutes(app: FastifyInstance, prisma: PrismaClient): void 
       return tx.invoice.findUniqueOrThrow({ where: { id } });
     });
     await enqueueInvoicePdfGeneration(issued.id);
+    try {
+      await enqueueInvoiceEmailDelivery(issued.id);
+    } catch (err) {
+      await prisma.auditEntry.create({
+        data: {
+          entityType: 'Invoice',
+          entityId: issued.id,
+          action: 'EMAIL_ENQUEUE_FAILED',
+          actorId: req.ctx.userId,
+          diff: { message: err instanceof Error ? err.message : String(err) },
+        },
+      });
+    }
     return issued;
   });
 

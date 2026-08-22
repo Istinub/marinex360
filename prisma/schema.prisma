@@ -305,6 +305,7 @@ model Invoice {
   status String @default("DRAFT")
   billToName String
   billToAddress String?
+  billToEmail String? // CC-16/D-045: frozen from Client primary Contact email at DRAFT generation
   gstAmountMinor Int?
   gstCurrency String?
   totalAmountMinor Int

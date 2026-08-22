@@ -14,8 +14,11 @@ run('Invoices (integration)', () => {
   let prisma: PrismaClient;
   let app: ReturnType<typeof buildApp>;
   let pdfQueue: Queue;
+  let emailQueue: Queue;
   let admin: any;
+  let finance: any;
   let uniq: string;
+  let fixtureSeq = 0;
 
   beforeAll(async () => {
     prisma = new PrismaClient();
@@ -26,22 +29,28 @@ run('Invoices (integration)', () => {
     pdfQueue = new Queue('invoice-pdf-generation', {
       connection: { host: redisUrl.hostname, port: Number(redisUrl.port || 6379) },
     });
+    emailQueue = new Queue('invoice-email-delivery', {
+      connection: { host: redisUrl.hostname, port: Number(redisUrl.port || 6379) },
+    });
     admin = await prisma.user.findUniqueOrThrow({ where: { email: 'admin@tkmr.local' } });
+    finance = await prisma.user.findUniqueOrThrow({ where: { email: 'finance@tkmr.local' } });
     uniq = Date.now().toString().slice(-9);
   });
 
   afterAll(async () => {
     await pdfQueue?.close();
+    await emailQueue?.close();
     await app.close();
     await prisma.$disconnect();
   });
 
   async function createInvoiceFixture(suffix: string, creditTerms: string | null = 'NET45') {
+    fixtureSeq += 1;
     const client = await prisma.client.create({
       data: { branch: 'SG', name: `Invoice Lifecycle Client ${uniq}-${suffix}`, creditTerms },
     });
     const vessel = await prisma.vessel.create({
-      data: { clientId: client.id, imoNumber: `9${uniq}${suffix.length}`.slice(0, 12), name: `MV Invoice ${suffix}` },
+      data: { clientId: client.id, imoNumber: `9${uniq}${fixtureSeq.toString().padStart(2, '0')}`.slice(0, 12), name: `MV Invoice ${suffix}` },
     });
     const jo = await prisma.jobOrder.create({
       data: {
@@ -65,6 +74,7 @@ run('Invoices (integration)', () => {
         status: 'DRAFT',
         billToName: client.name,
         billToAddress: client.address,
+        billToEmail: `billing-${suffix.toLowerCase()}@example.test`,
         gstAmountMinor: 0,
         gstCurrency: 'SGD',
         totalAmountMinor: 100000,
@@ -95,6 +105,82 @@ run('Invoices (integration)', () => {
     expect(await prisma.auditEntry.count({ where: { entityType: 'Invoice', entityId: invoice.id, action: 'ISSUE' } })).toBe(1);
     const jobs = await pdfQueue.getJobs(['waiting', 'delayed', 'prioritized', 'paused']);
     expect(jobs.some((job) => job.name === 'generate' && job.data.invoiceId === body.id)).toBe(true);
+    const emailJobs = await emailQueue.getJobs(['waiting', 'delayed', 'prioritized', 'paused']);
+    expect(emailJobs.some((job) => job.name === 'send' && job.data.invoiceId === body.id)).toBe(true);
+  });
+
+  it('WEB P3-5: lists invoices and returns detail with lines and payments', async () => {
+    const invoice = await createInvoiceFixture('DETAIL');
+    await prisma.invoiceLine.create({
+      data: {
+        invoiceId: invoice.id,
+        kind: 'LABOUR',
+        description: 'Labour',
+        quantity: 1,
+        unit: 'hr',
+        unitPriceAmountMinor: 100000,
+        unitPriceCurrency: 'SGD',
+        lineTotalAmountMinor: 100000,
+        lineTotalCurrency: 'SGD',
+      },
+    });
+    await prisma.payment.create({
+      data: {
+        invoiceId: invoice.id,
+        amountMinor: 25000,
+        currency: 'SGD',
+        paidAt: new Date('2026-08-10T00:00:00Z'),
+        recordedById: finance.id,
+        method: 'BANK_TRANSFER',
+        reference: 'PAY-DETAIL',
+      },
+    });
+
+    const list = await app.inject({ method: 'GET', url: '/api/v1/invoices', headers: { authorization: bearer(finance) } });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().some((row: any) => row.id === invoice.id)).toBe(true);
+
+    const detail = await app.inject({ method: 'GET', url: `/api/v1/invoices/${invoice.id}`, headers: { authorization: bearer(finance) } });
+    expect(detail.statusCode).toBe(200);
+    const body = detail.json();
+    expect(body.id).toBe(invoice.id);
+    expect(body.lines).toHaveLength(1);
+    expect(body.payments).toHaveLength(1);
+    expect(body.payments[0].amountMinor).toBe(25000);
+  });
+
+  it('WEB P3-5: cross-branch direct invoice detail reads are masked as NOT_FOUND', async () => {
+    const clientMY = await prisma.client.create({ data: { branch: 'MY', name: `Invoice MY Client ${uniq}` } });
+    const vesselMY = await prisma.vessel.create({ data: { clientId: clientMY.id, imoNumber: `6${uniq}44`.slice(0, 12), name: 'MV Invoice MY' } });
+    const joMY = await prisma.jobOrder.create({
+      data: {
+        joNumber: `MY-INVROUTE-${uniq}`,
+        branch: 'MY',
+        clientId: clientMY.id,
+        vesselId: vesselMY.id,
+        scopeSummary: 'MY invoice masking fixture',
+        origin: 'MANUAL',
+        quotedAmountMinor: 100000,
+        quotedCurrency: 'MYR',
+        state: 'COMPLETED',
+        createdBy: admin.id,
+      },
+    });
+    const invoiceMY = await prisma.invoice.create({
+      data: {
+        invoiceNumber: `INV-ROUTE-${uniq}-MY`,
+        jobOrderId: joMY.id,
+        branch: 'MY',
+        status: 'DRAFT',
+        billToName: clientMY.name,
+        totalAmountMinor: 100000,
+        totalCurrency: 'MYR',
+      },
+    });
+
+    const res = await app.inject({ method: 'GET', url: `/api/v1/invoices/${invoiceMY.id}`, headers: { authorization: bearer(finance) } });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.code).toBe('NOT_FOUND');
   });
 
   it('D-034 (corrected): a SENT invoice past dueAt still reads as SENT via the API — no computed-on-read override, stored-status-only', async () => {

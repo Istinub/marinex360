@@ -11,6 +11,7 @@
  */
 import { Queue, Worker } from "bullmq";
 import { generateInvoicePdf } from "./jobs/generateInvoicePdf.js";
+import { sendInvoiceEmail } from "./jobs/sendInvoiceEmail.js";
 import { reconcileOverdueInvoices } from "./jobs/overdueReconciliation.js";
 import { reconcileCertificateExpiryAlerts } from "./jobs/certificateExpiryAlert.js";
 
@@ -67,6 +68,16 @@ const invoicePdfWorker = new Worker(
   { connection },
 );
 invoicePdfWorker.on("failed", (_job, err) => console.error("[worker] invoice PDF generation failed", err));
+
+const invoiceEmailWorker = new Worker(
+  "invoice-email-delivery",
+  async (job) => {
+    const { invoiceId } = job.data as { invoiceId: string };
+    return sendInvoiceEmail(invoiceId);
+  },
+  { connection },
+);
+invoiceEmailWorker.on("failed", (_job, err) => console.error("[worker] invoice email delivery failed", err));
 
 // FR-48/FR-60: recurring certificate-expiry alert, daily. Certificate expiry is a day-scale
 // operational alert, unlike invoice overdue reconciliation's 15-minute cadence.

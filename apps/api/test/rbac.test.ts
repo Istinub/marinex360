@@ -10,6 +10,11 @@ describe('RBAC — Director variation approval (D-003)', () => {
     expect(can(['OPS_SUPERVISOR'], 'variation:create')).toBe(true);
     expect(can(['OPS_SUPERVISOR'], 'variation:approve')).toBe(false);
   });
+  it('System Admin may propose but approval remains Director-only', () => {
+    expect(can(['SYSTEM_ADMIN'], 'variation:create')).toBe(true);
+    expect(can(['SYSTEM_ADMIN'], 'variation:approve')).toBe(false);
+    expect(can(['SYSTEM_ADMIN'], 'variation:reject')).toBe(false);
+  });
 });
 
 describe('RBAC — Finance cannot edit job scope (RBAC-FIN-1)', () => {
