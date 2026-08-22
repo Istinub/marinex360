@@ -14,6 +14,8 @@ export type Action =
   | 'variation:create' | 'variation:approve' | 'variation:reject'
   | 'review:read' | 'review:resolve'
   | 'invoice:read' | 'invoice:create' | 'invoice:issue' | 'invoice:recordPayment'
+  | 'document:read' | 'document:write'
+  | 'certificate:read' | 'certificate:write'
   | 'material:write'
   | 'audit:read'
   | 'user:admin';
@@ -31,6 +33,7 @@ const MATRIX: Record<Role, ReadonlySet<Action>> = {
     'jobOrder:read', 'jobOrder:create', 'jobOrder:updateHeader', 'jobOrder:assign',
     'variation:create', 'variation:approve', 'variation:reject',
     'review:read', 'review:resolve', 'invoice:read', 'invoice:create', 'invoice:issue', 'invoice:recordPayment',
+    'document:read', 'document:write', 'certificate:read', 'certificate:write',
     'material:write', 'audit:read', 'user:admin',
   ]),
   // Director: approves/rejects EVERY variation (D-003) [CONTRACT]; consolidated cross-branch
@@ -38,12 +41,14 @@ const MATRIX: Record<Role, ReadonlySet<Action>> = {
   DIRECTOR: new Set<Action>([
     'client:read', 'contact:read', 'vessel:read', 'jobOrder:read',
     'variation:approve', 'variation:reject', 'review:read', 'invoice:read', 'invoice:recordPayment', 'audit:read',
+    'document:read', 'document:write', 'certificate:read', 'certificate:write',
   ]),
   // Finance: invoicing only; MUST NOT edit job scope (RBAC-FIN-1) [CONTRACT] -> no jobOrder
   // header/assign, no variation:create/approve.
   FINANCE: new Set<Action>([
     'client:read', 'vessel:read', 'jobOrder:read',
     'invoice:read', 'invoice:create', 'invoice:issue', 'invoice:recordPayment', 'audit:read',
+    'document:read', 'certificate:read',
   ]),
   // Ops supervisor: office CRUD + JO lifecycle + variation PROPOSE + review queue [INFERRED,
   // consistent with JOSM gating in contract]. NOT variation:approve (Director only) [CONTRACT].
@@ -51,6 +56,7 @@ const MATRIX: Record<Role, ReadonlySet<Action>> = {
     'client:read', 'client:write', 'contact:read', 'contact:write', 'vessel:read', 'vessel:write',
     'jobOrder:read', 'jobOrder:create', 'jobOrder:updateHeader', 'jobOrder:assign',
     'variation:create', 'review:read', 'review:resolve', 'material:write', 'invoice:read',
+    'document:read', 'document:write', 'certificate:read', 'certificate:write',
   ]),
   // Technician: reads ONLY their assigned jobs (row-level IDOR check is separate, RBAC-IDOR-1);
   // adds field materials (OD-01). Execution-state transitions are execution-owner-gated in JOSM,
