@@ -12,6 +12,7 @@ import { reviewQueueRoutes } from './routes/reviewQueue.js';
 import { checklistRoutes } from './routes/checklists.js';
 import { uploadRoutes, type PresignPut } from './routes/uploads.js';
 import { documentRoutes } from './routes/documents.js';
+import { certificateRoutes } from './routes/certificates.js';
 import { syncRoutes } from './routes/sync.js';
 
 export interface AppDeps { prisma: PrismaClient; accessSecret: string; presignPut: PresignPut; }
@@ -33,6 +34,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   checklistRoutes(app, deps.prisma);
   uploadRoutes(app, deps.prisma, deps.presignPut);
   documentRoutes(app, deps.prisma, deps.presignPut);
+  certificateRoutes(app, deps.prisma);
   syncRoutes(app, deps.prisma);
 
   return app;

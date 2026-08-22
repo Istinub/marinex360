@@ -12,6 +12,7 @@
 import { Queue, Worker } from "bullmq";
 import { generateInvoicePdf } from "./jobs/generateInvoicePdf.js";
 import { reconcileOverdueInvoices } from "./jobs/overdueReconciliation.js";
+import { reconcileCertificateExpiryAlerts } from "./jobs/certificateExpiryAlert.js";
 
 const redisUrl = new URL(process.env.REDIS_URL ?? "redis://localhost:6379");
 const connection = {
@@ -66,3 +67,26 @@ const invoicePdfWorker = new Worker(
   { connection },
 );
 invoicePdfWorker.on("failed", (_job, err) => console.error("[worker] invoice PDF generation failed", err));
+
+// FR-48/FR-60: recurring certificate-expiry alert, daily. Certificate expiry is a day-scale
+// operational alert, unlike invoice overdue reconciliation's 15-minute cadence.
+const certificateExpiryQueue = new Queue("certificate-expiry-alert", { connection });
+await certificateExpiryQueue.add(
+  "reconcile",
+  {},
+  {
+    repeat: { every: 24 * 60 * 60 * 1000 },
+    jobId: "certificate-expiry-alert-recurring",
+  },
+);
+
+const certificateExpiryWorker = new Worker(
+  "certificate-expiry-alert",
+  async () => {
+    const result = await reconcileCertificateExpiryAlerts();
+    console.log(`[worker] certificate expiry alert: ${result.alerted} certificate(s) alerted`);
+    return result;
+  },
+  { connection },
+);
+certificateExpiryWorker.on("failed", (_job, err) => console.error("[worker] certificate expiry alert job failed", err));

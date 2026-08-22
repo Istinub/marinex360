@@ -368,6 +368,8 @@ model Certificate {                    // technician (G-3), vessel/company (FR-2
   issuedAt DateTime?
   expiresAt DateTime
   s3Key String?
+  deletedAt DateTime?                  // D-041: soft-delete, matches every other entity's pattern
+  alertedAt DateTime?                  // D-042: direct dedup field for recurring expiry alerts
   version Int @default(0)
   @@index([ownerType, ownerId])
   @@index([expiresAt])

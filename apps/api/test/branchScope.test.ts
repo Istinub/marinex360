@@ -34,11 +34,15 @@ describe('resolveOwnerBranch', () => {
     await expect(resolveOwnerBranch(prisma, 'JOB', 'job-1')).resolves.toBe('ID');
   });
 
-  it('resolves TECHNICIAN certificates through User.branch as an interim interpretation', async () => {
+  it('resolves TECHNICIAN certificates through User.branch (D-043)', async () => {
     const prisma = {
       user: { findFirst: async () => ({ branch: 'BD' }) },
     } as any;
 
     await expect(resolveOwnerBranch(prisma, 'TECHNICIAN', 'user-1')).resolves.toBe('BD');
+  });
+
+  it('leaves COMPANY certificates unscoped (D-043)', async () => {
+    await expect(resolveOwnerBranch({} as any, 'COMPANY', 'tkmr')).resolves.toBeNull();
   });
 });

@@ -22,7 +22,7 @@ export function scopeWhere(ctx: RequestContext): Record<string, unknown> {
 /** The branch a newly created row MUST carry (never client-supplied). */
 export const branchForCreate = (ctx: RequestContext) => ctx.branch;
 
-export type BranchScopedOwnerType = 'CLIENT' | 'VESSEL' | 'JOB' | 'TECHNICIAN';
+export type BranchScopedOwnerType = 'CLIENT' | 'VESSEL' | 'JOB' | 'TECHNICIAN' | 'COMPANY';
 
 export async function resolveOwnerBranch(
   prisma: PrismaClient,
@@ -44,6 +44,7 @@ export async function resolveOwnerBranch(
     const jo = await prisma.jobOrder.findFirst({ where: { id: ownerId, deletedAt: null }, select: { branch: true } });
     return jo?.branch ?? null;
   }
+  if (ownerType === 'COMPANY') return null;
 
   const user = await prisma.user.findFirst({ where: { id: ownerId, active: true }, select: { branch: true } });
   return user?.branch ?? null;
