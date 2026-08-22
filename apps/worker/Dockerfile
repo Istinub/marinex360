@@ -10,7 +10,7 @@ WORKDIR /app
 COPY package*.json ./
 COPY apps/worker/package.json apps/worker/
 COPY packages/storage/package.json packages/storage/
-RUN npm ci
+RUN npm ci --ignore-scripts
 COPY prisma ./prisma
 RUN npx prisma generate
 COPY tsconfig.base.json ./
