@@ -104,8 +104,21 @@ runDb('sendInvoiceEmail (integration)', () => {
     const key = `invoices/test/${uniq}/sent.pdf`;
     await storage.put(key, new Uint8Array([37, 80, 68, 70]), 'application/pdf');
     const invoice = await createInvoice('SENT', { billToEmail: `billing-sent-${uniq}@example.test`, pdfObjectKey: key });
-    const result = await sendInvoiceEmail(invoice.id);
-    expect(result).toEqual({ sent: true });
-    expect(await prisma.auditEntry.count({ where: { entityType: 'Invoice', entityId: invoice.id, action: 'EMAIL_SENT' } })).toBe(1);
+    const smtpHost = process.env.SMTP_HOST ?? '127.0.0.1';
+    const smtpPort = Number(process.env.SMTP_PORT ?? '1025');
+    const oldHost = process.env.SMTP_HOST;
+    const oldPort = process.env.SMTP_PORT;
+    process.env.SMTP_HOST = smtpHost;
+    process.env.SMTP_PORT = String(smtpPort);
+    try {
+      const result = await sendInvoiceEmail(invoice.id);
+      expect(result).toEqual({ sent: true });
+      expect(await prisma.auditEntry.count({ where: { entityType: 'Invoice', entityId: invoice.id, action: 'EMAIL_SENT' } })).toBe(1);
+    } finally {
+      if (oldHost == null) delete process.env.SMTP_HOST;
+      else process.env.SMTP_HOST = oldHost;
+      if (oldPort == null) delete process.env.SMTP_PORT;
+      else process.env.SMTP_PORT = oldPort;
+    }
   });
 });
