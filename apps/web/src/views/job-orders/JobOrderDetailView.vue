@@ -85,9 +85,12 @@ const form = reactive<Record<HeaderField, string>>({
   externalRfqRef: '',
 });
 
-const officeRoles = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN'];
+const officeRoles = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN', 'DIRECTOR'];
 const financeRoles = ['FINANCE', 'SYSTEM_ADMIN'];
 const cancelRoles = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN', 'DIRECTOR'];
+const variationCreateRoles = ['SYSTEM_ADMIN', 'OPS_SUPERVISOR'];
+const variationApproveRoles = ['DIRECTOR', 'SYSTEM_ADMIN'];
+const variationRejectRoles = ['DIRECTOR', 'SYSTEM_ADMIN'];
 const josmRules: JosmRule[] = [
   { from: 'DRAFT', to: 'SCHEDULED', gate: { type: 'roles', roles: officeRoles }, requiresReason: false, kind: 'forward' },
   { from: 'SCHEDULED', to: 'IN_PROGRESS', gate: { type: 'execOwner' }, requiresReason: false, kind: 'forward' },
@@ -107,7 +110,9 @@ const josmRules: JosmRule[] = [
 ];
 
 const roles = computed(() => auth.identity?.roles ?? []);
-const isDirector = computed(() => roles.value.includes('DIRECTOR'));
+const canCreateVariation = computed(() => roles.value.some((role) => variationCreateRoles.includes(role)));
+const canApproveVariation = computed(() => roles.value.some((role) => variationApproveRoles.includes(role)));
+const canRejectVariation = computed(() => roles.value.some((role) => variationRejectRoles.includes(role)));
 const isHeaderEditable = computed(() => jobOrder.value?.state === 'DRAFT' || jobOrder.value?.state === 'SCHEDULED');
 const approvedVariationAmountMinor = computed(() =>
   variations.value
@@ -466,7 +471,7 @@ onMounted(async () => {
       <section class="crm-section" aria-labelledby="job-order-actions-title">
         <h2 id="job-order-actions-title" class="crm-section__title">Actions</h2>
         <div class="record-form__actions record-form__actions--left">
-          <Button label="Add Variation" icon="pi pi-plus" @click="openVariationForm" />
+          <Button v-if="canCreateVariation" label="Add Variation" icon="pi pi-plus" @click="openVariationForm" />
           <Button
             v-for="action in transitionActions"
             :key="`${action.to}-${action.kind}`"
@@ -579,9 +584,9 @@ onMounted(async () => {
               </div>
             </dl>
 
-            <div v-if="isDirector && variation.status === 'PROPOSED'" class="record-form__actions record-form__actions--left">
-              <Button label="Approve" icon="pi pi-check" :loading="isSaving" @click="decideVariation(variation, 'approve')" />
-              <Button label="Reject" icon="pi pi-times" severity="danger" :loading="isSaving" @click="decideVariation(variation, 'reject')" />
+            <div v-if="variation.status === 'PROPOSED' && (canApproveVariation || canRejectVariation)" class="record-form__actions record-form__actions--left">
+              <Button v-if="canApproveVariation" label="Approve" icon="pi pi-check" :loading="isSaving" @click="decideVariation(variation, 'approve')" />
+              <Button v-if="canRejectVariation" label="Reject" icon="pi pi-times" severity="danger" :loading="isSaving" @click="decideVariation(variation, 'reject')" />
             </div>
           </article>
         </div>
