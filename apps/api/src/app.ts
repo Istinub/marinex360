@@ -17,10 +17,25 @@ import { syncRoutes } from './routes/sync.js';
 
 export interface AppDeps { prisma: PrismaClient; accessSecret: string; presignPut: PresignPut; }
 
+function serializeChangeSeq(payload: unknown, expose: boolean): unknown {
+  if (Array.isArray(payload)) return payload.map((item) => serializeChangeSeq(item, expose));
+  if (payload == null || typeof payload !== 'object' || payload instanceof Date) return payload;
+
+  return Object.fromEntries(Object.entries(payload).flatMap(([key, value]) => {
+    if (key === 'changeSeq') return expose ? [[key, typeof value === 'bigint' ? value.toString() : value]] : [];
+    return [[key, serializeChangeSeq(value, expose)]];
+  }));
+}
+
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify({ logger: true });
   registerErrorHandler(app);
   registerAuthn(app, { accessSecret: deps.accessSecret });
+
+  // changeSeq is an internal sync cursor field. JSON has no bigint representation, so expose it
+  // only on the sync delta endpoint as a decimal string and keep every existing REST DTO stable.
+  app.addHook('preSerialization', async (req, _reply, payload) =>
+    serializeChangeSeq(payload, req.routeOptions.url === '/api/v1/sync/assigned'));
 
   // Contract with DevOps (apps/api Dockerfile HEALTHCHECK + Uptime Robot): keep this path/shape.
   app.get('/api/v1/health', async () => ({ status: 'ok', service: 'marinex360-api', time: new Date().toISOString() }));

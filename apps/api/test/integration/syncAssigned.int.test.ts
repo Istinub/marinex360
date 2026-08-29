@@ -30,7 +30,7 @@ run('Sync assigned delta (integration)', () => {
   it('returns assigned job delta and all child collections without a Prisma updatedAt runtime error', async () => {
     const res = await app.inject({
       method: 'GET',
-      url: '/api/v1/sync/assigned?since=1970-01-01T00:00:00.000Z',
+      url: '/api/v1/sync/assigned?since=0',
       headers: { authorization: bearer(tech) },
     });
 
@@ -38,6 +38,7 @@ run('Sync assigned delta (integration)', () => {
     const body = res.json();
     expect(typeof body.cursor).toBe('string');
     expect(Array.isArray(body.jobOrders)).toBe(true);
+    expect(body.jobOrders.every((row: any) => typeof row.changeSeq === 'string')).toBe(true);
     expect(body.children).toBeTruthy();
     expect(Array.isArray(body.children.worklogs)).toBe(true);
     expect(Array.isArray(body.children.photos)).toBe(true);

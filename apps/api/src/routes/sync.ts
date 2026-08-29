@@ -6,7 +6,7 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import { AppError, type ErrorCode } from '../lib/errors.js';
 import { findProcessedOp, recordProcessedOp, type OpApplyStatus } from '../services/idempotency.js';
 import { appendAudit } from '../services/audit.js';
-import { isDispatched, resolveReviewState, snapshotLabourRate, parseCursor, WRITABLE_ENTITIES, type WritableEntity } from '../domain/sync.js';
+import { isDispatched, resolveReviewState, snapshotLabourRate, parseChangeSeqCursor, WRITABLE_ENTITIES, type WritableEntity } from '../domain/sync.js';
 import { validateItemDefs, validateResults } from '../domain/checklist.js';
 
 export const SYNC_SCHEMA_VERSION = 1;
@@ -167,11 +167,11 @@ export function syncRoutes(app: FastifyInstance, prisma: PrismaClient): void {
     return reply.send({ schemaVersion: SYNC_SCHEMA_VERSION, results });
   });
 
-  // GET /sync/assigned?since=<cursor> — real delta. STOPGAP cursor = ISO timestamp (see
-  // domain/sync.ts parseCursor doc comment for the known ties/precision limitation).
+  // GET /sync/assigned?since=<changeSeq> -- D-012 CLOSED: monotonic changeSeq cursor, not
+  // timestamp-based. Cursor values are bigint, transmitted as decimal strings (JSON has no
+  // native bigint) -- both in the query param and the response.
   app.get('/api/v1/sync/assigned', authed, async (req) => {
-    const since = parseCursor((req.query as any)?.since);
-    const now = new Date();
+    const since = parseChangeSeqCursor((req.query as any)?.since);
     const userId = req.ctx.userId;
 
     const jobOrders = await prisma.jobOrder.findMany({
@@ -181,9 +181,9 @@ export function syncRoutes(app: FastifyInstance, prisma: PrismaClient): void {
       },
     });
     const joIds = jobOrders.map((j) => j.id);
-    const changedJobOrders = jobOrders.filter((j) => j.updatedAt > since);
+    const changedJobOrders = jobOrders.filter((j) => j.changeSeq > since);
 
-    const whereChild = { jobOrderId: { in: joIds }, updatedAt: { gt: since } } as const;
+    const whereChild = { jobOrderId: { in: joIds }, changeSeq: { gt: since } } as const;
     const [worklogs, photos, observations, checklists, materials, esignatures] = await Promise.all([
       prisma.workLog.findMany({ where: whereChild }),
       prisma.photo.findMany({ where: whereChild }),
@@ -193,10 +193,31 @@ export function syncRoutes(app: FastifyInstance, prisma: PrismaClient): void {
       prisma.eSignature.findMany({ where: whereChild }),
     ]);
 
+    const allSeqs: bigint[] = [
+      ...changedJobOrders.map((j) => j.changeSeq),
+      ...worklogs.map((r) => r.changeSeq),
+      ...photos.map((r) => r.changeSeq),
+      ...observations.map((r) => r.changeSeq),
+      ...checklists.map((r) => r.changeSeq),
+      ...materials.map((r) => r.changeSeq),
+      ...esignatures.map((r) => r.changeSeq),
+    ];
+    const newCursor = allSeqs.length ? allSeqs.reduce((a, b) => (b > a ? b : a)) : since;
+
+    const stringifySeq = <T extends { changeSeq: bigint }>(rows: T[]) =>
+      rows.map((r) => ({ ...r, changeSeq: r.changeSeq.toString() }));
+
     return {
-      cursor: now.toISOString(),
-      jobOrders: changedJobOrders,
-      children: { worklogs, photos, observations, checklists, materials, esignatures },
+      cursor: newCursor.toString(),
+      jobOrders: stringifySeq(changedJobOrders),
+      children: {
+        worklogs: stringifySeq(worklogs),
+        photos: stringifySeq(photos),
+        observations: stringifySeq(observations),
+        checklists: stringifySeq(checklists),
+        materials: stringifySeq(materials),
+        esignatures: stringifySeq(esignatures),
+      },
     };
   });
 }

@@ -1,5 +1,6 @@
 // Pure sync-apply decision logic (D-002/SYNC-13 flag resolution, CC-9 labourRate snapshot,
-// cursor parsing). Kept separate from routes/sync.ts so it's unit-testable without a DB.
+// change-sequence cursor parsing). Kept separate from routes/sync.ts so it's unit-testable
+// without a DB.
 import type { Money } from '../lib/money.js';
 import { DEFAULT_LABOUR_RATE } from '../lib/money.js';
 
@@ -35,14 +36,16 @@ export function snapshotLabourRate(jo: { labourRateAmountMinor: number | null; l
 }
 
 /**
- * Cursor for GET /sync/assigned?since=. STOPGAP: an ISO timestamp, not a monotonic sequence.
- * Known limitation (flagged in BE's original S0-7 readiness review, still unratified): two rows
- * updated within the same millisecond, or a row updated exactly AT the cursor boundary, can be
- * missed or double-delivered under concurrent writes. Acceptable for the S0-6 real-backend
- * milestone; a dedicated change-sequence table is the proposed real fix (see HANDOFF).
+ * D-012 (closed): monotonic changeSeq cursor. A DB-autoincrement bigint makes the old
+ * same-millisecond tie problem structurally impossible -- every INSERT gets a strictly
+ * distinct value regardless of wall-clock resolution, unlike `updatedAt`.
  */
-export function parseCursor(since: unknown): Date {
-  if (typeof since !== 'string' || !since) return new Date(0);
-  const d = new Date(since);
-  return Number.isNaN(d.getTime()) ? new Date(0) : d;
+export function parseChangeSeqCursor(since: unknown): bigint {
+  if (since == null || since === '') return 0n;
+  try {
+    const n = BigInt(since as any);
+    return n >= 0n ? n : 0n;
+  } catch {
+    return 0n;
+  }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isDispatched, resolveReviewState, snapshotLabourRate, parseCursor, WRITABLE_ENTITIES } from '../src/domain/sync.js';
+import { isDispatched, resolveReviewState, snapshotLabourRate, parseChangeSeqCursor, WRITABLE_ENTITIES } from '../src/domain/sync.js';
 
 describe('isDispatched / resolveReviewState (D-002/SYNC-13)', () => {
   const jo = { assignedTechnicianIds: ['tech-1', 'tech-2'], executionOwnerId: 'tech-1' };
@@ -34,14 +34,15 @@ describe('snapshotLabourRate (CC-9)', () => {
   });
 });
 
-describe('parseCursor (stopgap timestamp cursor)', () => {
-  it('parses a valid ISO string', () => {
-    expect(parseCursor('2026-07-04T00:00:00.000Z').toISOString()).toBe('2026-07-04T00:00:00.000Z');
+describe('parseChangeSeqCursor (D-012 monotonic cursor)', () => {
+  it('parses a valid non-negative decimal string', () => {
+    expect(parseChangeSeqCursor('12345678901234567890')).toBe(12345678901234567890n);
   });
-  it('defaults to epoch for missing/invalid input', () => {
-    expect(parseCursor(undefined).getTime()).toBe(0);
-    expect(parseCursor('not-a-date').getTime()).toBe(0);
-    expect(parseCursor(12345 as any).getTime()).toBe(0);
+  it('defaults to zero for zero, missing, malformed, or negative input', () => {
+    expect(parseChangeSeqCursor('0')).toBe(0n);
+    expect(parseChangeSeqCursor(undefined)).toBe(0n);
+    expect(parseChangeSeqCursor('not-a-number')).toBe(0n);
+    expect(parseChangeSeqCursor('-1')).toBe(0n);
   });
 });
 
