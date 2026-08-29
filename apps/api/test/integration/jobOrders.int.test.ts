@@ -17,6 +17,7 @@ const bearer = (u: { id: string; roles: string[]; branch: string }) =>
 
 // Fixed id so every run reuses the same JO fixture row instead of creating duplicates.
 const JO_ID = 'jo-inttest-jobs';
+const EXECUTION_OWNER_ONLY_JO_ID = 'jo-inttest-execution-owner-only';
 
 run('Job Orders (integration)', () => {
   // CI FIX (OPS finding, corrected mechanism): Vitest calls this describe callback's
@@ -63,6 +64,48 @@ run('Job Orders (integration)', () => {
     jo = await prisma.jobOrder.findUniqueOrThrow({ where: { id: JO_ID } });
   });
   afterAll(async () => { await app.close(); await prisma.$disconnect(); });
+
+  it('GET /job-orders includes technician execution-owner jobs even when assignedTechnicianIds is empty', async () => {
+    const fixture = await prisma.jobOrder.upsert({
+      where: { id: EXECUTION_OWNER_ONLY_JO_ID },
+      update: {
+        branch: 'SG',
+        clientId: jo.clientId,
+        vesselId: jo.vesselId,
+        scopeSummary: 'Execution owner only list fixture',
+        state: 'SCHEDULED',
+        assignedTechnicianIds: [],
+        executionOwnerId: tech.id,
+        deletedAt: null,
+      },
+      create: {
+        id: EXECUTION_OWNER_ONLY_JO_ID,
+        joNumber: 'SG-INTTEST-EXEC-OWNER-ONLY',
+        branch: 'SG',
+        clientId: jo.clientId,
+        vesselId: jo.vesselId,
+        scopeSummary: 'Execution owner only list fixture',
+        origin: 'MANUAL',
+        quotedAmountMinor: 100000,
+        quotedCurrency: 'SGD',
+        state: 'SCHEDULED',
+        createdBy: sup.id,
+        assignedTechnicianIds: [],
+        executionOwnerId: tech.id,
+      },
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/job-orders',
+      headers: { authorization: bearer(tech) },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(Array.isArray(body)).toBe(true);
+    expect(body.some((jobOrder: any) => jobOrder.id === fixture.id)).toBe(true);
+  });
 
   it('JOSM-5: non-owner cannot enter IN_PROGRESS (FORBIDDEN)', async () => {
     // assign the real tech, move DRAFT -> SCHEDULED, then have a DIFFERENT tech attempt IN_PROGRESS

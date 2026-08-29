@@ -47,7 +47,9 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
   // LIST (RBAC-SCOPE-1 service-layer scoping; technicians see only assigned)
   app.get('/api/v1/job-orders', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('jobOrder:read')] }, async (req) => {
     const where: any = { ...scopeWhere(req.ctx), deletedAt: null };
-    if (isTech(req.ctx.roles)) where.assignedTechnicianIds = { has: req.ctx.userId };
+    if (isTech(req.ctx.roles)) {
+      where.OR = [{ assignedTechnicianIds: { has: req.ctx.userId } }, { executionOwnerId: req.ctx.userId }];
+    }
     return prisma.jobOrder.findMany({ where, orderBy: { createdAt: 'desc' } });
   });
 
