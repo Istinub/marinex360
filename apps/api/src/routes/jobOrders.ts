@@ -54,7 +54,7 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
   // GET by id (cross-branch -> NOT_FOUND; technician IDOR -> NOT_FOUND, RBAC-IDOR-1)
   app.get('/api/v1/job-orders/:id', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('jobOrder:read')] }, async (req) => {
     const { id } = req.params as any;
-    const jo = await prisma.jobOrder.findFirst({ where: { id, deletedAt: null } });
+    const jo = await prisma.jobOrder.findFirst({ where: { id, deletedAt: null }, include: { variations: true } });
     if (!jo) throw new AppError('NOT_FOUND');
     assertBranchAccess(req.ctx, jo.branch);                 // scope BEFORE anything else (CC-05)
     if (isTech(req.ctx.roles) && !assignedToMe(jo, req.ctx.userId)) throw new AppError('NOT_FOUND');

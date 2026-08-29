@@ -130,4 +130,38 @@ run('Job Orders (integration)', () => {
     });
     expect(history.reason).toBe('Awaiting parts delivery');
   });
+
+  it('GET /job-orders/:id includes variations inline (fixes WEB not-appearing bug)', async () => {
+    const fixture = await prisma.jobOrder.create({
+      data: {
+        joNumber: `SG-INTTEST-VARIATIONS-${Date.now()}`,
+        branch: 'SG',
+        clientId: jo.clientId,
+        vesselId: jo.vesselId,
+        scopeSummary: 'Inline variations fixture',
+        origin: 'MANUAL',
+        quotedAmountMinor: 100000,
+        quotedCurrency: 'SGD',
+        state: 'DRAFT',
+        createdBy: sup.id,
+      },
+    });
+    const created = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${fixture.id}/variations`,
+      headers: { authorization: bearer(sup) },
+      payload: { reason: 'Regression test for missing variations in JO detail', amountMinor: 1000, amountCurrency: 'SGD' },
+    });
+    expect(created.statusCode).toBe(201);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/v1/job-orders/${fixture.id}`,
+      headers: { authorization: bearer(sup) },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(Array.isArray(body.variations)).toBe(true);
+    expect(body.variations.some((v: any) => v.id === created.json().id)).toBe(true);
+  });
 });
