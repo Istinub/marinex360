@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import Button from 'primevue/button';
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import FieldError from '@/components/common/FieldError.vue';
 import MaterialLineRow from '@/components/common/MaterialLineRow.vue';
@@ -52,7 +52,7 @@ interface MaterialLineDraft {
 const route = useRoute();
 const auth = useAuthStore();
 const jobOrdersStore = useJobOrdersStore();
-const jobOrderId = String(route.params.id);
+const jobOrderId = computed(() => String(route.params.id));
 
 const jobOrder = ref<JobOrder | null>(null);
 const isLoading = ref(true);
@@ -240,8 +240,9 @@ function applyValidation(error: ApiResponseError): boolean {
 }
 
 async function loadJobOrder(overwriteForm = true): Promise<void> {
-  const loaded = await jobOrdersStore.loadJobOrder(jobOrderId);
+  const loaded = await jobOrdersStore.loadJobOrder(jobOrderId.value);
   applyJobOrder(loaded, overwriteForm);
+  variations.value = loaded.variations ?? [];
 }
 
 async function saveHeader(isConflictConfirm = false): Promise<void> {
@@ -251,7 +252,7 @@ async function saveHeader(isConflictConfirm = false): Promise<void> {
   isSaving.value = true;
 
   try {
-    const updated = await jobOrdersStore.updateJobOrder(jobOrderId, headerPayload());
+    const updated = await jobOrdersStore.updateJobOrder(jobOrderId.value, headerPayload());
     applyJobOrder(updated, true);
     showConflict.value = false;
   } catch (error) {
@@ -293,7 +294,7 @@ async function runTransition(isConflictConfirm = false): Promise<void> {
 
   isSaving.value = true;
   try {
-    const updated = await jobOrdersStore.transitionJobOrder(jobOrderId, {
+    const updated = await jobOrdersStore.transitionJobOrder(jobOrderId.value, {
       to: pendingTransition.value.to,
       reason: transitionReason.value.trim() || undefined,
       version: jobOrder.value.version,
@@ -428,6 +429,24 @@ async function decideVariation(variation: Variation, decision: VariationDecision
 }
 
 onMounted(async () => {
+  isLoading.value = true;
+  try {
+    await loadJobOrder();
+  } catch (error) {
+    if (error instanceof ApiResponseError && error.code === 'NOT_FOUND') {
+      isNotFound.value = true;
+      return;
+    }
+    formError.value = error instanceof ApiResponseError ? error.message : 'Unable to load job order.';
+  } finally {
+    isLoading.value = false;
+  }
+});
+
+watch(jobOrderId, async () => {
+  isLoading.value = true;
+  isNotFound.value = false;
+  formError.value = null;
   try {
     await loadJobOrder();
   } catch (error) {
@@ -592,7 +611,7 @@ onMounted(async () => {
         </div>
 
         <p v-else class="crm-empty">
-          No variations loaded. Existing variation listing is not exposed by apps/api/src/routes/variations.ts.
+          No variations yet.
         </p>
       </section>
 

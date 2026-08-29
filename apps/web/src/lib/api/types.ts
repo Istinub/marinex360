@@ -94,6 +94,7 @@ export interface JobOrder {
   executionOwnerId?: string | null;
   plannedStartDate?: string | null;
   version: number;
+  variations: Variation[];
 }
 
 export type VariationStatus = 'PROPOSED' | 'APPROVED' | 'REJECTED';
