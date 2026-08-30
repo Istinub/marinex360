@@ -155,15 +155,15 @@ model JobStatusHistory {              // append-only + DB-immutable
   at DateTime @default(now())
   @@index([jobOrderId])
 }
-model Variation {                     // D-003: EVERY variation needs Director approval (no threshold)
+model Variation {                     // D-003/D-046: EVERY variation needs Director/System Admin approval (no threshold)
   id String @id @default(uuid())
   jobOrder JobOrder @relation(fields: [jobOrderId], references: [id])
   jobOrderId String
   reason String
   amountMinor Int
   amountCurrency String
-  status String @default("PROPOSED")  // PROPOSED -> APPROVED | REJECTED (Director only)
-  approverId String?                  // must resolve to a Director role
+  status String @default("PROPOSED")  // PROPOSED -> APPROVED | REJECTED (Director/System Admin only)
+  approverId String?                  // must resolve to a Director/System Admin role
   version Int @default(0)
   createdAt DateTime @default(now())
   lines MaterialLine[]
@@ -364,7 +364,7 @@ model Payment {                        // D-035/CC-12: immutable ledger, extends
 // ===================== DOCS / CERTS / NOTIFY =====================
 model Document {
   id String @id @default(uuid())
-  ownerType String                     // JOB | VESSEL
+  ownerType String                     // CLIENT | VESSEL | JOB
   ownerId String
   s3Key String
   filename String

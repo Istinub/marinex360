@@ -22,7 +22,7 @@ type Kind = 'FORWARD' | 'SIDE' | 'RESUME' | 'REJECT';
 interface Rule { from: JoState; to: JoState; gate: Gate; requiresReason: boolean; kind: Kind; }
 
 // Office/supervisor roles that drive scheduling and side-controls.
-const OFFICE: Role[] = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN'];
+const OFFICE: Role[] = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN', 'DIRECTOR'];
 const CANCEL_ROLES: Role[] = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN', 'DIRECTOR']; // [INFERRED] who may cancel
 
 export const RULES: Rule[] = [

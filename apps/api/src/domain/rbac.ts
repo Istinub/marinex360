@@ -31,7 +31,7 @@ const MATRIX: Record<Role, ReadonlySet<Action>> = {
   SYSTEM_ADMIN: new Set<Action>([
     'client:read', 'client:write', 'contact:read', 'contact:write', 'vessel:read', 'vessel:write',
     'jobOrder:read', 'jobOrder:create', 'jobOrder:updateHeader', 'jobOrder:assign',
-    'variation:create',
+    'variation:create', 'variation:approve', 'variation:reject',
     'review:read', 'review:resolve', 'invoice:read', 'invoice:create', 'invoice:issue', 'invoice:recordPayment',
     'document:read', 'document:write', 'certificate:read', 'certificate:write',
     'material:write', 'audit:read', 'user:admin',
@@ -51,7 +51,7 @@ const MATRIX: Record<Role, ReadonlySet<Action>> = {
     'document:read', 'certificate:read',
   ]),
   // Ops supervisor: office CRUD + JO lifecycle + variation PROPOSE + review queue [INFERRED,
-  // consistent with JOSM gating in contract]. NOT variation:approve (Director only) [CONTRACT].
+  // consistent with JOSM gating in contract]. NOT variation:approve (Director/System Admin only) [CONTRACT].
   OPS_SUPERVISOR: new Set<Action>([
     'client:read', 'client:write', 'contact:read', 'contact:write', 'vessel:read', 'vessel:write',
     'jobOrder:read', 'jobOrder:create', 'jobOrder:updateHeader', 'jobOrder:assign',

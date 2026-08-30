@@ -285,15 +285,15 @@ model JobStatusHistory {              // append-only + DB-immutable
 ```
 
 ```prisma
-model Variation {                     // D-003: EVERY variation needs Director approval (no threshold)
+model Variation {                     // D-003/D-046: EVERY variation needs Director/System Admin approval (no threshold)
   id String @id @default(uuid())
   jobOrder JobOrder @relation(fields: [jobOrderId], references: [id])
   jobOrderId String
   reason String
   amountMinor Int
   amountCurrency String
-  status String @default("PROPOSED")  // PROPOSED -> APPROVED | REJECTED (Director only)
-  approverId String?                  // must resolve to a Director role
+  status String @default("PROPOSED")  // PROPOSED -> APPROVED | REJECTED (Director/System Admin only)
+  approverId String?                  // must resolve to a Director/System Admin role
   version Int @default(0)
   createdAt DateTime @default(now())
   lines MaterialLine[]
@@ -411,7 +411,7 @@ model Payment {                        // D-035/CC-12: immutable ledger, extends
 ```prisma
 model Document {
   id String @id @default(uuid())
-  ownerType String                     // JOB | VESSEL
+  ownerType String                     // CLIENT | VESSEL | JOB
   ownerId String
   s3Key String
   filename String
@@ -786,7 +786,7 @@ const MATRIX: Record<Role, ReadonlySet<Action>> = {
   SYSTEM_ADMIN: new Set<Action>([
     'client:read', 'client:write', 'contact:read', 'contact:write', 'vessel:read', 'vessel:write',
     'jobOrder:read', 'jobOrder:create', 'jobOrder:updateHeader', 'jobOrder:assign',
-    'variation:create',
+    'variation:create', 'variation:approve', 'variation:reject',
     'review:read', 'review:resolve', 'invoice:read', 'invoice:create', 'invoice:issue', 'invoice:recordPayment',
     'document:read', 'document:write', 'certificate:read', 'certificate:write',
     'material:write', 'audit:read', 'user:admin',
@@ -806,7 +806,7 @@ const MATRIX: Record<Role, ReadonlySet<Action>> = {
     'document:read', 'certificate:read',
   ]),
   // Ops supervisor: office CRUD + JO lifecycle + variation PROPOSE + review queue [INFERRED,
-  // consistent with JOSM gating in contract]. NOT variation:approve (Director only) [CONTRACT].
+  // consistent with JOSM gating in contract]. NOT variation:approve (Director/System Admin only) [CONTRACT].
   OPS_SUPERVISOR: new Set<Action>([
     'client:read', 'client:write', 'contact:read', 'contact:write', 'vessel:read', 'vessel:write',
     'jobOrder:read', 'jobOrder:create', 'jobOrder:updateHeader', 'jobOrder:assign',
@@ -835,8 +835,8 @@ The role/action table below is the same matrix formatted for scanning. `yes` mea
 | `jobOrder:updateHeader` | yes |  |  | yes |  |
 | `jobOrder:assign` | yes |  |  | yes |  |
 | `variation:create` | yes |  |  | yes |  |
-| `variation:approve` |  | yes |  |  |  |
-| `variation:reject` |  | yes |  |  |  |
+| `variation:approve` | yes | yes |  |  |  |
+| `variation:reject` | yes | yes |  |  |  |
 | `review:read` | yes | yes |  | yes |  |
 | `review:resolve` | yes |  |  | yes |  |
 | `invoice:read` | yes | yes | yes | yes |  |
@@ -949,6 +949,7 @@ Normal REST endpoints do not expose `changeSeq`; `apps/api/src/app.ts` strips it
 ## 7. Changelog
 
 - v1.1 (reconstructed 2026-08-30) — first git-tracked version, derived from live source.
+- v1.2 (2026-08-30) — reconciled D-044 OFFICE roles, D-046 SYSTEM_ADMIN variation decisions, and `Document.ownerType` schema comment with live source.
 
 ## OPEN DISCREPANCIES
 
@@ -1040,24 +1041,7 @@ const match = creditTerms.match(/(\d+)/);
 
 The implementation accepts any first digit sequence in the free-text value, not only `NET###`. This document records the live source behavior.
 
-### 5. D-044 says `DIRECTOR` must be in office transition roles, but live JOSM excludes it
-
-`RESOLVED_DECISIONS.md` says:
-
-> `D-044 | officeRoles must include DIRECTOR ... Ruling: add DIRECTOR to officeRoles for ALL 6 uniformly`
-
-Live source in `apps/api/src/domain/josm.ts` says:
-
-```ts
-const OFFICE: Role[] = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN'];
-const CANCEL_ROLES: Role[] = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN', 'DIRECTOR']; // [INFERRED] who may cancel
-```
-
-So `DIRECTOR` is included for cancellation but not for office-gated transitions using `OFFICE`: `DRAFT -> SCHEDULED`, `PENDING_REVIEW -> COMPLETED`, `PENDING_REVIEW -> IN_PROGRESS`, `SCHEDULED -> ON_HOLD`, `IN_PROGRESS -> ON_HOLD`, and `ON_HOLD` resume.
-
-The contract documents live behavior. TL should decide whether source needs to be aligned to D-044.
-
-### 6. D-035 says `Payment` DB-level immutability is extended, but migration source shows it is still pending
+### 5. D-035 says `Payment` DB-level immutability is extended, but migration source shows it is still pending
 
 `RESOLVED_DECISIONS.md` says:
 
@@ -1078,7 +1062,7 @@ REVOKE UPDATE, DELETE ON "JobStatusHistory" FROM marinex_app;
 
 The contract records `Payment` as insert-only by route surface (no update/delete endpoints), but DB-level immutability for `Payment` is not proven by the migration source shown here.
 
-### 7. D-050 references `FeatureFlag` and `ErrorLog` models/routes, but live API source has none
+### 6. D-050 references `FeatureFlag` and `ErrorLog` models/routes, but live API source has none
 
 `RESOLVED_DECISIONS.md` says:
 
@@ -1090,33 +1074,7 @@ and:
 
 Live `prisma/schema.prisma` does not define `FeatureFlag` or `ErrorLog`, and `apps/api/src/routes/*.ts` does not expose feature-flag or admin error-log endpoints. This appears to be future P3-12 scope rather than current live API, so it is not included in the endpoint contract.
 
-### 8. D-046 says `SYSTEM_ADMIN` can approve/reject variations, but live RBAC excludes it
-
-`RESOLVED_DECISIONS.md` says:
-
-> `variationApproveRoles/variationRejectRoles = ['DIRECTOR','SYSTEM_ADMIN'] — confirmed correct`
-
-Live `apps/api/src/domain/rbac.ts` includes only `DIRECTOR` for `variation:approve` and `variation:reject`; `SYSTEM_ADMIN` has `variation:create` but not approve/reject:
-
-```ts
-SYSTEM_ADMIN: new Set<Action>([
-  'client:read', 'client:write', 'contact:read', 'contact:write', 'vessel:read', 'vessel:write',
-  'jobOrder:read', 'jobOrder:create', 'jobOrder:updateHeader', 'jobOrder:assign',
-  'variation:create',
-  'review:read', 'review:resolve', 'invoice:read', 'invoice:create', 'invoice:issue', 'invoice:recordPayment',
-  'document:read', 'document:write', 'certificate:read', 'certificate:write',
-  'material:write', 'audit:read', 'user:admin',
-]),
-DIRECTOR: new Set<Action>([
-  'client:read', 'contact:read', 'vessel:read', 'jobOrder:read',
-  'variation:approve', 'variation:reject', 'review:read', 'invoice:read', 'invoice:recordPayment', 'audit:read',
-  'document:read', 'document:write', 'certificate:read', 'certificate:write',
-]),
-```
-
-The live API routes require `variation:approve`/`variation:reject`, so this matrix means `SYSTEM_ADMIN` cannot approve or reject variations today.
-
-### 9. D-020 describes below-minimum schema rejection, but live `/sync/batch` rejects any mismatch
+### 7. D-020 describes below-minimum schema rejection, but live `/sync/batch` rejects any mismatch
 
 `RESOLVED_DECISIONS.md` says:
 
@@ -1138,22 +1096,3 @@ if (schemaVersion !== SYNC_SCHEMA_VERSION) {
 ```
 
 So live behavior rejects newer client schema versions as well as older versions.
-
-### 10. `Document.ownerType` schema comment lags live route behavior
-
-Live `prisma/schema.prisma` says:
-
-```prisma
-model Document {
-  id String @id @default(uuid())
-  ownerType String                     // JOB | VESSEL
-  ownerId String
-```
-
-Live `apps/api/src/routes/documents.ts` allows `CLIENT`, `VESSEL`, and `JOB`:
-
-```ts
-const DOCUMENT_OWNER_TYPES = ['CLIENT', 'VESSEL', 'JOB'] as const;
-```
-
-The endpoint contract records the route behavior (`CLIENT | VESSEL | JOB`). TL should decide whether the schema comment should be corrected.

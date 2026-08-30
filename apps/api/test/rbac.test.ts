@@ -10,10 +10,10 @@ describe('RBAC — Director variation approval (D-003)', () => {
     expect(can(['OPS_SUPERVISOR'], 'variation:create')).toBe(true);
     expect(can(['OPS_SUPERVISOR'], 'variation:approve')).toBe(false);
   });
-  it('System Admin may propose but approval remains Director-only', () => {
+  it('System Admin may propose and approve/reject variations', () => {
     expect(can(['SYSTEM_ADMIN'], 'variation:create')).toBe(true);
-    expect(can(['SYSTEM_ADMIN'], 'variation:approve')).toBe(false);
-    expect(can(['SYSTEM_ADMIN'], 'variation:reject')).toBe(false);
+    expect(can(['SYSTEM_ADMIN'], 'variation:approve')).toBe(true);
+    expect(can(['SYSTEM_ADMIN'], 'variation:reject')).toBe(true);
   });
 });
 
