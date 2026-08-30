@@ -52,10 +52,18 @@ class Device {
       }
       // (worklog/photo/etc. server-side deltas would refresh those caches too; elided for the spike)
     }
-    if (cursor != null) this.db.prepare(`UPDATE sync_cursor SET cursor=?, last_pull_at=? WHERE id=1`).run(String(cursor), nowIso());
+    if (cursor != null) {
+      if (typeof cursor !== 'string') throw new Error('sync cursor must be a string or null');
+      this.db.prepare(`UPDATE sync_cursor SET cursor=?, last_pull_at=? WHERE id=1`).run(cursor, nowIso());
+    }
     this._trace(`pull: applied ${changes.length} change(s), cursor→${cursor}`);
   }
-  cursor() { const r = this.db.prepare(`SELECT cursor FROM sync_cursor WHERE id=1`).get(); return r.cursor; }
+  /** @returns {string | null} D-053: opaque changeSeq string. Never parse or compare client-side. */
+  cursor() { const r = this.db.prepare(`SELECT cursor FROM sync_cursor WHERE id=1`).get(); return r?.cursor ?? null; }
+  assignedPullQuery() {
+    const cursor = this.cursor();
+    return cursor == null ? {} : { since: cursor };
+  }
 
   // ---- AUTHOR an offline write: entity row + op_queue row in ONE transaction ----
   authorObservation(jobOrderId, body, templateKey = null) {
@@ -166,7 +174,7 @@ class Device {
 
     // Trailing delta pull (learn server-side changes; also fetches rows needed for conflict reconcile).
     try {
-      const pull = transport.assigned({ since: this.cursor() ?? 0 }, auth);
+      const pull = transport.assigned(this.assignedPullQuery(), auth);
       if (pull.httpStatus === 200) this.applyPull(pull.changes, pull.cursor);
     } catch (_) { /* pull is best-effort; ops already settled */ }
 
@@ -205,15 +213,27 @@ class Device {
         this._trace(`  ${r.opId.slice(0,8)} ${op.entity} → VERSION_CONFLICT (server v${r.serverVersion}) — will reload+reapply`);
         break;
       case 'VALIDATION_ERROR':
+        this._markResultError(op, r, 'Validation error');
+        break;
       case 'FORBIDDEN':
-        this.db.prepare(`UPDATE op_queue SET status='ERROR', last_error=?, updated_at=? WHERE op_id=?`)
-          .run(JSON.stringify(r.error ?? r.status), nowIso(), r.opId);
-        setEntity('ERROR', null);
-        this._trace(`  ${r.opId.slice(0,8)} ${op.entity} → ${r.status} (Retry needed; not auto-retried)`);
+        this._markResultError(op, r, 'Forbidden');
+        break;
+      case 'BRANCH_SCOPE_DENIED':
+        this._markResultError(op, r, 'Branch scope denied');
+        break;
+      case 'STATE_TRANSITION_INVALID':
+        this._markResultError(op, r, 'Invalid state transition');
         break;
       default:
         this._trace(`  ${r.opId.slice(0,8)} ${op.entity} → UNKNOWN ${r.status}`);
     }
+  }
+
+  _markResultError(op, r, label) {
+    this.db.prepare(`UPDATE op_queue SET status='ERROR', last_error=?, updated_at=? WHERE op_id=?`)
+      .run(JSON.stringify(r.error ?? r.status), nowIso(), r.opId);
+    this._setEntityState(op.entity, op.entity_id, 'ERROR', null);
+    this._trace(`  ${r.opId.slice(0,8)} ${op.entity} → ${r.status} (${label}; Retry needed; not auto-retried)`);
   }
 
   _setEntityState(entity, id, state, version) {

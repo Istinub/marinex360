@@ -21,6 +21,14 @@ function makeTransport(server, faults = {}) {
     assigned(q, auth) { return server.handleSyncAssigned(q, auth); },
   };
 }
+function makePerOpStatusTransport(server, status) {
+  return {
+    batch(req) {
+      return { httpStatus: 200, results: req.ops.map(op => ({ opId: op.opId, status, error: { code: status, message: status } })) };
+    },
+    assigned(q, auth) { return server.handleSyncAssigned(q, auth); },
+  };
+}
 
 const TECH = 'user-tech-001';
 const JO_ID = 'jo-1111';
@@ -36,7 +44,7 @@ function freshWorld() {
     assignedTechnicianIds: [TECH], executionOwnerId: TECH, scopeSummary: 'Main engine survey' });
   const device = new Device(TECH);
   // pre-fetch the JO into the device read cache
-  const pull = server.handleSyncAssigned({ since: 0 }, AUTH_OK);
+  const pull = server.handleSyncAssigned({}, AUTH_OK);
   device.applyPull(pull.changes, pull.cursor);
   return { server, device };
 }
@@ -109,6 +117,28 @@ console.log('\n══════════ MarineX360 · S0-6 offline-sync pr
   check('ERROR op is not auto-retried', attemptsBefore === attemptsAfter, `(${attemptsBefore}→${attemptsAfter})`);
 })();
 
+// ── Scenario 4b: BRANCH_SCOPE_DENIED (not auto-retried) ──
+(() => {
+  console.log('\n[4b] BRANCH_SCOPE_DENIED — branch-scoped denial is surfaced, not looped');
+  const { server, device } = freshWorld();
+  const { opId } = device.authorObservation(JO_ID, 'Wrong branch payload');
+  device.syncOnce(makePerOpStatusTransport(server, 'BRANCH_SCOPE_DENIED'), AUTH_OK);
+  check('op → ERROR', opStatus(device, opId) === 'ERROR');
+  check('trace identifies BRANCH_SCOPE_DENIED',
+    device.log.some(line => line.includes('BRANCH_SCOPE_DENIED') && line.includes('Branch scope denied')));
+})();
+
+// ── Scenario 4c: STATE_TRANSITION_INVALID (not auto-retried) ──
+(() => {
+  console.log('\n[4c] STATE_TRANSITION_INVALID — illegal lifecycle move is surfaced, not looped');
+  const { server, device } = freshWorld();
+  const { opId } = device.authorObservation(JO_ID, 'Illegal transition payload');
+  device.syncOnce(makePerOpStatusTransport(server, 'STATE_TRANSITION_INVALID'), AUTH_OK);
+  check('op → ERROR', opStatus(device, opId) === 'ERROR');
+  check('trace identifies STATE_TRANSITION_INVALID',
+    device.log.some(line => line.includes('STATE_TRANSITION_INVALID') && line.includes('Invalid state transition')));
+})();
+
 // ── Scenario 5: BATCH_REJECTED_SCHEMA (queue preserved, no migrate) ──
 (() => {
   console.log('\n[5] BATCH_REJECTED_SCHEMA — stale app schema, whole batch rejected');
@@ -177,7 +207,7 @@ console.log('\n══════════ MarineX360 · S0-6 offline-sync pr
   // Office overrides the JO's rate AFTER this WorkLog was authored/synced.
   server.jobOrders.get(JO_ID).labourRateAmountMinor = 11000; server.jobOrders.get(JO_ID).labourRateCurrency = 'SGD';
   server._log('JobOrder', server.jobOrders.get(JO_ID));
-  const pull = server.handleSyncAssigned({ since: device.cursor() ?? 0 }, AUTH_OK);
+  const pull = server.handleSyncAssigned(device.assignedPullQuery(), AUTH_OK);
   device.applyPull(pull.changes, pull.cursor);
   const wlAfter = device.db.prepare(`SELECT labour_rate_amount_minor FROM worklog WHERE id=?`).get(id);
   check('already-authored WorkLog rate NOT retro-altered', wlAfter.labour_rate_amount_minor === 9000);

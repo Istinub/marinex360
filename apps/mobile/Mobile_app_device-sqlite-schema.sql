@@ -25,7 +25,7 @@ PRAGMA foreign_keys = ON;
 -- Single-row delta cursor for GET /sync/assigned?since=<cursor>
 CREATE TABLE IF NOT EXISTS sync_cursor (
   id            INTEGER PRIMARY KEY CHECK (id = 1),
-  cursor        TEXT,                 -- opaque server cursor; NULL = full prefetch
+  cursor        TEXT,                 -- D-053: opaque changeSeq string. Never parse or compare client-side.
   last_pull_at  TEXT
 );
 INSERT OR IGNORE INTO sync_cursor (id, cursor, last_pull_at) VALUES (1, NULL, NULL);

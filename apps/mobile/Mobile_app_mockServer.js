@@ -10,7 +10,8 @@
 //
 // Per-op result: { opId, status, resultRef?, serverVersion?, error?, reviewState? }
 // status ∈ { APPLIED, IDEMPOTENT_REPLAY, VERSION_CONFLICT,
-//            VALIDATION_ERROR, FORBIDDEN, BATCH_REJECTED_SCHEMA, APPLIED_FLAGGED }
+//            VALIDATION_ERROR, FORBIDDEN, BRANCH_SCOPE_DENIED,
+//            STATE_TRANSITION_INVALID, BATCH_REJECTED_SCHEMA, APPLIED_FLAGGED }
 //   (APPLIED_FLAGGED = CC-MOB-2 / SYNC-13 — proposed, awaiting ratification.)
 // =====================================================================
 
@@ -25,7 +26,7 @@ class MockServer {
     this.rows = new Map();               // `${entity}:${id}` -> row {id, version, ...}
     this.processedOps = new Map();       // opId -> { resultRef, serverVersion, status }  (ProcessedOp registry)
     this.audit = [];                     // append-only
-    this.changeLog = [];                 // for delta pull: {seq, entity, row, at}
+    this.changeLog = [];                 // for delta pull: {cursor, entity, row, at}
     this.seq = 0;
     this.minSchema = MIN_SCHEMA_VERSION;
   }
@@ -47,7 +48,7 @@ class MockServer {
     this._log('JobOrder', jo);
   }
 
-  _log(entity, row) { this.changeLog.push({ seq: ++this.seq, entity, row: { ...row }, at: nowIso() }); }
+  _log(entity, row) { this.changeLog.push({ cursor: String(++this.seq), entity, row: { ...row }, at: nowIso() }); }
 
   // ---- POST /sync/batch ----
   handleSyncBatch({ schemaVersion, ops }, auth) {
@@ -131,15 +132,15 @@ class MockServer {
   // ---- GET /sync/assigned?since=<cursor> ----
   handleSyncAssigned({ since }, auth) {
     if (!auth || !auth.valid) return { httpStatus: 401, error: { code: 'UNAUTHORIZED' } };
-    const cursor = Number(since) || 0;
+    const startIndex = since == null ? 0 : this.changeLog.findIndex(c => c.cursor === since) + 1;
     // Owner-scoped delta: only rows for JOs this user owns/was dispatched to (OD-04 guardrail).
     const myJoIds = new Set([...this.jobOrders.values()]
       .filter(jo => (jo.assignedTechnicianIds || []).includes(auth.userId) || jo.executionOwnerId === auth.userId
                     || this._everDispatched(jo.id, auth.userId))
       .map(jo => jo.id));
-    const changes = this.changeLog.filter(c => c.seq > cursor)
+    const changes = this.changeLog.slice(startIndex)
       .filter(c => c.entity === 'JobOrder' ? myJoIds.has(c.row.id) : myJoIds.has(c.row.jobOrderId));
-    return { httpStatus: 200, changes, cursor: this.seq };
+    return { httpStatus: 200, changes, cursor: String(this.seq) };
   }
   _everDispatched() { return true; } // demo: owner stays able to pull their own job state for reconcile
 }
