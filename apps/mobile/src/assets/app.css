@@ -1,0 +1,62 @@
+@import './fonts.css';
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  min-height: 100%;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  color: var(--color-text);
+  background: var(--color-canvas);
+  font-family: var(--font-ui);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.mobile-route {
+  min-height: 100vh;
+  padding: var(--sp-4);
+  color: var(--color-text);
+  background: var(--color-canvas);
+  font-family: var(--font-ui);
+}
+
+.mobile-route__eyebrow {
+  margin: 0 0 var(--sp-1);
+  color: var(--color-text-muted);
+  font-size: var(--fs-body-sm);
+  font-weight: var(--fw-semibold);
+}
+
+.mobile-route__title {
+  margin: 0;
+  font-size: var(--fs-h1);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+}
+
+.mx-money {
+  font-family: var(--font-code);
+}
