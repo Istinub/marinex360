@@ -75,15 +75,6 @@ button {
   color: var(--color-text);
 }
 
-.app-layout__actions {
-  min-height: var(--tap-min, 2.75rem);
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--sp-2);
-  margin-left: auto;
-}
-
 .app-layout__user {
   position: relative;
 }
