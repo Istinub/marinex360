@@ -1,4 +1,4 @@
-import type { MobileSqlAdapter } from './useOfflineExecution.ts';
+import { apiBase, authHeaders, type MobileSqlAdapter } from './useOfflineExecution.ts';
 
 type WritableEntity = 'WorkLog' | 'Photo' | 'Observation' | 'ChecklistInstance' | 'MaterialLine' | 'ESignature';
 type OpAction = 'CREATE' | 'UPDATE';
@@ -83,6 +83,14 @@ export interface SyncTransport {
   assigned(query: Record<string, string>, auth?: SyncAuth): AssignedPullResponse | Promise<AssignedPullResponse>;
 }
 
+export interface SyncOnceResult {
+  pushed: number;
+  networkError?: boolean;
+  authRequired?: boolean;
+  upgradeRequired?: boolean;
+  results?: OpResult[];
+}
+
 interface MobileRuntime {
   marinex360?: {
     db?: MobileSqlAdapter;
@@ -110,6 +118,67 @@ function currentUserId(auth?: SyncAuth): string {
   const userId = mobileRuntime().marinex360?.auth?.userId ?? auth?.userId;
   if (!userId) throw new Error('Current user is not available.');
   return userId;
+}
+
+export function currentSyncAuth(): SyncAuth {
+  return mobileRuntime().marinex360?.auth ?? {};
+}
+
+async function responseJson<T>(response: Response): Promise<T | Record<string, never>> {
+  try {
+    return await response.json() as T;
+  } catch {
+    return {};
+  }
+}
+
+export function createSyncTransport(): SyncTransport {
+  return {
+    async batch(req) {
+      const response = await fetch(`${apiBase()}/sync/batch`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          ...authHeaders(),
+        },
+        body: JSON.stringify(req),
+      });
+      const body = await responseJson<BatchResponse>(response);
+      const payload = {
+        ...body,
+        httpStatus: response.status,
+        results: Array.isArray(body.results) ? body.results : [],
+      } as BatchResponse;
+
+      if (response.status === 401 || payload.batchStatus === 'BATCH_REJECTED_SCHEMA' || response.ok) return payload;
+      throw new Error(`sync batch failed (${response.status})`);
+    },
+    async assigned(query) {
+      const qs = new URLSearchParams(query).toString();
+      const path = qs ? `/sync/assigned?${qs}` : '/sync/assigned';
+      const response = await fetch(`${apiBase()}${path}`, {
+        headers: {
+          Accept: 'application/json',
+          ...authHeaders(),
+        },
+      });
+      const body = await responseJson<AssignedPullResponse>(response);
+      const payload = {
+        ...body,
+        httpStatus: response.status,
+        changes: Array.isArray(body.changes) ? body.changes : [],
+        cursor: body.cursor ?? null,
+      } as AssignedPullResponse;
+
+      if (response.status === 401 || response.ok) return payload;
+      throw new Error(`sync assigned failed (${response.status})`);
+    },
+  };
+}
+
+export function syncResultHasVersionConflict(result: SyncOnceResult): boolean {
+  return result.results?.some((op) => op.status === 'VERSION_CONFLICT') ?? false;
 }
 
 function backoff(attempts: number): string {
@@ -332,7 +401,7 @@ export function useSyncEngine() {
     return conflicts.length;
   }
 
-  async function syncOnce(transport: SyncTransport, auth?: SyncAuth): Promise<Record<string, unknown>> {
+  async function syncOnce(transport: SyncTransport, auth?: SyncAuth): Promise<SyncOnceResult> {
     const db = requireDb();
     const userId = currentUserId(auth);
     const ops = await readyOpsFromDb(db);
@@ -381,7 +450,7 @@ export function useSyncEngine() {
       // Pull is best-effort; pushed ops have already been settled.
     }
 
-    return { pushed: response.results.length };
+    return { pushed: response.results.length, results: response.results };
   }
 
   return {

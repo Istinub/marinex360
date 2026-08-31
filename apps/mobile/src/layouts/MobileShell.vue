@@ -1,6 +1,88 @@
 <script setup lang="ts">
+import { App } from '@capacitor/app';
+import { Network } from '@capacitor/network';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { RouterLink, RouterView } from 'vue-router';
 import SyncStatusChip from '../components/SyncStatusChip.vue';
+import { useOfflineExecution } from '../composables/useOfflineExecution';
+import {
+  createSyncTransport,
+  currentSyncAuth,
+  syncResultHasVersionConflict,
+  useSyncEngine,
+} from '../composables/useSyncEngine';
+
+type ListenerHandle = {
+  remove: () => Promise<void>;
+};
+
+const SYNC_INTERVAL_MS = 5 * 60 * 1000;
+
+const syncEngine = useSyncEngine();
+const offlineExecution = useOfflineExecution();
+const isForegrounded = ref(true);
+const isOnline = ref(typeof navigator === 'undefined' ? true : navigator.onLine);
+const isSyncing = ref(false);
+
+let syncInterval: number | null = null;
+let networkListener: ListenerHandle | null = null;
+let appStateListener: ListenerHandle | null = null;
+
+async function runSyncCycle(): Promise<void> {
+  if (isSyncing.value || !isForegrounded.value || !isOnline.value) return;
+
+  isSyncing.value = true;
+  try {
+    await offlineExecution.drainBinaryUploads();
+    const result = await syncEngine.syncOnce(createSyncTransport(), currentSyncAuth());
+    if (syncResultHasVersionConflict(result)) await syncEngine.reconcileConflicts();
+  } catch {
+    // Sync failures are persisted on op_queue/binary_upload rows for the status panel.
+  } finally {
+    isSyncing.value = false;
+  }
+}
+
+async function refreshNetworkState(): Promise<void> {
+  try {
+    const status = await Network.getStatus();
+    isOnline.value = status.connected;
+  } catch {
+    isOnline.value = typeof navigator === 'undefined' ? true : navigator.onLine;
+  }
+}
+
+onMounted(() => {
+  void refreshNetworkState();
+
+  void Network.addListener('networkStatusChange', (status) => {
+    const wasOnline = isOnline.value;
+    isOnline.value = status.connected;
+    if (!wasOnline && status.connected) void runSyncCycle();
+  }).then((handle) => {
+    networkListener = handle;
+  }).catch(() => undefined);
+
+  void App.addListener('appStateChange', (state) => {
+    const wasForegrounded = isForegrounded.value;
+    isForegrounded.value = state.isActive;
+    if (!wasForegrounded && state.isActive) void runSyncCycle();
+  }).then((handle) => {
+    appStateListener = handle;
+  }).catch(() => undefined);
+
+  if (typeof window !== 'undefined') {
+    syncInterval = window.setInterval(() => {
+      void runSyncCycle();
+    }, SYNC_INTERVAL_MS);
+  }
+});
+
+onBeforeUnmount(() => {
+  if (syncInterval != null && typeof window !== 'undefined') window.clearInterval(syncInterval);
+  void networkListener?.remove();
+  void appStateListener?.remove();
+});
 </script>
 
 <template>

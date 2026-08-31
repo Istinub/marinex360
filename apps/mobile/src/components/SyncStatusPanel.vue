@@ -6,6 +6,8 @@ import ProgressSpinner from 'primevue/progressspinner';
 import Tag from 'primevue/tag';
 import { defineStore } from 'pinia';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { createSyncTransport, currentSyncAuth, syncResultHasVersionConflict, useSyncEngine } from '../composables/useSyncEngine';
+import { useOfflineExecution } from '../composables/useOfflineExecution';
 
 type QueueStatus = 'PENDING' | 'SYNCING' | 'SYNCED' | 'CONFLICT' | 'ERROR' | 'FLAGGED';
 type BucketKey = 'pending' | 'syncing' | 'synced' | 'retry' | 'flagged';
@@ -50,6 +52,10 @@ interface BucketDefinition {
 const emit = defineEmits<{
   queueChanged: [];
 }>();
+
+const syncEngine = useSyncEngine();
+const offlineExecution = useOfflineExecution();
+const isSyncing = ref(false);
 
 const QUEUE_SQL = `
   SELECT q.seq, q.op_id, q.entity, q.action, q.entity_id, q.job_order_id,
@@ -267,6 +273,22 @@ async function refreshQueue(): Promise<void> {
   emit('queueChanged');
 }
 
+async function runManualSync(): Promise<void> {
+  if (isSyncing.value) return;
+
+  isSyncing.value = true;
+  try {
+    await offlineExecution.drainBinaryUploads();
+    const result = await syncEngine.syncOnce(createSyncTransport(), currentSyncAuth());
+    if (syncResultHasVersionConflict(result)) await syncEngine.reconcileConflicts();
+    await refreshQueue();
+  } catch {
+    await refreshQueue();
+  } finally {
+    isSyncing.value = false;
+  }
+}
+
 onMounted(() => {
   void refreshQueue();
 
@@ -289,6 +311,15 @@ onBeforeUnmount(() => {
         <p class="sync-panel__eyebrow">Device queue</p>
         <h2 id="sync-panel-title" class="sync-panel__title">Sync status</h2>
       </div>
+      <button
+        type="button"
+        class="sync-panel__sync-button"
+        :disabled="isSyncing"
+        aria-label="Sync queued operations now"
+        @click="runManualSync"
+      >
+        {{ isSyncing ? 'Syncing…' : 'Sync now' }}
+      </button>
     </header>
 
     <Message v-if="syncStatusStore.errorMessage" severity="error" :closable="false">
@@ -370,6 +401,24 @@ onBeforeUnmount(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--sp-3);
+}
+
+.sync-panel__sync-button {
+  min-height: var(--tap-min);
+  min-width: var(--tap-min);
+  padding: 0 var(--sp-3);
+  border: var(--border-1);
+  border-radius: var(--radius-md);
+  background: var(--color-brand);
+  color: var(--color-surface);
+  font: inherit;
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+}
+
+.sync-panel__sync-button:disabled {
+  opacity: 0.7;
+  cursor: wait;
 }
 
 .sync-panel__eyebrow {

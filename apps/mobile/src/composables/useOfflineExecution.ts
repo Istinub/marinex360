@@ -98,12 +98,12 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function apiBase(): string {
+export function apiBase(): string {
   const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
   return (mobileRuntime().marinex360?.apiBase ?? viteEnv?.VITE_API_BASE ?? '/api/v1').replace(/\/$/, '');
 }
 
-function authHeaders(): HeadersInit {
+export function authHeaders(): HeadersInit {
   const accessToken = mobileRuntime().marinex360?.auth?.accessToken;
   return accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
 }
