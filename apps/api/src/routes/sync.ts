@@ -60,9 +60,17 @@ function buildCreateData(entity: WritableEntity, p: Record<string, unknown>, ctx
         source: p.source ?? 'FIELD', addedById: ctx.userId,
       };
     case 'ESignature':
-      // OD-06 open: evidence columns (signerName/geo/deviceId/documentHash) stay null until
-      // ratified — image-only fallback per contract §5 Open note.
-      return { imageS3Key: p.imageS3Key ?? null, signerRole: p.signerRole ?? null, signedAt: p.signedAt ?? null };
+      // D-059/CC-18 (ratified): full OD-06 evidence bundle now captured, not just the image fallback.
+      return {
+        imageS3Key: p.imageS3Key ?? null,
+        signerName: p.signerName ?? null,
+        signerRole: p.signerRole ?? null,
+        signedAt: p.signedAt ?? null,
+        deviceId: p.deviceId ?? null,
+        geoLat: p.geoLat ?? null,
+        geoLng: p.geoLng ?? null,
+        documentHash: p.documentHash ?? null,
+      };
   }
 }
 
@@ -73,7 +81,7 @@ function buildUpdateData(entity: WritableEntity, p: Record<string, unknown>) {
     case 'Observation': return { body: p.body };
     case 'ChecklistInstance': return { results: p.results }; // validated separately before this is called
     case 'MaterialLine': return { description: p.description, quantity: p.quantity, unitCostAmountMinor: p.unitCostAmountMinor, unitCostCurrency: p.unitCostCurrency };
-    case 'ESignature': return { imageS3Key: p.imageS3Key, signedAt: p.signedAt };
+    case 'ESignature': return {}; // D-059: signatures are immutable; applyOp rejects UPDATE before this is used.
   }
 }
 
@@ -91,6 +99,13 @@ async function applyOp(tx: Prisma.TransactionClient, ctx: { userId: string; bran
     // Cross-branch — contract ADR-7: NOT_FOUND-equivalent for direct access, but a sync op
     // targeting the wrong branch entirely is a distinct, explicit denial (BRANCH_SCOPE_DENIED).
     return { opId: op.opId, status: 'BRANCH_SCOPE_DENIED', error: { code: 'BRANCH_SCOPE_DENIED', message: 'job order is in another branch' } };
+  }
+
+  if (op.entity === 'ESignature' && jo.executionOwnerId !== ctx.userId) {
+    return { opId: op.opId, status: 'FORBIDDEN', error: { code: 'FORBIDDEN', message: "only the job's execution owner may sign" } };
+  }
+  if (op.entity === 'ESignature' && op.action === 'UPDATE') {
+    return { opId: op.opId, status: 'VALIDATION_ERROR', error: { code: 'VALIDATION_ERROR', message: 'ESignature is immutable and cannot be updated' } };
   }
 
   const { flagged, reviewState } = resolveReviewState(jo, ctx.userId); // D-002/SYNC-13
