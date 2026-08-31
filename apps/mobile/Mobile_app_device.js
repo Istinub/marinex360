@@ -215,8 +215,14 @@ class Device {
       case 'VALIDATION_ERROR':
         this._markResultError(op, r, 'Validation error');
         break;
+      case 'UNAUTHORIZED':
+        this._markResultError(op, r, 'Unauthorized');
+        break;
       case 'FORBIDDEN':
         this._markResultError(op, r, 'Forbidden');
+        break;
+      case 'NOT_FOUND':
+        this._markResultError(op, r, 'Not found');
         break;
       case 'BRANCH_SCOPE_DENIED':
         this._markResultError(op, r, 'Branch scope denied');

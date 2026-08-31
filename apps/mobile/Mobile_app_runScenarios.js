@@ -139,6 +139,28 @@ console.log('\n══════════ MarineX360 · S0-6 offline-sync pr
     device.log.some(line => line.includes('STATE_TRANSITION_INVALID') && line.includes('Invalid state transition')));
 })();
 
+// ── Scenario 4d: UNAUTHORIZED (per-op; not auto-retried) ──
+(() => {
+  console.log('\n[4d] UNAUTHORIZED — per-op auth denial is surfaced, not looped');
+  const { server, device } = freshWorld();
+  const { opId } = device.authorObservation(JO_ID, 'Unauthorized payload');
+  device.syncOnce(makePerOpStatusTransport(server, 'UNAUTHORIZED'), AUTH_OK);
+  check('op → ERROR', opStatus(device, opId) === 'ERROR');
+  check('trace identifies UNAUTHORIZED',
+    device.log.some(line => line.includes('UNAUTHORIZED') && line.includes('Unauthorized')));
+})();
+
+// ── Scenario 4e: NOT_FOUND (not auto-retried) ──
+(() => {
+  console.log('\n[4e] NOT_FOUND — missing target is surfaced, not looped');
+  const { server, device } = freshWorld();
+  const { opId } = device.authorObservation(JO_ID, 'Missing target payload');
+  device.syncOnce(makePerOpStatusTransport(server, 'NOT_FOUND'), AUTH_OK);
+  check('op → ERROR', opStatus(device, opId) === 'ERROR');
+  check('trace identifies NOT_FOUND',
+    device.log.some(line => line.includes('NOT_FOUND') && line.includes('Not found')));
+})();
+
 // ── Scenario 5: BATCH_REJECTED_SCHEMA (queue preserved, no migrate) ──
 (() => {
   console.log('\n[5] BATCH_REJECTED_SCHEMA — stale app schema, whole batch rejected');
