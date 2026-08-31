@@ -255,7 +255,7 @@ const errorDialogVisible = computed({
     if (!visible) selectedErrorRow.value = null;
   },
 });
-let refreshTimer: ReturnType<typeof window.setInterval> | null = null;
+let refreshTimer: number | null = null;
 
 function showError(row: OpQueueRow): void {
   if (!isRetryRow(row)) return;

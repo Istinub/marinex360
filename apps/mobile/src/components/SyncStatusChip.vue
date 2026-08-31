@@ -83,7 +83,7 @@ const useSyncStatusChipStore = defineStore('syncStatusChip', () => {
 
 const syncChipStore = useSyncStatusChipStore();
 const panelOpen = ref(false);
-let refreshTimer: ReturnType<typeof window.setInterval> | null = null;
+let refreshTimer: number | null = null;
 
 function openPanel(): void {
   panelOpen.value = true;

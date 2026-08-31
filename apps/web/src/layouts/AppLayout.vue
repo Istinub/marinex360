@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { RouterLink, RouterView, useRouter } from 'vue-router';
+import SyncStatusChip from '../../../mobile/src/components/SyncStatusChip.vue';
 import { useAuthStore } from '@/stores/auth';
 
 const navItems = [
@@ -38,27 +39,31 @@ function logout(): void {
         <span class="app-layout__brand-name">MarineX360</span>
       </RouterLink>
 
-      <div class="app-layout__user">
-        <button
-          class="app-layout__user-trigger"
-          type="button"
-          aria-haspopup="menu"
-          :aria-expanded="isUserMenuOpen"
-          @click="toggleUserMenu"
-        >
-          <span class="pi pi-user" aria-hidden="true" />
-          <span class="app-layout__user-copy">
-            <span class="app-layout__user-name">{{ auth.identity?.name ?? auth.identity?.userId ?? 'Office User' }}</span>
-            <span class="app-layout__user-branch">{{ auth.identity?.branch ?? 'Branch' }}</span>
-          </span>
-          <span class="pi pi-angle-down" aria-hidden="true" />
-        </button>
+      <div class="app-layout__actions">
+        <SyncStatusChip />
 
-        <div v-if="isUserMenuOpen" class="app-layout__user-menu" role="menu">
-          <button class="app-layout__menu-item" type="button" role="menuitem" @click="logout">
-            <span class="pi pi-sign-out" aria-hidden="true" />
-            <span>Logout</span>
+        <div class="app-layout__user">
+          <button
+            class="app-layout__user-trigger"
+            type="button"
+            aria-haspopup="menu"
+            :aria-expanded="isUserMenuOpen"
+            @click="toggleUserMenu"
+          >
+            <span class="pi pi-user" aria-hidden="true" />
+            <span class="app-layout__user-copy">
+              <span class="app-layout__user-name">{{ auth.identity?.name ?? auth.identity?.userId ?? 'Office User' }}</span>
+              <span class="app-layout__user-branch">{{ auth.identity?.branch ?? 'Branch' }}</span>
+            </span>
+            <span class="pi pi-angle-down" aria-hidden="true" />
           </button>
+
+          <div v-if="isUserMenuOpen" class="app-layout__user-menu" role="menu">
+            <button class="app-layout__menu-item" type="button" role="menuitem" @click="logout">
+              <span class="pi pi-sign-out" aria-hidden="true" />
+              <span>Logout</span>
+            </button>
+          </div>
         </div>
       </div>
     </header>
