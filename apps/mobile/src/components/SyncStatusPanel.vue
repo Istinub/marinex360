@@ -178,18 +178,22 @@ function plainError(row: OpQueueRow): string {
 
   try {
     const parsed = JSON.parse(raw);
-    if (typeof parsed === 'string') return humanStatusText(parsed);
+    if (typeof parsed === 'string') return errorCopy(parsed) || humanStatusText(parsed);
     if (parsed && typeof parsed === 'object') {
       const record = parsed as Record<string, unknown>;
-      const message = typeof record.message === 'string' ? record.message : null;
       const code = typeof record.code === 'string' ? record.code : null;
-      return humanStatusText(message ?? code ?? raw);
+      const status = typeof record.status === 'string' ? record.status : null;
+      const message = typeof record.message === 'string' ? record.message : null;
+
+      if (code) return errorCopy(code);
+      if (status) return errorCopy(status);
+      return message ? humanStatusText(message) : 'This update could not be applied. Check the current job state and try again.';
     }
   } catch {
-    return humanStatusText(raw);
+    return errorCopy(raw) || humanStatusText(raw);
   }
 
-  return humanStatusText(raw);
+  return errorCopy(raw) || humanStatusText(raw);
 }
 
 function humanStatusText(value: string): string {
@@ -199,6 +203,27 @@ function humanStatusText(value: string): string {
   }
 
   return trimmed;
+}
+
+function errorCopy(status: string): string {
+  const normalized = status.trim();
+
+  switch (normalized) {
+    case 'VALIDATION_ERROR':
+      return 'This update was rejected by validation. Review the details and try again.';
+    case 'FORBIDDEN':
+      return 'You do not have permission to perform this action.';
+    case 'UNAUTHORIZED':
+      return 'Your session is no longer authorised to sync this change. Please sign back in and try again.';
+    case 'NOT_FOUND':
+      return 'The job or item this was for no longer exists on the server. Contact your supervisor before retrying.';
+    case 'BRANCH_SCOPE_DENIED':
+      return 'This job belongs to a different branch than your account. Contact your supervisor — this won\'t resolve on retry.';
+    case 'STATE_TRANSITION_INVALID':
+      return 'This job\'s status changed and no longer accepts this update. Check the job\'s current state before retrying.';
+    default:
+      return 'This update could not be applied. Check the current job state and try again.';
+  }
 }
 
 function rowTitle(row: OpQueueRow): string {
