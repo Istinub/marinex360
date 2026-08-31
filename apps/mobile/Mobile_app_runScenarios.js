@@ -1,4 +1,3 @@
-'use strict';
 // =====================================================================
 // MarineX360 — S0-6 SCENARIO RUNNER
 // Drives the Device sync engine against the MockServer end-to-end and
@@ -6,8 +5,8 @@
 // oracle QA's sync-simulation harness should also assert against.
 // =====================================================================
 
-const { MockServer } = require('./Mobile_app_mockServer');
-const { Device } = require('./Mobile_app_device');
+import { Device } from './Mobile_app_device.js';
+import { MockServer } from './Mobile_app_mockServer.js';
 
 // Transport shim — lets a scenario inject a network failure or a 401 on the
 // NEXT call only, otherwise forwards to the in-process server (transport-agnostic).
@@ -49,6 +48,11 @@ function freshWorld() {
   return { server, device };
 }
 function opStatus(device, opId) { return device.db.prepare(`SELECT status FROM op_queue WHERE op_id=?`).get(opId).status; }
+function queueCount(device) { return device.db.prepare(`SELECT COUNT(*) n FROM op_queue`).get().n; }
+async function sha256Hex(text) {
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
 
 console.log('\n══════════ MarineX360 · S0-6 offline-sync prototype ══════════');
 
@@ -235,6 +239,92 @@ console.log('\n══════════ MarineX360 · S0-6 offline-sync pr
   check('already-authored WorkLog rate NOT retro-altered', wlAfter.labour_rate_amount_minor === 9000);
   const joCache = device.db.prepare(`SELECT labour_rate_amount_minor FROM jo_cache WHERE id=?`).get(JO_ID);
   check('jo_cache reflects new rate for the NEXT worklog', joCache.labour_rate_amount_minor === 11000);
+})();
+
+// ── Scenario 10: Checklist submit CREATE → APPLIED ──
+(() => {
+  console.log('\n[10] Checklist submit — CREATE ChecklistInstance with results → APPLIED');
+  const { server, device } = freshWorld();
+  const results = [
+    { itemId: 'visual-check', value: true },
+    { itemId: 'pressure-reading', value: 12.4 },
+    { itemId: 'notes', value: 'No leaks observed' },
+  ];
+  const { id, opId } = device.authorChecklistSubmit(JO_ID, 'tmpl-main-engine', results);
+  const row = device.db.prepare(`SELECT * FROM checklist_instance WHERE id=?`).get(id);
+  check('checklist row stores results_json', JSON.stringify(results) === row.results_json);
+  device.syncOnce(makeTransport(server), AUTH_OK);
+  check('ChecklistInstance CREATE → SYNCED', opStatus(device, opId) === 'SYNCED');
+  check('server stored checklist results', JSON.stringify(server.rows.get(`ChecklistInstance:${id}`).results) === JSON.stringify(results));
+})();
+
+// ── Scenario 11: Photo two-phase upload → metadata unblocks → APPLIED ──
+(() => {
+  console.log('\n[11] Photo capture — binary upload first, then metadata op unblocks');
+  const { server, device } = freshWorld();
+  const { id, opId, uploadId } = device.authorPhotoCapture(JO_ID, 'DURING', '/local/photos/pump-before.jpg', null, null);
+  check('metadata op is blocked before upload', device.readyOps().length === 0);
+  check('binary upload row is PENDING', device.db.prepare(`SELECT upload_state FROM binary_upload WHERE id=?`).get(uploadId).upload_state === 'PENDING');
+  device.syncOnce(makeTransport(server), AUTH_OK);
+  check('blocked photo op remains PENDING', opStatus(device, opId) === 'PENDING');
+  device.completeBinaryUpload(uploadId, 'photos/jo-1111/pump-before.jpg');
+  const op = device.db.prepare(`SELECT blocks_on_op,payload_json FROM op_queue WHERE op_id=?`).get(opId);
+  const photo = device.db.prepare(`SELECT s3_key FROM photo WHERE id=?`).get(id);
+  check('binary upload unblocks metadata op', op.blocks_on_op === null && photo.s3_key === 'photos/jo-1111/pump-before.jpg');
+  check('metadata payload carries s3Key', JSON.parse(op.payload_json).s3Key === 'photos/jo-1111/pump-before.jpg');
+  device.syncOnce(makeTransport(server), AUTH_OK);
+  check('Photo metadata CREATE → SYNCED', opStatus(device, opId) === 'SYNCED');
+  check('server stored photo s3Key', server.rows.get(`Photo:${id}`).s3Key === 'photos/jo-1111/pump-before.jpg');
+})();
+
+// ── Scenario 12: ESignature non-owner fails locally, never queued ──
+await (async () => {
+  console.log('\n[12] ESignature non-owner — local UX guard throws before queueing');
+  const server = new MockServer();
+  const nonOwner = 'user-tech-002';
+  server.seedJobOrder({ id: JO_ID, joNumber: 'SG-JO-0001', branch: 'SG', state: 'IN_PROGRESS',
+    assignedTechnicianIds: [TECH, nonOwner], executionOwnerId: TECH, scopeSummary: 'Main engine survey' });
+  const device = new Device(nonOwner);
+  const pull = server.handleSyncAssigned({}, { valid: true, userId: nonOwner });
+  device.applyPull(pull.changes, pull.cursor);
+  let threw = false;
+  try {
+    await device.authorESignature(JO_ID, 'Client Witness', 'Chief Engineer', null, null, '/local/signatures/non-owner.png');
+  } catch (e) {
+    threw = e.message.includes('execution owner');
+  }
+  check('non-owner sign attempt throws locally', threw);
+  check('no ESignature op reaches queue', queueCount(device) === 0);
+  check('server received no ESignature row', ![...server.rows.keys()].some(k => k.startsWith('ESignature:')));
+})();
+
+// ── Scenario 13: ESignature owner two-phase upload → APPLIED with D-060 documentHash ──
+await (async () => {
+  console.log('\n[13] ESignature owner — immutable CREATE with D-060 documentHash + snapshot_json');
+  const { server, device } = freshWorld();
+  const checklist = device.authorChecklistSubmit(JO_ID, 'tmpl-signature-evidence', [{ itemId: 'visual-check', value: true }]);
+  const photo = device.authorPhotoCapture(JO_ID, 'DURING', '/local/photos/signature-evidence.jpg', 1.31, 103.77);
+  device.db.prepare(`INSERT INTO material_line
+    (id,job_order_id,description,quantity,unit,unit_cost_amount_minor,unit_cost_currency,source,added_by_id,op_id,sync_state)
+    VALUES ('mat-signature-evidence', ?, 'Gasket set', '1.000', 'set', 2500, 'SGD', 'FIELD', ?, NULL, 'PENDING')`)
+    .run(JO_ID, TECH);
+  const { id, opId, uploadId, documentHash, snapshotJson } = await device.authorESignature(
+    JO_ID, 'Tariq Technician', 'Execution owner', 1.3521, 103.8198, '/local/signatures/owner.png');
+  check('signature metadata waits for binary upload', !device.readyOps().some(o => o.op_id === opId));
+  const localRow = device.db.prepare(`SELECT document_hash,snapshot_json FROM esignature WHERE id=?`).get(id);
+  const snapshot = JSON.parse(localRow.snapshot_json);
+  check('local document_hash is a real SHA-256 hex digest', /^[a-f0-9]{64}$/.test(localRow.document_hash));
+  check('snapshot_json is stored exactly as hashed', localRow.snapshot_json === snapshotJson && localRow.document_hash === documentHash);
+  check('document_hash matches snapshot_json re-hash', await sha256Hex(localRow.snapshot_json) === localRow.document_hash);
+  check('snapshot includes actual checklist ids', JSON.stringify(snapshot.checklistInstanceIds) === JSON.stringify([checklist.id]));
+  check('snapshot includes actual photo opIds', JSON.stringify(snapshot.photoOpIds) === JSON.stringify([photo.opId]));
+  check('snapshot includes actual material ids', JSON.stringify(snapshot.materialLineIds) === JSON.stringify(['mat-signature-evidence']));
+  device.completeBinaryUpload(uploadId, 'signatures/jo-1111/owner.png');
+  device.syncOnce(makeTransport(server), AUTH_OK);
+  const serverRow = server.rows.get(`ESignature:${id}`);
+  check('ESignature CREATE → SYNCED', opStatus(device, opId) === 'SYNCED');
+  check('server stored imageS3Key', serverRow.imageS3Key === 'signatures/jo-1111/owner.png');
+  check('server stored documentHash', serverRow.documentHash === documentHash);
 })();
 
 console.log(`\n══════════ RESULT: ${pass} passed, ${fail} failed ══════════\n`);

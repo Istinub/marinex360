@@ -1,4 +1,3 @@
-'use strict';
 // =====================================================================
 // MarineX360 — MOCK SERVER (S0-6 prototype)
 // Stands in for Fastify API + SyncService + Postgres. Implements the
@@ -15,12 +14,12 @@
 //   (APPLIED_FLAGGED = CC-MOB-2 / SYNC-13 — proposed, awaiting ratification.)
 // =====================================================================
 
-const MIN_SCHEMA_VERSION = 1;            // server's minimum accepted payload schema
+export const MIN_SCHEMA_VERSION = 1;     // server's minimum accepted payload schema
 const WRITABLE = new Set(['WorkLog', 'Photo', 'Observation', 'ChecklistInstance', 'MaterialLine', 'ESignature']);
 
 function nowIso() { return new Date().toISOString(); }
 
-class MockServer {
+export class MockServer {
   constructor() {
     this.jobOrders = new Map();          // id -> JO (authoritative)
     this.rows = new Map();               // `${entity}:${id}` -> row {id, version, ...}
@@ -144,5 +143,3 @@ class MockServer {
   }
   _everDispatched() { return true; } // demo: owner stays able to pull their own job state for reconcile
 }
-
-module.exports = { MockServer, MIN_SCHEMA_VERSION };

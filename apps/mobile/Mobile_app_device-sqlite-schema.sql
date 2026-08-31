@@ -213,7 +213,8 @@ CREATE TABLE IF NOT EXISTS esignature (
   device_id     TEXT,                   -- OD-06 reserved (Mobile feasibility CONFIRMED — see design §8)
   geo_lat       REAL,                   -- OD-06 reserved
   geo_lng       REAL,                   -- OD-06 reserved
-  document_hash TEXT,                   -- OD-06 reserved (SHA-256 of signed PDF)
+  document_hash TEXT,                   -- D-060: SHA-256 of canonical JSON snapshot, not PDF
+  snapshot_json  TEXT,                  -- exact canonical JSON used to reproduce document_hash
   op_id         TEXT,
   sync_state    TEXT NOT NULL DEFAULT 'PENDING'
 );

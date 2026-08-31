@@ -9,8 +9,10 @@ const jobOrderId = computed(() => {
   return Array.isArray(id) ? id[0] : id;
 });
 
+const checklistPath = computed(() => `/jobs/${jobOrderId.value}/checklist`);
 const materialsPath = computed(() => `/jobs/${jobOrderId.value}/materials`);
 const documentsPath = computed(() => `/jobs/${jobOrderId.value}/documents`);
+const signaturePath = computed(() => `/jobs/${jobOrderId.value}/sign`);
 </script>
 
 <template>
@@ -23,11 +25,17 @@ const documentsPath = computed(() => `/jobs/${jobOrderId.value}/documents`);
     </header>
 
     <nav class="job-detail__tabs" aria-label="Job detail sections">
+      <RouterLink class="job-detail__tab" :to="checklistPath">
+        Checklist
+      </RouterLink>
       <RouterLink class="job-detail__tab" :to="materialsPath">
         Materials
       </RouterLink>
       <RouterLink class="job-detail__tab" :to="documentsPath">
         Documents
+      </RouterLink>
+      <RouterLink class="job-detail__tab" :to="signaturePath">
+        Sign
       </RouterLink>
     </nav>
   </main>

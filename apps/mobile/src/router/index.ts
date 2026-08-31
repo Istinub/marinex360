@@ -1,9 +1,11 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
 import MobileShell from '@/layouts/MobileShell.vue';
 import AssignedJobsList from '@/views/AssignedJobsList.vue';
+import ChecklistExecution from '@/views/ChecklistExecution.vue';
 import JobDetail from '@/views/JobDetail.vue';
 import JobDocumentsList from '@/views/JobDocumentsList.vue';
 import MaterialLineForm from '@/views/MaterialLineForm.vue';
+import SignatureCapture from '@/views/SignatureCapture.vue';
 
 const routes = [
   {
@@ -25,6 +27,11 @@ const routes = [
         component: JobDetail,
       },
       {
+        path: 'jobs/:id/checklist',
+        name: 'job-checklist',
+        component: ChecklistExecution,
+      },
+      {
         path: 'jobs/:id/materials',
         name: 'job-materials',
         component: MaterialLineForm,
@@ -33,6 +40,11 @@ const routes = [
         path: 'jobs/:id/documents',
         name: 'job-documents',
         component: JobDocumentsList,
+      },
+      {
+        path: 'jobs/:id/sign',
+        name: 'job-signature',
+        component: SignatureCapture,
       },
     ],
   },
