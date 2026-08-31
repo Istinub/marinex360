@@ -1,4 +1,5 @@
 import { Device as CapacitorDevice } from '@capacitor/device';
+import { Filesystem } from '@capacitor/filesystem';
 
 export type ChecklistItemType = 'bool' | 'text' | 'number' | 'select' | 'photo';
 export type PhotoPhase = 'BEFORE' | 'DURING' | 'AFTER';
@@ -27,6 +28,8 @@ export interface QueuedOfflineCreate {
   snapshotJson?: string;
 }
 
+type BinaryUploadEntity = 'Photo' | 'ESignature';
+
 interface AppMetaRow {
   v: string;
 }
@@ -34,6 +37,34 @@ interface AppMetaRow {
 interface JoOwnerRow {
   id: string;
   execution_owner_id: string | null;
+}
+
+interface BinaryUploadRow {
+  id: string;
+  entity: string;
+  local_path: string;
+  byte_size: number | null;
+  content_type: string | null;
+  upload_state: string;
+  attempts: number;
+  next_attempt_at: string | null;
+  last_error: string | null;
+}
+
+interface EntityJobOrderRow {
+  job_order_id: string;
+}
+
+interface OpPayloadRow {
+  op_id: string;
+  payload_json: string;
+}
+
+interface PresignResponse {
+  uploadUrl: string;
+  s3Key: string;
+  method?: string;
+  headers?: Record<string, string> | null;
 }
 
 interface MobileSqlAdapter {
@@ -50,6 +81,11 @@ interface MobileRuntime {
       userName?: string | null;
       name?: string | null;
       displayName?: string | null;
+      accessToken?: string | null;
+    };
+    apiBase?: string | null;
+    files?: {
+      readBinaryFile?(localPath: string): Promise<BodyInit>;
     };
   };
 }
@@ -60,6 +96,16 @@ function mobileRuntime(): MobileRuntime {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function apiBase(): string {
+  const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
+  return (mobileRuntime().marinex360?.apiBase ?? viteEnv?.VITE_API_BASE ?? '/api/v1').replace(/\/$/, '');
+}
+
+function authHeaders(): HeadersInit {
+  const accessToken = mobileRuntime().marinex360?.auth?.accessToken;
+  return accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
 }
 
 function createUuid(): string {
@@ -94,6 +140,47 @@ async function sha256Hex(text: string): Promise<string> {
   if (!globalThis.crypto?.subtle) throw new Error('Web Crypto SHA-256 is not available.');
   const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function backoff(attempts: number): string {
+  const base = 2000;
+  const cap = 300000;
+  const delay = Math.min(cap, base * 2 ** attempts) * (0.5 + Math.random() * 0.5);
+  return new Date(Date.now() + delay).toISOString();
+}
+
+function errorText(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  return 'Binary upload failed.';
+}
+
+function binaryEntity(entity: string): BinaryUploadEntity {
+  if (entity === 'Photo' || entity === 'ESignature') return entity;
+  throw new Error(`Unsupported binary upload entity: ${entity}`);
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = globalThis.atob
+    ? globalThis.atob(base64)
+    : Buffer.from(base64, 'base64').toString('binary');
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+async function localFileBody(localPath: string): Promise<BodyInit> {
+  const runtimeReader = mobileRuntime().marinex360?.files?.readBinaryFile;
+  if (runtimeReader) return runtimeReader(localPath);
+
+  const result = await Filesystem.readFile({ path: localPath });
+  const data = result.data;
+
+  if (data instanceof Blob) return data;
+  if (typeof data !== 'string') throw new Error('Unsupported local file data.');
+  if (data.startsWith('data:')) return (await fetch(data)).blob();
+  const bytes = base64ToBytes(data);
+  return new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer]);
 }
 
 function requireDb(): MobileSqlAdapter {
@@ -175,6 +262,103 @@ async function signatureSnapshot(
   return { jobOrderId, checklistInstanceIds, photoOpIds, materialLineIds, signerName, signerRole, signedAt };
 }
 
+async function pendingUploads(db: MobileSqlAdapter): Promise<BinaryUploadRow[]> {
+  return db.select<BinaryUploadRow>(
+    `SELECT id, entity, local_path, byte_size, content_type, upload_state, attempts, next_attempt_at, last_error
+     FROM binary_upload
+     WHERE upload_state='PENDING'
+       AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+     ORDER BY rowid ASC`,
+    [nowIso()],
+  );
+}
+
+async function uploadJobOrderId(db: MobileSqlAdapter, upload: BinaryUploadRow): Promise<string> {
+  const entity = binaryEntity(upload.entity);
+  const table = entity === 'Photo' ? 'photo' : 'esignature';
+  const rows = await db.select<EntityJobOrderRow>(`SELECT job_order_id FROM ${table} WHERE id=?`, [upload.id]);
+  const jobOrderId = rows[0]?.job_order_id;
+  if (!jobOrderId) throw new Error(`Missing ${entity} metadata row for binary upload ${upload.id}.`);
+  return jobOrderId;
+}
+
+async function presignUpload(upload: BinaryUploadRow, jobOrderId: string, entity: BinaryUploadEntity): Promise<PresignResponse> {
+  if (!upload.content_type) throw new Error('Binary upload content_type is required.');
+
+  const response = await fetch(`${apiBase()}/uploads/presign`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      ...authHeaders(),
+    },
+    body: JSON.stringify({
+      entity,
+      jobOrderId,
+      contentType: upload.content_type,
+      byteSize: upload.byte_size ?? undefined,
+    }),
+  });
+
+  if (!response.ok) throw new Error(`Presign failed (${response.status}).`);
+
+  const presign = await response.json() as PresignResponse;
+  if (!presign.uploadUrl || !presign.s3Key) throw new Error('Presign response missing uploadUrl or s3Key.');
+  return presign;
+}
+
+async function putUploadBytes(presign: PresignResponse, body: BodyInit): Promise<void> {
+  const response = await fetch(presign.uploadUrl, {
+    method: presign.method ?? 'PUT',
+    headers: presign.headers ?? {},
+    body,
+  });
+
+  if (!response.ok) throw new Error(`Binary PUT failed (${response.status}).`);
+}
+
+async function completeUpload(db: MobileSqlAdapter, upload: BinaryUploadRow, entity: BinaryUploadEntity, s3Key: string): Promise<void> {
+  const field = entity === 'Photo' ? 's3Key' : 'imageS3Key';
+  const entityTable = entity === 'Photo' ? 'photo' : 'esignature';
+  const entityColumn = entity === 'Photo' ? 's3_key' : 'image_s3_key';
+  const rows = await db.select<OpPayloadRow>(
+    `SELECT op_id, payload_json
+     FROM op_queue
+     WHERE entity=? AND entity_id=? AND blocks_on_op=?`,
+    [entity, upload.id, upload.id],
+  );
+  const op = rows[0];
+  if (!op) throw new Error(`Missing blocked metadata op for binary upload ${upload.id}.`);
+
+  const payload = JSON.parse(op.payload_json) as Record<string, unknown>;
+  payload[field] = s3Key;
+
+  await withTransaction(db, async () => {
+    await db.execute(
+      `UPDATE binary_upload
+       SET upload_state='DONE', s3_key=?, next_attempt_at=NULL, last_error=NULL
+       WHERE id=?`,
+      [s3Key, upload.id],
+    );
+    await db.execute(`UPDATE ${entityTable} SET ${entityColumn}=? WHERE id=?`, [s3Key, upload.id]);
+    await db.execute(
+      `UPDATE op_queue
+       SET payload_json=?, blocks_on_op=NULL, updated_at=?
+       WHERE op_id=?`,
+      [JSON.stringify(payload), nowIso(), op.op_id],
+    );
+  });
+}
+
+async function failUpload(db: MobileSqlAdapter, upload: BinaryUploadRow, error: unknown): Promise<void> {
+  await db.execute(
+    `UPDATE binary_upload
+     SET upload_state='ERROR', attempts=attempts+1, next_attempt_at=?, last_error=?
+     WHERE id=?`,
+    [backoff(upload.attempts), errorText(error), upload.id],
+  );
+}
+
 async function currentDeviceId(): Promise<string | null> {
   try {
     const id = await CapacitorDevice.getId();
@@ -217,6 +401,32 @@ async function enqueueCreate(
 }
 
 export function useOfflineExecution() {
+  async function drainBinaryUploads(jobOrderId?: string): Promise<void> {
+    const db = requireDb();
+    const uploads = await pendingUploads(db);
+
+    for (const upload of uploads) {
+      try {
+        const entity = binaryEntity(upload.entity);
+        const ownerJobOrderId = await uploadJobOrderId(db, upload);
+        if (jobOrderId && ownerJobOrderId !== jobOrderId) continue;
+
+        await db.execute(
+          `UPDATE binary_upload
+           SET upload_state='UPLOADING', last_error=NULL
+           WHERE id=? AND upload_state='PENDING'`,
+          [upload.id],
+        );
+
+        const presign = await presignUpload(upload, ownerJobOrderId, entity);
+        await putUploadBytes(presign, await localFileBody(upload.local_path));
+        await completeUpload(db, upload, entity, presign.s3Key);
+      } catch (error) {
+        await failUpload(db, upload, error);
+      }
+    }
+  }
+
   async function authorChecklistSubmit(
     jobOrderId: string,
     templateId: string,
@@ -382,6 +592,7 @@ export function useOfflineExecution() {
   }
 
   return {
+    drainBinaryUploads,
     authorChecklistSubmit,
     authorPhotoCapture,
     authorESignature,
