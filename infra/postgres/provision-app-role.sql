@@ -40,3 +40,24 @@ ALTER DEFAULT PRIVILEGES FOR ROLE marinex IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO marinex_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE marinex IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO marinex_app;
+
+-- Defensive backstop (2026-08-30): the blanket GRANT above would silently re-grant
+-- UPDATE/DELETE on immutable tables if this file is ever re-run against an existing
+-- database (e.g. the documented "keep-data, no reset" re-provisioning path). These
+-- are NOT a substitute for the versioned migrations that own this decision
+-- (audit_immutability and payment_immutability migrations) — they guarantee
+-- re-running this file can never undo those migrations' intent. Guarded with
+-- to_regclass() so this is also safe on a FRESH volume, before Prisma has created
+-- any tables yet.
+DO $$
+BEGIN
+  IF to_regclass('public."AuditEntry"') IS NOT NULL THEN
+    EXECUTE 'REVOKE UPDATE, DELETE ON "AuditEntry" FROM marinex_app';
+  END IF;
+  IF to_regclass('public."JobStatusHistory"') IS NOT NULL THEN
+    EXECUTE 'REVOKE UPDATE, DELETE ON "JobStatusHistory" FROM marinex_app';
+  END IF;
+  IF to_regclass('public."Payment"') IS NOT NULL THEN
+    EXECUTE 'REVOKE UPDATE, DELETE ON "Payment" FROM marinex_app';
+  END IF;
+END $$;

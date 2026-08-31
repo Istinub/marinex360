@@ -13,8 +13,8 @@
 //  - IDs are UUID. For OFFLINE creates the client MAY supply the row `id` (client UUID, CC-MOB-1);
 //    the server persists it, so resultRef == payload.id. Replay is caught by opId (ProcessedOp).
 //  - Soft delete (deletedAt) on operational/financial rows; never hard-deleted (OD-03).
-//  - AuditEntry + JobStatusHistory are append-only AND DB-immutable (app role has no UPDATE/DELETE
-//    grant) — QA Part-F, applied in the S0-7 migration.
+//  - AuditEntry + JobStatusHistory + Payment are append-only AND DB-immutable (app role has
+//    no UPDATE/DELETE grant) — QA Part-F/D-035, applied in versioned migrations.
 //  - All access via the service layer: branch scope checked BEFORE version; cross-branch direct-ID
 //    access returns NOT_FOUND (no existence enumeration) — QA Part-F.
  

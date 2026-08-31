@@ -950,6 +950,7 @@ Normal REST endpoints do not expose `changeSeq`; `apps/api/src/app.ts` strips it
 
 - v1.1 (reconstructed 2026-08-30) — first git-tracked version, derived from live source.
 - v1.2 (2026-08-30) — reconciled D-044 OFFICE roles, D-046 SYSTEM_ADMIN variation decisions, and `Document.ownerType` schema comment with live source.
+- v1.3 (2026-08-31) — added `payment_immutability` migration and guarded provision backstop for immutable tables.
 
 ## OPEN DISCREPANCIES
 
@@ -1041,28 +1042,7 @@ const match = creditTerms.match(/(\d+)/);
 
 The implementation accepts any first digit sequence in the free-text value, not only `NET###`. This document records the live source behavior.
 
-### 5. D-035 says `Payment` DB-level immutability is extended, but migration source shows it is still pending
-
-`RESOLVED_DECISIONS.md` says:
-
-> `D-035 | New immutable Payment model ... extends D-014's DB-level immutability (marinex_app REVOKE) to include Payment.`
-
-Live migration source for the payment model says:
-
-```sql
--- NEEDS OPS: extend provision-app-role.sql's REVOKE UPDATE, DELETE to include "Payment" (D-014/D-035).
-```
-
-The audit immutability migration only revokes:
-
-```sql
-REVOKE UPDATE, DELETE ON "AuditEntry"       FROM marinex_app;
-REVOKE UPDATE, DELETE ON "JobStatusHistory" FROM marinex_app;
-```
-
-The contract records `Payment` as insert-only by route surface (no update/delete endpoints), but DB-level immutability for `Payment` is not proven by the migration source shown here.
-
-### 6. D-050 references `FeatureFlag` and `ErrorLog` models/routes, but live API source has none
+### 5. D-050 references `FeatureFlag` and `ErrorLog` models/routes, but live API source has none
 
 `RESOLVED_DECISIONS.md` says:
 
@@ -1074,7 +1054,7 @@ and:
 
 Live `prisma/schema.prisma` does not define `FeatureFlag` or `ErrorLog`, and `apps/api/src/routes/*.ts` does not expose feature-flag or admin error-log endpoints. This appears to be future P3-12 scope rather than current live API, so it is not included in the endpoint contract.
 
-### 7. D-020 describes below-minimum schema rejection, but live `/sync/batch` rejects any mismatch
+### 6. D-020 describes below-minimum schema rejection, but live `/sync/batch` rejects any mismatch
 
 `RESOLVED_DECISIONS.md` says:
 
