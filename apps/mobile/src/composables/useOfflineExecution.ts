@@ -67,7 +67,7 @@ interface PresignResponse {
   headers?: Record<string, string> | null;
 }
 
-interface MobileSqlAdapter {
+export interface MobileSqlAdapter {
   select<T>(sql: string, params?: unknown[]): Promise<T[]>;
   execute(sql: string, params?: unknown[]): Promise<void>;
   transaction?<T>(work: () => Promise<T>): Promise<T>;
