@@ -185,10 +185,9 @@ function plainError(row: OpQueueRow): string {
       const status = typeof record.status === 'string' ? record.status : null;
       const message = typeof record.message === 'string' ? record.message : null;
 
-      if (code === 'FORBIDDEN' && message) return humanStatusText(message);
-      if (status === 'FORBIDDEN' && message) return humanStatusText(message);
-      if (code) return errorDetailCopy(code);
-      if (status) return errorDetailCopy(status);
+      if (message && (code === 'FORBIDDEN' || status === 'FORBIDDEN')) return message;
+      if (code) return errorDetailCopy(code, message ?? undefined);
+      if (status) return errorDetailCopy(status, message ?? undefined);
       return message ? humanStatusText(message) : 'Retry needed';
     }
   } catch {
@@ -227,15 +226,17 @@ function errorShortLabel(status: string): string {
   }
 }
 
-function errorDetailCopy(status: string): string {
+function errorDetailCopy(status: string, serverMessage?: string): string {
   const normalized = status.trim();
+  const reasons = serverMessage?.trim();
 
   switch (normalized) {
     case 'VALIDATION_ERROR':
+      return reasons || 'Check the entry and try again — some fields need correction.';
     case 'VERSION_CONFLICT':
-      return 'Retry needed';
+      return 'This job was updated elsewhere. Your changes will be reapplied automatically on next sync.';
     case 'FORBIDDEN':
-      return 'You do not have permission to perform this action.';
+      return reasons || 'You do not have permission to perform this action.';
     case 'UNAUTHORIZED':
       return 'Your session is no longer authorised to sync this change. Please sign back in and try again.';
     case 'NOT_FOUND':
@@ -245,7 +246,7 @@ function errorDetailCopy(status: string): string {
     case 'STATE_TRANSITION_INVALID':
       return 'the job changed while you were offline';
     default:
-      return 'Retry needed';
+      return reasons || 'Retry needed';
   }
 }
 
