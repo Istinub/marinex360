@@ -1,0 +1,12 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^cd /home/devcontainers/projects/marinex360 && npx vue-tsc -p apps/mobile/tsconfig\\.json --noEmit; echo EXIT:\\$\\? && echo '---SCENARIO---' && node --experimental-strip-types apps/mobile/Mobile_app_syncEngineScenarios\\.js$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd /home/devcontainers/projects/marinex360 && node --experimental-strip-types apps/mobile/Mobile_app_chipCopyScenarios\\.js && echo EXIT:\\$\\?$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
