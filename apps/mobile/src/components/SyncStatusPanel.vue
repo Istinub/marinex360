@@ -83,11 +83,11 @@ const RECENT_SYNCED_MS = 10 * 60 * 1000;
 const REFRESH_MS = 5000;
 
 const buckets: BucketDefinition[] = [
-  { key: 'pending', title: 'Pending', statusLabel: 'Pending', match: (row) => row.status === 'PENDING' },
-  { key: 'syncing', title: 'Syncing', statusLabel: 'Syncing', match: (row) => row.status === 'SYNCING' },
+  { key: 'pending', title: 'Queued', statusLabel: 'Queued', match: (row) => row.status === 'PENDING' },
+  { key: 'syncing', title: 'Sending...', statusLabel: 'Sending...', match: (row) => row.status === 'SYNCING' },
   { key: 'synced', title: 'Synced', statusLabel: 'Synced', match: (row) => row.status === 'SYNCED' && isRecentlySynced(row) },
   { key: 'retry', title: 'Retry needed', statusLabel: 'Retry needed', match: (row) => row.status === 'CONFLICT' || row.status === 'ERROR' },
-  { key: 'flagged', title: 'Sent - pending review', statusLabel: 'Pending review', match: (row) => row.status === 'FLAGGED' },
+  { key: 'flagged', title: 'Sent (pending review)', statusLabel: 'Sent (pending review)', match: (row) => row.status === 'FLAGGED' },
 ];
 
 // NEEDS: Mobile sync engine should expose an importable manual-sync trigger before this panel adds a retry button.
@@ -178,22 +178,24 @@ function plainError(row: OpQueueRow): string {
 
   try {
     const parsed = JSON.parse(raw);
-    if (typeof parsed === 'string') return errorCopy(parsed) || humanStatusText(parsed);
+    if (typeof parsed === 'string') return errorDetailCopy(parsed) || humanStatusText(parsed);
     if (parsed && typeof parsed === 'object') {
       const record = parsed as Record<string, unknown>;
       const code = typeof record.code === 'string' ? record.code : null;
       const status = typeof record.status === 'string' ? record.status : null;
       const message = typeof record.message === 'string' ? record.message : null;
 
-      if (code) return errorCopy(code);
-      if (status) return errorCopy(status);
-      return message ? humanStatusText(message) : 'This update could not be applied. Check the current job state and try again.';
+      if (code === 'FORBIDDEN' && message) return humanStatusText(message);
+      if (status === 'FORBIDDEN' && message) return humanStatusText(message);
+      if (code) return errorDetailCopy(code);
+      if (status) return errorDetailCopy(status);
+      return message ? humanStatusText(message) : 'Retry needed';
     }
   } catch {
-    return errorCopy(raw) || humanStatusText(raw);
+    return errorDetailCopy(raw) || humanStatusText(raw);
   }
 
-  return errorCopy(raw) || humanStatusText(raw);
+  return errorDetailCopy(raw) || humanStatusText(raw);
 }
 
 function humanStatusText(value: string): string {
@@ -205,28 +207,75 @@ function humanStatusText(value: string): string {
   return trimmed;
 }
 
-function errorCopy(status: string): string {
+function errorShortLabel(status: string): string {
+  const normalized = status.trim();
+
+  switch (normalized) {
+    case 'NOT_FOUND':
+      return 'Job or record no longer available';
+    case 'BRANCH_SCOPE_DENIED':
+      return 'Job access changed';
+    case 'STATE_TRANSITION_INVALID':
+      return 'Job status changed';
+    case 'VALIDATION_ERROR':
+    case 'VERSION_CONFLICT':
+      return 'Retry needed';
+    case 'FORBIDDEN':
+      return 'Permission issue';
+    default:
+      return 'Retry needed';
+  }
+}
+
+function errorDetailCopy(status: string): string {
   const normalized = status.trim();
 
   switch (normalized) {
     case 'VALIDATION_ERROR':
-      return 'This update was rejected by validation. Review the details and try again.';
+    case 'VERSION_CONFLICT':
+      return 'Retry needed';
     case 'FORBIDDEN':
       return 'You do not have permission to perform this action.';
     case 'UNAUTHORIZED':
       return 'Your session is no longer authorised to sync this change. Please sign back in and try again.';
     case 'NOT_FOUND':
-      return 'The job or item this was for no longer exists on the server. Contact your supervisor before retrying.';
+      return 'saved work is still on this device';
     case 'BRANCH_SCOPE_DENIED':
-      return 'This job belongs to a different branch than your account. Contact your supervisor — this won\'t resolve on retry.';
+      return 'contact your supervisor';
     case 'STATE_TRANSITION_INVALID':
-      return 'This job\'s status changed and no longer accepts this update. Check the job\'s current state before retrying.';
+      return 'the job changed while you were offline';
     default:
-      return 'This update could not be applied. Check the current job state and try again.';
+      return 'Retry needed';
   }
 }
 
+function rawTechnicalError(row: OpQueueRow | null): string {
+  if (!row) return 'No technical detail recorded.';
+  const raw = row.last_error?.trim();
+  return raw && raw.length > 0 ? raw : 'No technical detail recorded.';
+}
+
 function rowTitle(row: OpQueueRow): string {
+  if (row.status === 'ERROR') {
+    const raw = row.last_error?.trim();
+    if (!raw) return 'Retry needed';
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed === 'string') return errorShortLabel(parsed);
+      if (parsed && typeof parsed === 'object') {
+        const record = parsed as Record<string, unknown>;
+        const code = typeof record.code === 'string' ? record.code : null;
+        const status = typeof record.status === 'string' ? record.status : null;
+        return errorShortLabel(code ?? status ?? 'ERROR');
+      }
+    } catch {
+      return errorShortLabel(raw);
+    }
+
+    return errorShortLabel(raw);
+  }
+
   return `${humanEntity(row.entity)} ${humanStatus(row.status)}`;
 }
 
@@ -400,12 +449,16 @@ onBeforeUnmount(() => {
       v-model:visible="errorDialogVisible"
       modal
       dismissable-mask
-      header="Retry needed"
+      :header="selectedErrorRow ? rowTitle(selectedErrorRow) : 'Retry needed'"
       class="sync-panel__error-dialog"
     >
       <div v-if="selectedErrorRow" class="sync-panel__error-detail">
         <p class="sync-panel__error-title">{{ rowTitle(selectedErrorRow) }}</p>
         <p class="sync-panel__error-message">{{ plainError(selectedErrorRow) }}</p>
+        <details class="sync-panel__technical-detail">
+          <summary>Technical details</summary>
+          <code>{{ rawTechnicalError(selectedErrorRow) }}</code>
+        </details>
       </div>
     </Dialog>
   </section>
@@ -611,6 +664,27 @@ onBeforeUnmount(() => {
   margin: 0;
   color: var(--color-text);
   overflow-wrap: anywhere;
+}
+
+.sync-panel__technical-detail {
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-2);
+  border-top: var(--border-1);
+  color: var(--color-text-muted);
+  font-size: var(--fs-body-sm);
+}
+
+.sync-panel__technical-detail summary {
+  cursor: pointer;
+  font-weight: var(--fw-semibold);
+}
+
+.sync-panel__technical-detail code {
+  display: block;
+  margin-top: var(--sp-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono, monospace);
 }
 
 @media (min-width: 720px) {
