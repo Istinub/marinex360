@@ -8,6 +8,7 @@ import { defineStore } from 'pinia';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { createSyncTransport, currentSyncAuth, syncResultHasVersionConflict, useSyncEngine } from '../composables/useSyncEngine';
 import { useOfflineExecution } from '../composables/useOfflineExecution';
+import { errorDetailCopy, errorShortLabel, syncBucketDefinitions } from '../lib/syncCopy';
 
 type QueueStatus = 'PENDING' | 'SYNCING' | 'SYNCED' | 'CONFLICT' | 'ERROR' | 'FLAGGED';
 type BucketKey = 'pending' | 'syncing' | 'synced' | 'retry' | 'flagged';
@@ -46,6 +47,7 @@ interface BucketDefinition {
   key: BucketKey;
   title: string;
   statusLabel: string;
+  icon: string;
   match(row: OpQueueRow): boolean;
 }
 
@@ -82,13 +84,19 @@ const QUEUE_SQL = `
 const RECENT_SYNCED_MS = 10 * 60 * 1000;
 const REFRESH_MS = 5000;
 
-const buckets: BucketDefinition[] = [
-  { key: 'pending', title: 'Queued', statusLabel: 'Queued', match: (row) => row.status === 'PENDING' },
-  { key: 'syncing', title: 'Sending...', statusLabel: 'Sending...', match: (row) => row.status === 'SYNCING' },
-  { key: 'synced', title: 'Synced', statusLabel: 'Synced', match: (row) => row.status === 'SYNCED' && isRecentlySynced(row) },
-  { key: 'retry', title: 'Retry needed', statusLabel: 'Retry needed', match: (row) => row.status === 'CONFLICT' || row.status === 'ERROR' },
-  { key: 'flagged', title: 'Sent (pending review)', statusLabel: 'Sent (pending review)', match: (row) => row.status === 'FLAGGED' },
-];
+const buckets: BucketDefinition[] = syncBucketDefinitions.map((bucket) => ({
+  key: bucket.key,
+  title: bucket.title,
+  statusLabel: bucket.statusLabel,
+  icon: bucket.icon,
+  match: (row: OpQueueRow) => {
+    if (bucket.key === 'pending') return row.status === 'PENDING';
+    if (bucket.key === 'syncing') return row.status === 'SYNCING';
+    if (bucket.key === 'synced') return row.status === 'SYNCED' && isRecentlySynced(row);
+    if (bucket.key === 'retry') return row.status === 'CONFLICT' || row.status === 'ERROR';
+    return row.status === 'FLAGGED';
+  },
+}));
 
 // NEEDS: Mobile sync engine should expose an importable manual-sync trigger before this panel adds a retry button.
 
@@ -204,50 +212,6 @@ function humanStatusText(value: string): string {
   }
 
   return trimmed;
-}
-
-function errorShortLabel(status: string): string {
-  const normalized = status.trim();
-
-  switch (normalized) {
-    case 'NOT_FOUND':
-      return 'Job or record no longer available';
-    case 'BRANCH_SCOPE_DENIED':
-      return 'Job access changed';
-    case 'STATE_TRANSITION_INVALID':
-      return 'Job status changed';
-    case 'VALIDATION_ERROR':
-    case 'VERSION_CONFLICT':
-      return 'Retry needed';
-    case 'FORBIDDEN':
-      return 'Permission issue';
-    default:
-      return 'Retry needed';
-  }
-}
-
-function errorDetailCopy(status: string, serverMessage?: string): string {
-  const normalized = status.trim();
-  const reasons = serverMessage?.trim();
-
-  switch (normalized) {
-    case 'VALIDATION_ERROR':
-      return reasons || 'Check the entry and try again — some fields need correction.';
-    case 'VERSION_CONFLICT':
-      return 'This job was updated elsewhere. Your changes will be reapplied automatically on next sync.';
-    case 'FORBIDDEN':
-      return reasons || 'You do not have permission to perform this action.';
-    case 'UNAUTHORIZED':
-      return 'Your session is no longer authorised to sync this change. Please sign back in and try again.';
-    case 'NOT_FOUND':
-      return 'saved work is still on this device';
-    case 'BRANCH_SCOPE_DENIED':
-      return 'contact your supervisor';
-    case 'STATE_TRANSITION_INVALID':
-      return 'the job changed while you were offline';
-    default:
-      return reasons || 'Retry needed';
-  }
 }
 
 function rawTechnicalError(row: OpQueueRow | null): string {
@@ -429,6 +393,7 @@ onBeforeUnmount(() => {
                 @click="showError(row)"
               >
                 <span class="sync-panel__row-main">
+                  <span class="sync-panel__icon" aria-hidden="true">{{ bucket.icon }}</span>
                   <span class="sync-panel__entity">{{ humanEntity(row.entity) }}</span>
                   <span class="sync-panel__summary">{{ rowSummary(row) }}</span>
                 </span>
