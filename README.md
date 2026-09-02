@@ -81,6 +81,72 @@ npm run smoke:pdf     # hello-world PDF render (run inside the worker image, see
 npm run lint && npm run typecheck && npm run test && npm run build
 ```
 
+## Mobile device setup (Android, via WSL2)
+
+Testing `apps/mobile` requires a real Android device connected via `adb` — per **D-067**,
+browser testing alone cannot verify SQLite/offline/camera/GPS/permissions/lifecycle behavior
+(see debugging-principles lesson #6 in `RESOLVED_DECISIONS.md`). This is a one-time local
+machine setup; the bridge itself does not persist across a laptop restart, but the
+bind/authorization does.
+
+### First-time setup
+
+1. Install `adb` in WSL2:
+
+```
+sudo apt update && sudo apt install -y android
+```
+
+(Note: the package is `android`, not `android-tools-adb` — that name does not exist on
+Ubuntu 24.04.)
+2. On the Android phone: enable Developer Options (Settings → About Phone → tap Build Number
+7 times), then enable USB Debugging under Developer Options.
+3. Bridge the USB device from Windows into WSL2 via [`usbipd-win`](https://github.com/dorssel/usbipd-win):
+
+```
+# in an admin PowerShell, list devices to find the busid
+usbipd list
+usbipd bind --busid <busid>
+usbipd attach --wsl --busid <busid>
+```
+
+If the device shows as "in error state," run `usbipd unbind --busid <busid>` then
+`usbipd bind`/`attach` again.
+4. In WSL2, confirm the device is visible:
+
+```
+adb devices
+```
+
+The phone will prompt "Allow USB debugging?" — tap Allow. If the device drops to
+`unauthorized` or disappears mid-prompt, re-run the `usbipd attach` command once more
+after accepting the prompt.
+5. Confirmed working state looks like:
+
+```
+List of devices attached
+f24d1d41        device
+```
+
+(not `unauthorized`, not `offline`, not empty)
+
+### Reconnecting later (phone unplugged/replugged, or laptop restarted)
+
+The bind/authorization persists — you do not need to repeat steps 1–4. Just:
+
+```
+& "C:\Program Files\usbipd-win\usbipd.exe" attach --wsl --busid <busid>
+```
+
+then `adb devices` in WSL2 to confirm.
+
+### Fallback: no physical device available
+
+If a physical device genuinely isn't available, fall back to an Android emulator (AVD) via
+Android Studio — this plan is deprioritized (D-069) but documented as a backup, since a real
+device is faster and more representative for camera/GPS/permissions/background-foreground
+behavior than an emulator typically is.
+
 ## Tests
 
 ```
