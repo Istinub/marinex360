@@ -1,5 +1,6 @@
 import { Device as CapacitorDevice } from '@capacitor/device';
 import { Filesystem } from '@capacitor/filesystem';
+import { authenticatedFetch, currentSession } from './useAuth.ts';
 
 export type ChecklistItemType = 'bool' | 'text' | 'number' | 'select' | 'photo';
 export type PhotoPhase = 'BEFORE' | 'DURING' | 'AFTER';
@@ -76,13 +77,6 @@ export interface MobileSqlAdapter {
 interface MobileRuntime {
   marinex360?: {
     db?: MobileSqlAdapter;
-    auth?: {
-      userId?: string | null;
-      userName?: string | null;
-      name?: string | null;
-      displayName?: string | null;
-      accessToken?: string | null;
-    };
     apiBase?: string | null;
     files?: {
       readBinaryFile?(localPath: string): Promise<BodyInit>;
@@ -103,9 +97,9 @@ export function apiBase(): string {
   return (mobileRuntime().marinex360?.apiBase ?? viteEnv?.VITE_API_BASE ?? '/api/v1').replace(/\/$/, '');
 }
 
-export function authHeaders(): HeadersInit {
-  const accessToken = mobileRuntime().marinex360?.auth?.accessToken;
-  return accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
+export async function authHeaders(): Promise<HeadersInit> {
+  const session = await currentSession();
+  return session ? { Authorization: `Bearer ${session.access}` } : {};
 }
 
 function createUuid(): string {
@@ -189,15 +183,14 @@ function requireDb(): MobileSqlAdapter {
   return db;
 }
 
-function requireCurrentUserId(): string {
-  const userId = mobileRuntime().marinex360?.auth?.userId;
+async function requireCurrentUserId(): Promise<string> {
+  const userId = (await currentSession())?.userId;
   if (!userId) throw new Error('Current user is not available.');
   return userId;
 }
 
-export function currentUserDisplayName(): string {
-  const auth = mobileRuntime().marinex360?.auth;
-  return auth?.userName ?? auth?.displayName ?? auth?.name ?? auth?.userId ?? '';
+export async function currentUserDisplayName(): Promise<string> {
+  return (await currentSession())?.userId ?? '';
 }
 
 async function withTransaction<T>(db: MobileSqlAdapter, work: () => Promise<T>): Promise<T> {
@@ -285,12 +278,11 @@ async function uploadJobOrderId(db: MobileSqlAdapter, upload: BinaryUploadRow): 
 async function presignUpload(upload: BinaryUploadRow, jobOrderId: string, entity: BinaryUploadEntity): Promise<PresignResponse> {
   if (!upload.content_type) throw new Error('Binary upload content_type is required.');
 
-  const response = await fetch(`${apiBase()}/uploads/presign`, {
+  const response = await authenticatedFetch(`${apiBase()}/uploads/presign`, {
     method: 'POST',
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
-      ...authHeaders(),
     },
     body: JSON.stringify({
       entity,
@@ -433,7 +425,7 @@ export function useOfflineExecution() {
     results: ChecklistItemResult[],
   ): Promise<QueuedOfflineCreate> {
     const db = requireDb();
-    const completedById = requireCurrentUserId();
+    const completedById = await requireCurrentUserId();
     const id = createUuid();
     const opId = createUuid();
     const completedAt = nowIso();
@@ -470,7 +462,7 @@ export function useOfflineExecution() {
     if (!localPath) throw new Error('Photo path is not available.');
 
     const db = requireDb();
-    const capturedById = requireCurrentUserId();
+    const capturedById = await requireCurrentUserId();
     const id = createUuid();
     const opId = createUuid();
     const takenAt = nowIso();
@@ -524,7 +516,7 @@ export function useOfflineExecution() {
     if (!imageLocalPath) throw new Error('Signature image path is not available.');
 
     const db = requireDb();
-    const currentUserId = requireCurrentUserId();
+    const currentUserId = await requireCurrentUserId();
     const jobOrder = await prefetchedJobOrder(db, jobOrderId);
     if (jobOrder.execution_owner_id !== currentUserId) {
       throw new Error('Only the assigned execution owner can sign this job');

@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import Button from 'primevue/button';
 import Card from 'primevue/card';
+import Message from 'primevue/message';
 import ProgressSpinner from 'primevue/progressspinner';
 import { defineStore } from 'pinia';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { RouterLink } from 'vue-router';
+import { RouterLink, useRoute } from 'vue-router';
+import { authenticatedFetch } from '@/composables/useAuth';
+import { apiBase } from '@/composables/useOfflineExecution';
 
 type JobState =
   | 'DRAFT'
@@ -51,9 +54,6 @@ interface MobileSqlAdapter {
 interface MobileRuntime {
   marinex360?: {
     db?: MobileSqlAdapter;
-    auth?: {
-      accessToken?: string | null;
-    };
   };
 }
 
@@ -65,15 +65,6 @@ const JO_CACHE_SQL = `
 
 function mobileRuntime(): MobileRuntime {
   return globalThis as typeof globalThis & MobileRuntime;
-}
-
-function apiBase(): string {
-  return (import.meta.env.VITE_API_BASE ?? '/api/v1').replace(/\/$/, '');
-}
-
-function authHeaders(): HeadersInit {
-  const accessToken = mobileRuntime().marinex360?.auth?.accessToken;
-  return accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
 }
 
 function fromCacheRow(row: JoCacheRow): AssignedJobOrder {
@@ -100,10 +91,9 @@ async function loadFromJoCache(): Promise<AssignedJobOrder[]> {
 async function loadFromLiveEndpoint(): Promise<AssignedJobOrder[]> {
   // NEEDS: BE/mobile API wrapper: no apps/mobile/src/api/jobOrders.ts filtered-list function exists in-repo yet.
   // Real v1.0 signature is GET /job-orders; technician assignment and branch scoping are enforced server-side.
-  const response = await fetch(`${apiBase()}/job-orders`, {
+  const response = await authenticatedFetch(`${apiBase()}/job-orders`, {
     headers: {
       Accept: 'application/json',
-      ...authHeaders(),
     },
   });
 
@@ -200,6 +190,8 @@ const useAssignedJobsStore = defineStore('assignedJobs', () => {
 });
 
 const assignedJobsStore = useAssignedJobsStore();
+const route = useRoute();
+const mfaEnrollmentRequired = computed(() => route.query.mfaEnrollmentRequired === 'true');
 
 function handleOnlineStatusChange(): void {
   assignedJobsStore.setOnlineStatus();
@@ -246,6 +238,10 @@ onBeforeUnmount(() => {
     <p v-if="assignedJobsStore.source === 'cache'" class="assigned-jobs__notice">
       Showing saved assigned jobs.
     </p>
+
+    <Message v-if="mfaEnrollmentRequired" severity="warn" :closable="false">
+      Multi-factor authentication enrollment is still required for this account.
+    </Message>
 
     <div v-if="assignedJobsStore.errorMessage" class="assigned-jobs__error" role="alert">
       {{ assignedJobsStore.errorMessage }}

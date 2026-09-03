@@ -7,6 +7,7 @@ import Message from 'primevue/message';
 import ProgressSpinner from 'primevue/progressspinner';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useRoute } from 'vue-router';
+import { currentSessionSnapshot } from '@/composables/useAuth';
 import { currentUserDisplayName, useOfflineExecution } from '@/composables/useOfflineExecution';
 
 interface OwnerRow {
@@ -20,9 +21,6 @@ interface MobileSqlAdapter {
 interface MobileRuntime {
   marinex360?: {
     db?: MobileSqlAdapter;
-    auth?: {
-      userId?: string | null;
-    };
   };
 }
 
@@ -35,7 +33,7 @@ function db(): MobileSqlAdapter | null {
 }
 
 function currentUserId(): string | null {
-  return mobileRuntime().marinex360?.auth?.userId ?? null;
+  return currentSessionSnapshot()?.userId ?? null;
 }
 
 function strokeColor(): string {
@@ -68,7 +66,7 @@ const errorMessage = ref<string | null>(null);
 const successMessage = ref<string | null>(null);
 
 const form = reactive({
-  signerName: currentUserDisplayName(),
+  signerName: '',
   signerRole: '',
 });
 
@@ -229,7 +227,8 @@ async function submitSignature(): Promise<void> {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  form.signerName = await currentUserDisplayName();
   void loadOwnerGate();
   if (typeof window !== 'undefined') window.addEventListener('resize', resizeCanvas);
 });

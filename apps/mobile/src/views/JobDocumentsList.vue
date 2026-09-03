@@ -7,6 +7,8 @@ import Tag from 'primevue/tag';
 import { defineStore } from 'pinia';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
+import { authenticatedFetch, currentSessionSnapshot } from '@/composables/useAuth';
+import { apiBase } from '@/composables/useOfflineExecution';
 
 type DocumentOwnerType = 'JOB';
 type CertificateOwnerType = 'TECHNICIAN' | 'VESSEL';
@@ -78,10 +80,6 @@ interface OpenFileInput {
 interface MobileRuntime {
   marinex360?: {
     db?: MobileSqlAdapter;
-    auth?: {
-      accessToken?: string | null;
-      userId?: string | null;
-    };
     files?: {
       openCachedFile?(input: OpenFileInput): Promise<void>;
       fetchByS3Key?(input: OpenFileInput): Promise<void>;
@@ -102,28 +100,18 @@ function mobileRuntime(): MobileRuntime {
   return globalThis as typeof globalThis & MobileRuntime;
 }
 
-function apiBase(): string {
-  return (import.meta.env.VITE_API_BASE ?? '/api/v1').replace(/\/$/, '');
-}
-
 function isOnline(): boolean {
   return typeof navigator === 'undefined' ? true : navigator.onLine;
 }
 
 function currentUserId(): string | null {
-  return mobileRuntime().marinex360?.auth?.userId ?? null;
-}
-
-function authHeaders(): HeadersInit {
-  const accessToken = mobileRuntime().marinex360?.auth?.accessToken;
-  return accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
+  return currentSessionSnapshot()?.userId ?? null;
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${apiBase()}${path}`, {
+  const response = await authenticatedFetch(`${apiBase()}${path}`, {
     headers: {
       Accept: 'application/json',
-      ...authHeaders(),
     },
   });
 

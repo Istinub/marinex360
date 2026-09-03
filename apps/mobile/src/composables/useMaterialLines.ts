@@ -1,4 +1,5 @@
 import { readonly, ref } from 'vue';
+import { currentSessionSnapshot } from './useAuth.ts';
 
 type MaterialLineSource = 'FIELD';
 type MaterialLineSyncState = 'PENDING';
@@ -38,9 +39,6 @@ interface MobileSqlAdapter {
 interface MobileRuntime {
   marinex360?: {
     db?: MobileSqlAdapter;
-    auth?: {
-      userId?: string | null;
-    };
   };
 }
 
@@ -78,9 +76,8 @@ function requireDb(): MobileSqlAdapter {
 }
 
 function requireCurrentUserId(): string {
-  const userId = mobileRuntime().marinex360?.auth?.userId;
+  const userId = currentSessionSnapshot()?.userId;
   if (!userId) {
-    // NEEDS: Mobile auth adapter must expose the authenticated technician id for addedById.
     throw new Error('Current user is not available.');
   }
 
