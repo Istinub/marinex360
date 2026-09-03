@@ -4,10 +4,24 @@ import AssignedJobsList from '@/views/AssignedJobsList.vue';
 import ChecklistExecution from '@/views/ChecklistExecution.vue';
 import JobDetail from '@/views/JobDetail.vue';
 import JobDocumentsList from '@/views/JobDocumentsList.vue';
+import Login from '@/views/Login.vue';
 import MaterialLineForm from '@/views/MaterialLineForm.vue';
 import SignatureCapture from '@/views/SignatureCapture.vue';
+import { useAuth } from '@/composables/useAuth';
+
+declare module 'vue-router' {
+  interface RouteMeta {
+    public?: boolean;
+  }
+}
 
 const routes = [
+  {
+    path: '/login',
+    name: 'login',
+    component: Login,
+    meta: { public: true },
+  },
   {
     path: '/',
     component: MobileShell,
@@ -53,4 +67,18 @@ const routes = [
 export const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes,
+});
+
+router.beforeEach(async (to) => {
+  const session = await useAuth().currentSession();
+
+  if (!to.meta.public && !session) {
+    return { path: '/login', query: { redirect: to.fullPath } };
+  }
+
+  if (to.meta.public && session && to.path === '/login') {
+    return '/jobs';
+  }
+
+  return true;
 });

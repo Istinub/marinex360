@@ -1,4 +1,5 @@
-import { apiBase, authHeaders, type MobileSqlAdapter } from './useOfflineExecution.ts';
+import { authenticatedFetch, currentSessionSnapshot } from './useAuth.ts';
+import { apiBase, type MobileSqlAdapter } from './useOfflineExecution.ts';
 
 type WritableEntity = 'WorkLog' | 'Photo' | 'Observation' | 'ChecklistInstance' | 'MaterialLine' | 'ESignature';
 type OpAction = 'CREATE' | 'UPDATE';
@@ -94,9 +95,6 @@ export interface SyncOnceResult {
 interface MobileRuntime {
   marinex360?: {
     db?: MobileSqlAdapter;
-    auth?: {
-      userId?: string | null;
-    };
   };
 }
 
@@ -115,13 +113,14 @@ function requireDb(): MobileSqlAdapter {
 }
 
 function currentUserId(auth?: SyncAuth): string {
-  const userId = mobileRuntime().marinex360?.auth?.userId ?? auth?.userId;
+  const userId = currentSessionSnapshot()?.userId ?? auth?.userId;
   if (!userId) throw new Error('Current user is not available.');
   return userId;
 }
 
 export function currentSyncAuth(): SyncAuth {
-  return mobileRuntime().marinex360?.auth ?? {};
+  const session = currentSessionSnapshot();
+  return session ? { userId: session.userId, roles: session.roles, branch: session.branch } : {};
 }
 
 async function responseJson<T>(response: Response): Promise<T | Record<string, never>> {
@@ -135,12 +134,11 @@ async function responseJson<T>(response: Response): Promise<T | Record<string, n
 export function createSyncTransport(): SyncTransport {
   return {
     async batch(req) {
-      const response = await fetch(`${apiBase()}/sync/batch`, {
+      const response = await authenticatedFetch(`${apiBase()}/sync/batch`, {
         method: 'POST',
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
-          ...authHeaders(),
         },
         body: JSON.stringify(req),
       });
@@ -157,10 +155,9 @@ export function createSyncTransport(): SyncTransport {
     async assigned(query) {
       const qs = new URLSearchParams(query).toString();
       const path = qs ? `/sync/assigned?${qs}` : '/sync/assigned';
-      const response = await fetch(`${apiBase()}${path}`, {
+      const response = await authenticatedFetch(`${apiBase()}${path}`, {
         headers: {
           Accept: 'application/json',
-          ...authHeaders(),
         },
       });
       const body = await responseJson<AssignedPullResponse>(response);
