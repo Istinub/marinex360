@@ -48,9 +48,18 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
   app.get('/api/v1/job-orders', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('jobOrder:read')] }, async (req) => {
     const where: any = { ...scopeWhere(req.ctx), deletedAt: null };
     if (isTech(req.ctx.roles)) {
-      where.OR = [{ assignedTechnicianIds: { has: req.ctx.userId } }, { executionOwnerId: req.ctx.userId }];
+      where.OR = [
+        { assignedTechnicianIds: { has: req.ctx.userId } },
+        { executionOwnerId: req.ctx.userId },
+        { state: 'SCHEDULED', executionOwnerId: null },
+      ];
     }
-    return prisma.jobOrder.findMany({ where, orderBy: { createdAt: 'desc' } });
+    const jos = await prisma.jobOrder.findMany({ where, orderBy: { createdAt: 'desc' } });
+    if (!isTech(req.ctx.roles)) return jos;
+    return jos.map((jo) => ({
+      ...jo,
+      isAvailable: jo.state === 'SCHEDULED' && jo.executionOwnerId == null,
+    }));
   });
 
   // GET by id (cross-branch -> NOT_FOUND; technician IDOR -> NOT_FOUND, RBAC-IDOR-1)
@@ -150,6 +159,34 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
       const res = await tx.jobOrder.updateMany({ where: { id, version }, data: { assignedTechnicianIds: technicianIds, executionOwnerId, version: { increment: 1 } } });
       if (res.count === 0) throw new AppError('VERSION_CONFLICT');
       await appendAudit(tx, req.ctx, { entityType: 'JobOrder', entityId: id, action: 'ASSIGN', diff: { technicianIds, executionOwnerId } });
+      return tx.jobOrder.findUnique({ where: { id } });
+    });
+  });
+
+  // SELF-ASSIGN (D-070): a technician claims an available SCHEDULED job in their own branch.
+  app.post('/api/v1/job-orders/:id/self-assign', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('jobOrder:selfAssign')] }, async (req) => {
+    const { id } = req.params as any;
+    const { version } = (req.body ?? {}) as any;
+    if (typeof version !== 'number') throw new AppError('VALIDATION_ERROR', 'version required');
+    return prisma.$transaction(async (tx) => {
+      const jo = await tx.jobOrder.findFirst({ where: { id, deletedAt: null } });
+      if (!jo) throw new AppError('NOT_FOUND');
+      assertBranchAccess(req.ctx, jo.branch);
+      if (jo.state !== 'SCHEDULED') {
+        throw new AppError('STATE_TRANSITION_INVALID', 'only a SCHEDULED job can be self-assigned');
+      }
+      if (jo.executionOwnerId != null) {
+        throw new AppError('VERSION_CONFLICT');
+      }
+      const technicianIds = (jo.assignedTechnicianIds ?? []).includes(req.ctx.userId)
+        ? jo.assignedTechnicianIds
+        : [...(jo.assignedTechnicianIds ?? []), req.ctx.userId];
+      const res = await tx.jobOrder.updateMany({
+        where: { id, version, executionOwnerId: null },
+        data: { assignedTechnicianIds: technicianIds, executionOwnerId: req.ctx.userId, version: { increment: 1 } },
+      });
+      if (res.count === 0) throw new AppError('VERSION_CONFLICT');
+      await appendAudit(tx, req.ctx, { entityType: 'JobOrder', entityId: id, action: 'SELF_ASSIGN', diff: { executionOwnerId: req.ctx.userId } });
       return tx.jobOrder.findUnique({ where: { id } });
     });
   });

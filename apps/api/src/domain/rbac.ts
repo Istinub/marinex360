@@ -10,7 +10,7 @@ export type Action =
   | 'client:read' | 'client:write'
   | 'contact:read' | 'contact:write'
   | 'vessel:read' | 'vessel:write'
-  | 'jobOrder:read' | 'jobOrder:create' | 'jobOrder:updateHeader' | 'jobOrder:assign'
+  | 'jobOrder:read' | 'jobOrder:create' | 'jobOrder:updateHeader' | 'jobOrder:assign' | 'jobOrder:selfAssign'
   | 'variation:create' | 'variation:approve' | 'variation:reject'
   | 'review:read' | 'review:resolve'
   | 'invoice:read' | 'invoice:create' | 'invoice:issue' | 'invoice:recordPayment'
@@ -61,7 +61,7 @@ const MATRIX: Record<Role, ReadonlySet<Action>> = {
   // Technician: reads ONLY their assigned jobs (row-level IDOR check is separate, RBAC-IDOR-1);
   // adds field materials (OD-01). Execution-state transitions are execution-owner-gated in JOSM,
   // not role-gated here. [INFERRED where not covered by contract]
-  TECHNICIAN: new Set<Action>(['jobOrder:read', 'material:write']),
+  TECHNICIAN: new Set<Action>(['jobOrder:read', 'jobOrder:selfAssign', 'material:write']),
 };
 
 export function can(roles: Role[], action: Action): boolean {
