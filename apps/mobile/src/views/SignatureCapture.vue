@@ -7,6 +7,7 @@ import Message from 'primevue/message';
 import ProgressSpinner from 'primevue/progressspinner';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useRoute } from 'vue-router';
+import MobileBackLink from '@/components/MobileBackLink.vue';
 import { currentSessionSnapshot } from '@/composables/useAuth';
 import { currentUserDisplayName, useOfflineExecution } from '@/composables/useOfflineExecution';
 
@@ -242,6 +243,7 @@ onBeforeUnmount(() => {
   <main class="signature-capture" aria-labelledby="signature-title">
     <header class="signature-capture__header">
       <div>
+        <MobileBackLink :to="`/jobs/${jobOrderId}`" label="Return" />
         <p class="signature-capture__eyebrow">Signature</p>
         <h1 id="signature-title" class="signature-capture__title">Capture sign-off</h1>
       </div>

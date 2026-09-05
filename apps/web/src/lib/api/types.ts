@@ -93,6 +93,9 @@ export interface JobOrder {
   assignedTechnicianIds: string[];
   executionOwnerId?: string | null;
   plannedStartDate?: string | null;
+  deletedAt?: string | null;
+  archivedAt?: string | null;
+  purgedAt?: string | null;
   version: number;
   variations: Variation[];
 }

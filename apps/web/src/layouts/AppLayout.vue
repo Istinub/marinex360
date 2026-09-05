@@ -1,19 +1,38 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { RouterLink, RouterView, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 
-const navItems = [
-  { label: 'Dashboard', to: '/dashboard' },
-  { label: 'Clients', to: '/clients' },
-  { label: 'Vessels', to: '/vessels' },
-  { label: 'Job Orders', to: '/job-orders' },
-] as const;
+interface NavItem {
+  label: string;
+  to: string;
+  internal?: boolean;
+  client?: boolean;
+  roles?: string[];
+}
+
+const navItems: NavItem[] = [
+  { label: 'Dashboard', to: '/dashboard', internal: true },
+  { label: 'Clients', to: '/clients', internal: true },
+  { label: 'Vessels', to: '/vessels', internal: true },
+  { label: 'Job Orders', to: '/job-orders', internal: true },
+  { label: 'Trash', to: '/job-orders/trash', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
+  { label: 'Archive', to: '/job-orders/archive', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
+  { label: 'My dashboard', to: '/client-dashboard', client: true },
+  { label: 'Job requests', to: '/job-requests', internal: true, roles: ['OPS_SUPERVISOR', 'DIRECTOR', 'SYSTEM_ADMIN'] },
+];
 
 const auth = useAuthStore();
 const router = useRouter();
 const tkmrLockupSrc = `${import.meta.env.BASE_URL}tkmr_new.png`;
 const isUserMenuOpen = ref(false);
+const visibleNavItems = computed(() => navItems.filter((item) => {
+  const roles = auth.identity?.roles ?? [];
+  if (item.client) return roles.includes('CLIENT');
+  if (item.roles) return item.roles.some((role) => roles.includes(role));
+  if (item.internal) return !roles.includes('CLIENT');
+  return true;
+}));
 
 function toggleUserMenu(): void {
   isUserMenuOpen.value = !isUserMenuOpen.value;
@@ -67,7 +86,7 @@ function logout(): void {
       <aside class="app-layout__sidebar" aria-label="Primary">
         <nav class="app-layout__nav">
           <RouterLink
-            v-for="item in navItems"
+            v-for="item in visibleNavItems"
             :key="item.label"
             class="app-layout__nav-item"
             :to="item.to"

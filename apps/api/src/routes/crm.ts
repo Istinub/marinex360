@@ -3,7 +3,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { PrismaClient } from '@prisma/client';
 import { AppError } from '../lib/errors.js';
-import { scopeWhere, assertBranchAccess, branchForCreate } from '../services/branchScope.js';
+import { scopeWhere, assertBranchAccess, branchForCreate, clientIdForUser } from '../services/branchScope.js';
 import { isCrossBranch } from '../domain/rbac.js';
 import { appendAudit } from '../services/audit.js';
 
@@ -19,6 +19,17 @@ async function assertContactAccessible(prisma: PrismaClient, ctx: { roles: strin
 
 export function crmRoutes(app: FastifyInstance, prisma: PrismaClient): void {
   const w = (a: string) => ({ preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction(a as any)] });
+
+  app.get('/api/v1/technicians', w('jobOrder:assign'), async (req) =>
+    prisma.user.findMany({
+      where: {
+        ...scopeWhere(req.ctx),
+        active: true,
+        roles: { has: 'TECHNICIAN' },
+      },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    }));
 
   // ---- Contacts (personal data, OD-03) ----
   app.post('/api/v1/contacts', w('contact:write'), async (req, reply) => {
@@ -69,14 +80,17 @@ export function crmRoutes(app: FastifyInstance, prisma: PrismaClient): void {
     return reply.status(201).send(client);
   });
 
-  app.get('/api/v1/clients', w('client:read'), async (req) =>
-    prisma.client.findMany({ where: { ...scopeWhere(req.ctx), deletedAt: null }, orderBy: { name: 'asc' } }));
+  app.get('/api/v1/clients', w('client:read'), async (req) => {
+    const clientId = await clientIdForUser(prisma, req.ctx);
+    return prisma.client.findMany({ where: { ...(clientId ? { id: clientId } : scopeWhere(req.ctx)), deletedAt: null }, orderBy: { name: 'asc' } });
+  });
 
   app.get('/api/v1/clients/:id', w('client:read'), async (req) => {
     const { id } = req.params as any;
     const c = await prisma.client.findFirst({ where: { id, deletedAt: null }, include: { primaryContact: true, vessels: { where: { deletedAt: null } } } });
     if (!c) throw new AppError('NOT_FOUND');
     assertBranchAccess(req.ctx, c.branch);
+    if (req.ctx.roles.includes('CLIENT' as any) && (await clientIdForUser(prisma, req.ctx)) !== c.id) throw new AppError('NOT_FOUND');
     return c;
   });
 
@@ -118,7 +132,9 @@ export function crmRoutes(app: FastifyInstance, prisma: PrismaClient): void {
   // is for direct-ID access, per RBAC-SCOPE-2).
   app.get('/api/v1/vessels', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('vessel:read')] }, async (req) => {
     const { clientId } = (req.query ?? {}) as any;
-    const where: any = { deletedAt: null, client: { ...scopeWhere(req.ctx) } };
+    const linkedClientId = await clientIdForUser(prisma, req.ctx);
+    const where: any = { deletedAt: null, client: { ...(linkedClientId ? { id: linkedClientId } : scopeWhere(req.ctx)) } };
+    if (linkedClientId && clientId && clientId !== linkedClientId) return [];
     if (clientId) where.clientId = clientId;
     return prisma.vessel.findMany({ where, orderBy: { name: 'asc' } });
   });
@@ -145,6 +161,7 @@ export function crmRoutes(app: FastifyInstance, prisma: PrismaClient): void {
     const vessel = await prisma.vessel.findUnique({ where: { id }, include: { client: true } });
     if (!vessel) throw new AppError('NOT_FOUND');
     assertBranchAccess(req.ctx, vessel.client.branch);
+    if (req.ctx.roles.includes('CLIENT' as any) && (await clientIdForUser(prisma, req.ctx)) !== vessel.clientId) throw new AppError('NOT_FOUND');
     return prisma.jobOrder.findMany({ where: { vesselId: id, ...scopeWhere(req.ctx), deletedAt: null }, orderBy: { createdAt: 'desc' } });
   });
 }

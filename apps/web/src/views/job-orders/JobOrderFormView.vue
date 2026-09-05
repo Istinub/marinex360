@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import Button from 'primevue/button';
+import MultiSelect from 'primevue/multiselect';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import FieldError from '@/components/common/FieldError.vue';
 import MonoText from '@/components/common/MonoText.vue';
 import { ApiResponseError } from '@/lib/api/errors';
+import { JOB_ORDER_CATEGORY_OPTIONS } from '@/lib/jobOrderCategories';
 import { useClientsStore } from '@/stores/clients';
 import { useJobOrdersStore, type JobOrderCreateInput } from '@/stores/jobOrders';
 
@@ -18,8 +20,6 @@ type JobOrderField =
   | 'externalRfqRef'
   | 'quotedAmountMinor'
   | 'quotedCurrency';
-
-const serviceCategoryOptions = ['mechanical', 'electrical', 'inspection'] as const;
 
 const router = useRouter();
 const clientsStore = useClientsStore();
@@ -177,11 +177,16 @@ onMounted(async () => {
 
       <label class="auth-field" for="jo-service-categories-create">
         <span>Service categories</span>
-        <select id="jo-service-categories-create" v-model="form.serviceCategories" class="auth-input record-form__multi-select" multiple>
-          <option v-for="category in serviceCategoryOptions" :key="category" :value="category">
-            {{ category }}
-          </option>
-        </select>
+        <MultiSelect
+          id="jo-service-categories-create"
+          v-model="form.serviceCategories"
+          class="record-form__select"
+          :options="JOB_ORDER_CATEGORY_OPTIONS"
+          option-label="label"
+          option-value="value"
+          display="chip"
+          placeholder="Select categories"
+        />
         <FieldError :message="fieldErrors.serviceCategories" />
       </label>
 

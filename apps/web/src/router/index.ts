@@ -12,16 +12,23 @@ import ContactEditView from '@/views/contacts/ContactEditView.vue';
 import DashboardView from '@/views/dashboard/DashboardView.vue';
 import JobOrderDetailView from '@/views/job-orders/JobOrderDetailView.vue';
 import JobOrderFormView from '@/views/job-orders/JobOrderFormView.vue';
+import JobOrderLifecycleListView from '@/views/job-orders/JobOrderLifecycleListView.vue';
 import JobOrderListView from '@/views/job-orders/JobOrderListView.vue';
 import VesselFormView from '@/views/vessels/VesselFormView.vue';
 import VesselListView from '@/views/vessels/VesselListView.vue';
 import VesselServiceHistoryView from '@/views/vessels/VesselServiceHistoryView.vue';
+import ServiceRequestView from '@/views/public/ServiceRequestView.vue';
+import ClientDashboardView from '@/views/client/ClientDashboardView.vue';
+import JobRequestDetailView from '@/views/job-requests/JobRequestDetailView.vue';
+import JobRequestQueueView from '@/views/job-requests/JobRequestQueueView.vue';
 
 declare module 'vue-router' {
   interface RouteMeta {
     public?: boolean;
     requireAuth?: boolean;
     requireMfaEnrolled?: boolean;
+    roles?: string[];
+    lifecycleBucket?: 'trash' | 'archive';
   }
 }
 
@@ -39,6 +46,12 @@ const routes = [
     meta: { public: true },
   },
   {
+    path: '/request-service',
+    name: 'public-service-request',
+    component: ServiceRequestView,
+    meta: { public: true },
+  },
+  {
     path: '/',
     component: AppLayout,
     meta: { requireAuth: true },
@@ -52,6 +65,24 @@ const routes = [
         name: 'dashboard',
         component: DashboardView,
         meta: { requireAuth: true, requireMfaEnrolled: true },
+      },
+      {
+        path: 'client-dashboard',
+        name: 'client-dashboard',
+        component: ClientDashboardView,
+        meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['CLIENT'] },
+      },
+      {
+        path: 'job-requests',
+        name: 'job-requests',
+        component: JobRequestQueueView,
+        meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['OPS_SUPERVISOR', 'DIRECTOR', 'SYSTEM_ADMIN'] },
+      },
+      {
+        path: 'job-requests/:id',
+        name: 'job-request-detail',
+        component: JobRequestDetailView,
+        meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['OPS_SUPERVISOR', 'DIRECTOR', 'SYSTEM_ADMIN'] },
       },
       {
         path: 'clients',
@@ -90,10 +121,22 @@ const routes = [
         meta: { requireAuth: true, requireMfaEnrolled: true },
       },
       {
+        path: 'job-orders/trash',
+        name: 'job-orders-trash',
+        component: JobOrderLifecycleListView,
+        meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'], lifecycleBucket: 'trash' },
+      },
+      {
+        path: 'job-orders/archive',
+        name: 'job-orders-archive',
+        component: JobOrderLifecycleListView,
+        meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'], lifecycleBucket: 'archive' },
+      },
+      {
         path: 'job-orders/new',
         name: 'job-order-new',
         component: JobOrderFormView,
-        meta: { requireAuth: true, requireMfaEnrolled: true },
+        meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR', 'OPS_SUPERVISOR'] },
       },
       {
         path: 'job-orders/:id',
@@ -137,7 +180,7 @@ export const router = createRouter({
 router.beforeEach((to) => {
   const auth = useAuthStore();
 
-  if (to.meta.public && auth.isAuthenticated) {
+  if (to.meta.public && auth.isAuthenticated && to.path === '/login') {
     return auth.mfaEnrollmentRequired ? '/mfa/enroll' : '/clients';
   }
 
@@ -147,6 +190,14 @@ router.beforeEach((to) => {
 
   if (to.meta.requireMfaEnrolled && auth.mfaEnrollmentRequired) {
     return '/mfa/enroll';
+  }
+
+  if (to.meta.roles && !to.meta.roles.some((role) => auth.identity?.roles.includes(role))) {
+    return auth.identity?.roles.includes('CLIENT') ? '/client-dashboard' : '/dashboard';
+  }
+
+  if (auth.identity?.roles.includes('CLIENT') && to.path !== '/client-dashboard' && to.path !== '/request-service') {
+    return '/client-dashboard';
   }
 
   return true;

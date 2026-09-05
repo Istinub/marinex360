@@ -22,16 +22,31 @@ export interface JobOrderPatchInput {
   version: number;
   scopeSummary?: string;
   port?: string | null;
-  serviceCategories?: string[];
   plannedStartDate?: string | null;
   externalQuoteRef?: string | null;
   externalRfqRef?: string | null;
+}
+
+export interface JobOrderCategoriesInput {
+  serviceCategories: string[];
+  version: number;
 }
 
 export interface JobOrderTransitionInput {
   to: JobState;
   reason?: string;
   version: number;
+}
+
+export interface JobOrderAssignInput {
+  technicianIds: string[];
+  executionOwnerId: string;
+  version: number;
+}
+
+export interface TechnicianLookup {
+  id: string;
+  name: string;
 }
 
 export const useJobOrdersStore = defineStore('jobOrders', () => {
@@ -49,6 +64,14 @@ export const useJobOrdersStore = defineStore('jobOrders', () => {
     } finally {
       isLoading.value = false;
     }
+  }
+
+  async function loadTrashedJobOrders(): Promise<JobOrder[]> {
+    return get<JobOrder[]>('/job-orders/trash');
+  }
+
+  async function loadArchivedJobOrders(): Promise<JobOrder[]> {
+    return get<JobOrder[]>('/job-orders/archive');
   }
 
   async function loadJobOrder(id: string): Promise<JobOrder> {
@@ -69,11 +92,53 @@ export const useJobOrdersStore = defineStore('jobOrders', () => {
     return updated;
   }
 
+  async function updateJobOrderCategories(id: string, input: JobOrderCategoriesInput): Promise<JobOrder> {
+    const updated = await patch<JobOrder, JobOrderCategoriesInput>(`/job-orders/${id}/categories`, input);
+    jobOrders.value = jobOrders.value.map((jobOrder) => (jobOrder.id === updated.id ? updated : jobOrder));
+    if (selectedJobOrder.value?.id === updated.id) selectedJobOrder.value = updated;
+    return updated;
+  }
+
   async function transitionJobOrder(id: string, input: JobOrderTransitionInput): Promise<JobOrder> {
     const updated = await post<JobOrder, JobOrderTransitionInput>(`/job-orders/${id}/transition`, input);
     jobOrders.value = jobOrders.value.map((jobOrder) => (jobOrder.id === updated.id ? updated : jobOrder));
     if (selectedJobOrder.value?.id === updated.id) selectedJobOrder.value = updated;
     return updated;
+  }
+
+  async function assignJobOrder(id: string, input: JobOrderAssignInput): Promise<JobOrder> {
+    const updated = await post<JobOrder, JobOrderAssignInput>(`/job-orders/${id}/assign`, input);
+    jobOrders.value = jobOrders.value.map((jobOrder) => (jobOrder.id === updated.id ? updated : jobOrder));
+    if (selectedJobOrder.value?.id === updated.id) selectedJobOrder.value = updated;
+    return updated;
+  }
+
+  async function deleteJobOrder(id: string): Promise<JobOrder> {
+    const updated = await post<JobOrder, Record<string, never>>(`/job-orders/${id}/delete`, {});
+    jobOrders.value = jobOrders.value.filter((jobOrder) => jobOrder.id !== updated.id);
+    if (selectedJobOrder.value?.id === updated.id) selectedJobOrder.value = updated;
+    return updated;
+  }
+
+  async function archiveJobOrder(id: string): Promise<JobOrder> {
+    const updated = await post<JobOrder, Record<string, never>>(`/job-orders/${id}/archive`, {});
+    jobOrders.value = jobOrders.value.filter((jobOrder) => jobOrder.id !== updated.id);
+    if (selectedJobOrder.value?.id === updated.id) selectedJobOrder.value = updated;
+    return updated;
+  }
+
+  async function purgeJobOrder(id: string): Promise<void> {
+    await post<{ purged: boolean }, Record<string, never>>(`/job-orders/${id}/purge`, {});
+    jobOrders.value = jobOrders.value.filter((jobOrder) => jobOrder.id !== id);
+    if (selectedJobOrder.value?.id === id) selectedJobOrder.value = null;
+  }
+
+  async function emptyTrash(): Promise<{ purged: number }> {
+    return post<{ purged: number }, Record<string, never>>('/job-orders/trash/empty', {});
+  }
+
+  function loadTechnicians(): Promise<TechnicianLookup[]> {
+    return get<TechnicianLookup[]>('/technicians');
   }
 
   return {
@@ -82,9 +147,18 @@ export const useJobOrdersStore = defineStore('jobOrders', () => {
     isLoading,
     sortedJobOrders,
     loadJobOrders,
+    loadTrashedJobOrders,
+    loadArchivedJobOrders,
     loadJobOrder,
     createJobOrder,
     updateJobOrder,
+    updateJobOrderCategories,
     transitionJobOrder,
+    assignJobOrder,
+    deleteJobOrder,
+    archiveJobOrder,
+    purgeJobOrder,
+    emptyTrash,
+    loadTechnicians,
   };
 });

@@ -14,6 +14,7 @@ import { generateInvoicePdf } from "./jobs/generateInvoicePdf.js";
 import { sendInvoiceEmail } from "./jobs/sendInvoiceEmail.js";
 import { reconcileOverdueInvoices } from "./jobs/overdueReconciliation.js";
 import { reconcileCertificateExpiryAlerts } from "./jobs/certificateExpiryAlert.js";
+import { reconcileJobOrderLifecycle } from "./jobs/jobOrderLifecycle.js";
 
 const redisUrl = new URL(process.env.REDIS_URL ?? "redis://localhost:6379");
 const connection = {
@@ -101,3 +102,24 @@ const certificateExpiryWorker = new Worker(
   { connection },
 );
 certificateExpiryWorker.on("failed", (_job, err) => console.error("[worker] certificate expiry alert job failed", err));
+
+const jobOrderLifecycleQueue = new Queue("job-order-lifecycle-reconciliation", { connection });
+await jobOrderLifecycleQueue.add(
+  "reconcile",
+  {},
+  {
+    repeat: { every: 24 * 60 * 60 * 1000 },
+    jobId: "job-order-lifecycle-recurring",
+  },
+);
+
+const jobOrderLifecycleWorker = new Worker(
+  "job-order-lifecycle-reconciliation",
+  async () => {
+    const result = await reconcileJobOrderLifecycle();
+    console.log(`[worker] job order lifecycle: ${result.purged} purged, ${result.archived} archived`);
+    return result;
+  },
+  { connection },
+);
+jobOrderLifecycleWorker.on("failed", (_job, err) => console.error("[worker] job order lifecycle job failed", err));

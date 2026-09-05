@@ -26,6 +26,11 @@ async function main() {
 
   const clientA = await prisma.client.create({ data: { branch: 'SG', name: 'Pacific Lines Pte Ltd', address: '1 Maritime Sq, Singapore', creditTerms: 'NET30', primaryContactId: contactA.id } });
   const clientB = await prisma.client.create({ data: { branch: 'SG', name: 'Straits Bulk Carriers', address: '9 Keppel Rd, Singapore', creditTerms: 'NET45', primaryContactId: contactB.id } });
+  await prisma.user.upsert({
+    where: { email: 'client@tkmr.local' },
+    update: { clientId: clientA.id, roles: ['CLIENT'], branch: 'SG', active: true, mfaEnrolled: false },
+    create: { email: 'client@tkmr.local', name: 'Pacific Client', passwordHash: pwHash, roles: ['CLIENT'], branch: 'SG', clientId: clientA.id, mfaEnrolled: false },
+  });
 
   const vesselA = await prisma.vessel.create({ data: { clientId: clientA.id, imoNumber: '9251986', name: 'MV Pacific Dawn', type: 'Bulk Carrier', flag: 'SG', classification: 'ABS' } });
   const vesselB = await prisma.vessel.create({ data: { clientId: clientB.id, imoNumber: '9411406', name: 'MV Straits Pioneer', type: 'Tanker', flag: 'SG', classification: 'DNV' } });

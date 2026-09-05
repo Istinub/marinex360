@@ -4,6 +4,7 @@ import Column from 'primevue/column';
 import DataTable from 'primevue/datatable';
 import { onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import BackLink from '@/components/common/BackLink.vue';
 import MonoText from '@/components/common/MonoText.vue';
 import NotFoundState from '@/components/common/NotFoundState.vue';
 import { ApiResponseError } from '@/lib/api/errors';
@@ -46,7 +47,7 @@ onMounted(async () => {
     <template v-else-if="client">
       <header class="crm-page__header">
         <div>
-          <p class="crm-page__eyebrow">Client</p>
+          <BackLink to="/clients" label="Clients" />
           <h1 id="client-title" class="crm-page__title">{{ client.name }}</h1>
         </div>
 

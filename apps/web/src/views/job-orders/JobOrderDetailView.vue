@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import Button from 'primevue/button';
+import MultiSelect from 'primevue/multiselect';
+import Select from 'primevue/select';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
+import BackLink from '@/components/common/BackLink.vue';
 import FieldError from '@/components/common/FieldError.vue';
 import MaterialLineRow from '@/components/common/MaterialLineRow.vue';
 import MonoText from '@/components/common/MonoText.vue';
@@ -9,13 +12,15 @@ import NotFoundState from '@/components/common/NotFoundState.vue';
 import VersionConflictDialog from '@/components/common/VersionConflictDialog.vue';
 import { post } from '@/lib/api/client';
 import { ApiResponseError } from '@/lib/api/errors';
+import { JOB_ORDER_CATEGORY_OPTIONS } from '@/lib/jobOrderCategories';
 import type { JobOrder, JobState, Variation } from '@/lib/api/types';
 import { formatMoney } from '@/lib/money';
 import { useAuthStore } from '@/stores/auth';
-import { useJobOrdersStore, type JobOrderPatchInput } from '@/stores/jobOrders';
+import { useJobOrdersStore, type JobOrderAssignInput, type JobOrderCategoriesInput, type JobOrderPatchInput, type TechnicianLookup } from '@/stores/jobOrders';
 
-type HeaderField = 'scopeSummary' | 'port' | 'serviceCategories' | 'plannedStartDate' | 'externalQuoteRef' | 'externalRfqRef';
-type ConflictMode = 'header' | 'transition';
+type HeaderField = 'scopeSummary' | 'port' | 'plannedStartDate' | 'externalQuoteRef' | 'externalRfqRef';
+type AssignmentField = 'technicianIds' | 'executionOwnerId';
+type ConflictMode = 'header' | 'assignment' | 'categories' | 'transition';
 type TransitionKind = 'forward' | 'side' | 'resume' | 'reject';
 type VariationDecision = 'approve' | 'reject';
 type RoleGate = { type: 'roles'; roles: string[] };
@@ -50,6 +55,7 @@ interface MaterialLineDraft {
 }
 
 const route = useRoute();
+const router = useRouter();
 const auth = useAuthStore();
 const jobOrdersStore = useJobOrdersStore();
 const jobOrderId = computed(() => String(route.params.id));
@@ -79,18 +85,37 @@ const pendingVariationDecision = ref<VariationDecision | null>(null);
 const form = reactive<Record<HeaderField, string>>({
   scopeSummary: '',
   port: '',
-  serviceCategories: '',
   plannedStartDate: '',
   externalQuoteRef: '',
   externalRfqRef: '',
 });
+const categoryForm = reactive({
+  serviceCategories: [] as string[],
+});
+const assignmentForm = reactive<{
+  technicianIds: string[];
+  executionOwnerId: string;
+}>({
+  technicianIds: [],
+  executionOwnerId: '',
+});
+const assignmentFieldErrors = reactive<Partial<Record<AssignmentField, string>>>({});
+const assignmentError = ref<string | null>(null);
+const assignmentSuccess = ref<string | null>(null);
+const categoryError = ref<string | null>(null);
+const categorySuccess = ref<string | null>(null);
+const lifecycleError = ref<string | null>(null);
+const technicians = ref<TechnicianLookup[]>([]);
+const techniciansError = ref<string | null>(null);
+const techniciansLoading = ref(false);
 
 const officeRoles = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN', 'DIRECTOR'];
-const financeRoles = ['FINANCE', 'SYSTEM_ADMIN'];
+const financeRoles = ['FINANCE', 'SYSTEM_ADMIN', 'DIRECTOR'];
 const cancelRoles = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN', 'DIRECTOR'];
 const variationCreateRoles = ['SYSTEM_ADMIN', 'OPS_SUPERVISOR'];
 const variationApproveRoles = ['DIRECTOR', 'SYSTEM_ADMIN'];
 const variationRejectRoles = ['DIRECTOR', 'SYSTEM_ADMIN'];
+const lifecycleRoles = ['DIRECTOR', 'SYSTEM_ADMIN'];
 const josmRules: JosmRule[] = [
   { from: 'DRAFT', to: 'SCHEDULED', gate: { type: 'roles', roles: officeRoles }, requiresReason: false, kind: 'forward' },
   { from: 'SCHEDULED', to: 'IN_PROGRESS', gate: { type: 'execOwner' }, requiresReason: false, kind: 'forward' },
@@ -110,9 +135,19 @@ const josmRules: JosmRule[] = [
 ];
 
 const roles = computed(() => auth.identity?.roles ?? []);
+const canAssignJobOrder = computed(() =>
+  Boolean(jobOrder.value)
+  && roles.value.some((role) => officeRoles.includes(role))
+  && !['IN_PROGRESS', 'PENDING_REVIEW', 'COMPLETED', 'INVOICED', 'CLOSED'].includes(jobOrder.value?.state ?? ''),
+);
+const selectedTechnicians = computed(() => {
+  const selectedIds = new Set(assignmentForm.technicianIds);
+  return technicians.value.filter((technician) => selectedIds.has(technician.id));
+});
 const canCreateVariation = computed(() => roles.value.some((role) => variationCreateRoles.includes(role)));
 const canApproveVariation = computed(() => roles.value.some((role) => variationApproveRoles.includes(role)));
 const canRejectVariation = computed(() => roles.value.some((role) => variationRejectRoles.includes(role)));
+const canManageLifecycle = computed(() => roles.value.some((role) => lifecycleRoles.includes(role)));
 const isHeaderEditable = computed(() => jobOrder.value?.state === 'DRAFT' || jobOrder.value?.state === 'SCHEDULED');
 const approvedVariationAmountMinor = computed(() =>
   variations.value
@@ -204,12 +239,28 @@ function dateInputValue(value?: string | null): string {
   return new Date(value).toISOString().slice(0, 10);
 }
 
+function technicianName(id: string): string {
+  return technicians.value.find((technician) => technician.id === id)?.name ?? id;
+}
+
+function assignedTechnicianNames(jobOrder: JobOrder): string {
+  return jobOrder.assignedTechnicianIds.length
+    ? jobOrder.assignedTechnicianIds.map(technicianName).join(', ')
+    : '—';
+}
+
+function executionOwnerName(jobOrder: JobOrder): string {
+  return jobOrder.executionOwnerId ? technicianName(jobOrder.executionOwnerId) : '—';
+}
+
 function applyJobOrder(nextJobOrder: JobOrder, overwriteForm: boolean): void {
   jobOrder.value = nextJobOrder;
   if (!overwriteForm) return;
+  assignmentForm.technicianIds = [...nextJobOrder.assignedTechnicianIds];
+  assignmentForm.executionOwnerId = nextJobOrder.executionOwnerId ?? '';
+  categoryForm.serviceCategories = [...nextJobOrder.serviceCategories];
   form.scopeSummary = nextJobOrder.scopeSummary;
   form.port = nextJobOrder.port ?? '';
-  form.serviceCategories = nextJobOrder.serviceCategories.join(', ');
   form.plannedStartDate = dateInputValue(nextJobOrder.plannedStartDate);
   form.externalQuoteRef = nextJobOrder.externalQuoteRef ?? '';
   form.externalRfqRef = nextJobOrder.externalRfqRef ?? '';
@@ -221,15 +272,129 @@ function headerPayload(): JobOrderPatchInput {
     version: jobOrder.value.version,
     scopeSummary: form.scopeSummary.trim(),
     port: form.port.trim() || null,
-    serviceCategories: form.serviceCategories.split(',').map((value) => value.trim()).filter(Boolean),
     plannedStartDate: form.plannedStartDate ? new Date(form.plannedStartDate).toISOString() : null,
     externalQuoteRef: form.externalQuoteRef.trim() || null,
     externalRfqRef: form.externalRfqRef.trim() || null,
   };
 }
 
+function categoryPayload(): JobOrderCategoriesInput {
+  if (!jobOrder.value) throw new Error('Job order is not loaded.');
+  return {
+    version: jobOrder.value.version,
+    serviceCategories: [...categoryForm.serviceCategories],
+  };
+}
+
 function clearFieldErrors(): void {
   for (const key of Object.keys(fieldErrors) as HeaderField[]) delete fieldErrors[key];
+}
+
+function clearAssignmentErrors(): void {
+  for (const key of Object.keys(assignmentFieldErrors) as AssignmentField[]) delete assignmentFieldErrors[key];
+}
+
+function syncExecutionOwnerSelection(): void {
+  if (assignmentForm.executionOwnerId && !assignmentForm.technicianIds.includes(assignmentForm.executionOwnerId)) {
+    assignmentForm.executionOwnerId = '';
+  }
+}
+
+function assignmentPayload(): JobOrderAssignInput | null {
+  if (!jobOrder.value) return null;
+  clearAssignmentErrors();
+  assignmentError.value = null;
+  assignmentSuccess.value = null;
+
+  const technicianIds = [...assignmentForm.technicianIds];
+  const executionOwnerId = assignmentForm.executionOwnerId;
+  if (technicianIds.length === 0) assignmentFieldErrors.technicianIds = 'Enter at least one technician ID.';
+  if (!executionOwnerId) assignmentFieldErrors.executionOwnerId = 'Execution owner is required.';
+  if (executionOwnerId && !technicianIds.includes(executionOwnerId)) {
+    assignmentFieldErrors.executionOwnerId = 'Execution owner must be included in technician IDs.';
+  }
+
+  if (Object.keys(assignmentFieldErrors).length > 0) return null;
+  return { technicianIds, executionOwnerId, version: jobOrder.value.version };
+}
+
+async function loadTechnicianLookup(): Promise<void> {
+  if (!roles.value.some((role) => officeRoles.includes(role))) return;
+  techniciansLoading.value = true;
+  techniciansError.value = null;
+  try {
+    technicians.value = await jobOrdersStore.loadTechnicians();
+  } catch (error) {
+    techniciansError.value = error instanceof ApiResponseError ? error.message : 'Unable to load technicians.';
+  } finally {
+    techniciansLoading.value = false;
+  }
+}
+
+async function saveAssignment(): Promise<void> {
+  const payload = assignmentPayload();
+  if (!jobOrder.value || !payload) return;
+
+  isSaving.value = true;
+  try {
+    const updated = await jobOrdersStore.assignJobOrder(jobOrderId.value, payload);
+    applyJobOrder(updated, true);
+    assignmentSuccess.value = 'Assignment saved.';
+  } catch (error) {
+    if (error instanceof ApiResponseError) {
+      if (error.code === 'VERSION_CONFLICT') {
+        conflictMode.value = 'assignment';
+        await loadJobOrder(false);
+        showConflict.value = true;
+        return;
+      }
+      if (error.code === 'NOT_FOUND') {
+        isNotFound.value = true;
+        return;
+      }
+      if (error.code === 'VALIDATION_ERROR' && error.message.includes('technicianIds')) {
+        assignmentFieldErrors.technicianIds = error.message;
+        return;
+      }
+      assignmentError.value = error.message;
+      return;
+    }
+    assignmentError.value = 'Unable to assign job order.';
+  } finally {
+    isSaving.value = false;
+  }
+}
+
+async function saveCategories(): Promise<void> {
+  if (!jobOrder.value) return;
+  categoryError.value = null;
+  categorySuccess.value = null;
+  isSaving.value = true;
+
+  try {
+    const updated = await jobOrdersStore.updateJobOrderCategories(jobOrderId.value, categoryPayload());
+    applyJobOrder(updated, true);
+    categorySuccess.value = 'Categories saved.';
+    showConflict.value = false;
+  } catch (error) {
+    if (error instanceof ApiResponseError) {
+      if (error.code === 'VERSION_CONFLICT') {
+        conflictMode.value = 'categories';
+        await loadJobOrder(false);
+        showConflict.value = true;
+        return;
+      }
+      if (error.code === 'NOT_FOUND') {
+        isNotFound.value = true;
+        return;
+      }
+      categoryError.value = error.message;
+      return;
+    }
+    categoryError.value = 'Unable to save categories.';
+  } finally {
+    isSaving.value = false;
+  }
 }
 
 function applyValidation(error: ApiResponseError): boolean {
@@ -323,12 +488,44 @@ async function runTransition(isConflictConfirm = false): Promise<void> {
   }
 }
 
+async function moveToTrash(): Promise<void> {
+  if (!jobOrder.value) return;
+  lifecycleError.value = null;
+  isSaving.value = true;
+  try {
+    const updated = await jobOrdersStore.deleteJobOrder(jobOrder.value.id);
+    jobOrder.value = updated;
+    await router.replace('/job-orders/trash');
+  } catch (error) {
+    lifecycleError.value = error instanceof ApiResponseError ? error.message : 'Unable to move job order to trash.';
+  } finally {
+    isSaving.value = false;
+  }
+}
+
+async function moveToArchive(): Promise<void> {
+  if (!jobOrder.value) return;
+  lifecycleError.value = null;
+  isSaving.value = true;
+  try {
+    const updated = await jobOrdersStore.archiveJobOrder(jobOrder.value.id);
+    jobOrder.value = updated;
+    await router.replace('/job-orders/archive');
+  } catch (error) {
+    lifecycleError.value = error instanceof ApiResponseError ? error.message : 'Unable to archive job order.';
+  } finally {
+    isSaving.value = false;
+  }
+}
+
 function confirmConflict(): void {
   if (pendingVariation.value && pendingVariationDecision.value) {
     void decideVariation(pendingVariation.value, pendingVariationDecision.value, true);
     return;
   }
   if (conflictMode.value === 'transition') void runTransition(true);
+  else if (conflictMode.value === 'assignment') void saveAssignment();
+  else if (conflictMode.value === 'categories') void saveCategories();
   else void saveHeader(true);
 }
 
@@ -431,6 +628,7 @@ async function decideVariation(variation: Variation, decision: VariationDecision
 onMounted(async () => {
   isLoading.value = true;
   try {
+    await loadTechnicianLookup();
     await loadJobOrder();
   } catch (error) {
     if (error instanceof ApiResponseError && error.code === 'NOT_FOUND') {
@@ -459,6 +657,8 @@ watch(jobOrderId, async () => {
     isLoading.value = false;
   }
 });
+
+watch(() => assignmentForm.technicianIds, syncExecutionOwnerSelection);
 </script>
 
 <template>
@@ -473,7 +673,7 @@ watch(jobOrderId, async () => {
     <template v-else-if="jobOrder">
       <header class="crm-page__header">
         <div>
-          <p class="crm-page__eyebrow">Job order</p>
+          <BackLink to="/job-orders" label="Job orders" />
           <h1 id="job-order-title" class="crm-page__title">
             <MonoText :value="jobOrder.joNumber" />
           </h1>
@@ -498,7 +698,28 @@ watch(jobOrderId, async () => {
             :severity="action.to === 'CANCELLED' ? 'danger' : undefined"
             @click="openTransition(action)"
           />
+          <Button
+            v-if="canManageLifecycle"
+            label="Archive"
+            icon="pi pi-box"
+            severity="secondary"
+            outlined
+            :loading="isSaving"
+            @click="moveToArchive"
+          />
+          <Button
+            v-if="canManageLifecycle"
+            label="Move to trash"
+            icon="pi pi-trash"
+            severity="danger"
+            outlined
+            :loading="isSaving"
+            @click="moveToTrash"
+          />
         </div>
+        <p v-if="lifecycleError" class="auth-message auth-message--error" role="alert">
+          {{ lifecycleError }}
+        </p>
         <p v-if="execOwnerTransitions.length" class="crm-empty">
           Execution-owner transition:
           <span
@@ -508,6 +729,78 @@ watch(jobOrderId, async () => {
             <MonoText :value="`${rule.from} -> ${rule.to}`" />
           </span>
         </p>
+      </section>
+
+      <section class="crm-section" aria-labelledby="job-order-dispatch-title">
+        <div class="crm-page__header">
+          <h2 id="job-order-dispatch-title" class="crm-section__title">Dispatch</h2>
+          <p v-if="!canAssignJobOrder" class="record-form__version">
+            Assignment is read-only once execution has begun.
+          </p>
+        </div>
+
+        <p v-if="assignmentError" class="auth-message auth-message--error" role="alert">
+          {{ assignmentError }}
+        </p>
+        <p v-if="assignmentSuccess" class="crm-empty" role="status">
+          {{ assignmentSuccess }}
+        </p>
+        <p v-if="techniciansError" class="auth-message auth-message--error" role="alert">
+          {{ techniciansError }}
+        </p>
+
+        <form v-if="canAssignJobOrder" class="record-form" @submit.prevent="saveAssignment">
+          <label class="auth-field" for="jo-assigned-technicians">
+            <span>Technicians</span>
+            <MultiSelect
+              id="jo-assigned-technicians"
+              v-model="assignmentForm.technicianIds"
+              class="record-form__select"
+              :options="technicians"
+              option-label="name"
+              option-value="id"
+              display="chip"
+              placeholder="Select technicians"
+              :loading="techniciansLoading"
+              :disabled="techniciansLoading || technicians.length === 0"
+            />
+            <FieldError :message="assignmentFieldErrors.technicianIds" />
+          </label>
+
+          <label class="auth-field" for="jo-execution-owner">
+            <span>Execution owner</span>
+            <Select
+              id="jo-execution-owner"
+              v-model="assignmentForm.executionOwnerId"
+              class="record-form__select"
+              :options="selectedTechnicians"
+              option-label="name"
+              option-value="id"
+              placeholder="Select owner"
+              :disabled="selectedTechnicians.length === 0"
+            />
+            <FieldError :message="assignmentFieldErrors.executionOwnerId" />
+          </label>
+
+          <p class="record-form__version">
+            Save dispatch before scheduling or while the job is still scheduled.
+          </p>
+
+          <div class="record-form__actions">
+            <Button type="submit" label="Save assignment" icon="pi pi-users" :loading="isSaving" />
+          </div>
+        </form>
+
+        <dl v-else class="detail-grid">
+          <div>
+            <dt>Assigned technicians</dt>
+            <dd>{{ assignedTechnicianNames(jobOrder) }}</dd>
+          </div>
+          <div>
+            <dt>Execution owner</dt>
+            <dd>{{ executionOwnerName(jobOrder) }}</dd>
+          </div>
+        </dl>
       </section>
 
       <section class="crm-section" aria-labelledby="job-order-variation-summary-title">
@@ -623,6 +916,33 @@ watch(jobOrderId, async () => {
           </p>
         </div>
 
+        <form class="record-form" @submit.prevent="saveCategories">
+          <p v-if="categoryError" class="auth-message auth-message--error" role="alert">
+            {{ categoryError }}
+          </p>
+          <p v-if="categorySuccess" class="crm-empty" role="status">
+            {{ categorySuccess }}
+          </p>
+
+          <label class="auth-field" for="jo-service-categories">
+            <span>Service categories</span>
+            <MultiSelect
+              id="jo-service-categories"
+              v-model="categoryForm.serviceCategories"
+              class="record-form__select"
+              :options="JOB_ORDER_CATEGORY_OPTIONS"
+              option-label="label"
+              option-value="value"
+              display="chip"
+              placeholder="Select categories"
+            />
+          </label>
+
+          <div class="record-form__actions">
+            <Button type="submit" label="Save categories" icon="pi pi-tags" :loading="isSaving" />
+          </div>
+        </form>
+
         <form v-if="isHeaderEditable" class="record-form" @submit.prevent="saveHeader(false)">
           <label class="auth-field" for="jo-scope">
             <span>Scope summary</span>
@@ -633,11 +953,6 @@ watch(jobOrderId, async () => {
           <label class="auth-field" for="jo-port">
             <span>Port</span>
             <input id="jo-port" v-model="form.port" class="auth-input" />
-          </label>
-
-          <label class="auth-field" for="jo-service-categories">
-            <span>Service categories</span>
-            <input id="jo-service-categories" v-model="form.serviceCategories" class="auth-input" />
           </label>
 
           <label class="auth-field" for="jo-planned-start">
@@ -668,10 +983,6 @@ watch(jobOrderId, async () => {
           <div>
             <dt>Port</dt>
             <dd>{{ jobOrder.port ?? '—' }}</dd>
-          </div>
-          <div>
-            <dt>Service categories</dt>
-            <dd>{{ jobOrder.serviceCategories.length ? jobOrder.serviceCategories.join(', ') : '—' }}</dd>
           </div>
           <div>
             <dt>Planned start</dt>

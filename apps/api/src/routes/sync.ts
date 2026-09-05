@@ -52,7 +52,7 @@ function buildCreateData(entity: WritableEntity, p: Record<string, unknown>, ctx
     case 'Observation':
       return { templateKey: p.templateKey ?? null, body: p.body, authorId: ctx.userId };
     case 'ChecklistInstance':
-      return { templateId: p.templateId, results: [] }; // results arrive via a later UPDATE/submit
+      return { templateId: p.templateId, results: [] };
     case 'MaterialLine':
       return {
         partCatalogId: p.partCatalogId ?? null, description: p.description, quantity: p.quantity, unit: p.unit,
@@ -83,6 +83,46 @@ function buildUpdateData(entity: WritableEntity, p: Record<string, unknown>) {
     case 'MaterialLine': return { description: p.description, quantity: p.quantity, unitCostAmountMinor: p.unitCostAmountMinor, unitCostCurrency: p.unitCostCurrency };
     case 'ESignature': return {}; // D-059: signatures are immutable; applyOp rejects UPDATE before this is used.
   }
+}
+
+async function buildChecklistCreateData(
+  tx: Prisma.TransactionClient,
+  p: Record<string, unknown>,
+  ctx: { userId: string },
+): Promise<OpResult | Record<string, unknown>> {
+  if (typeof p.templateId !== 'string' || !p.templateId) {
+    return { opId: '', status: 'VALIDATION_ERROR', error: { code: 'VALIDATION_ERROR', message: 'templateId required' } };
+  }
+
+  const template = await tx.checklistTemplate.findUnique({ where: { id: p.templateId } });
+  if (!template || !template.active) {
+    return { opId: '', status: 'VALIDATION_ERROR', error: { code: 'TEMPLATE_NOT_FOUND', message: String(p.templateId) } };
+  }
+
+  if (!('results' in p)) return { templateId: p.templateId, results: [] };
+
+  try {
+    const defs = validateItemDefs(template.items);
+    const validated = validateResults(defs, p.results);
+    const completedAt = p.completedAt ? new Date(String(p.completedAt)) : new Date();
+    if (Number.isNaN(completedAt.getTime())) {
+      return { opId: '', status: 'VALIDATION_ERROR', error: { code: 'VALIDATION_ERROR', message: 'completedAt is invalid' } };
+    }
+
+    return {
+      templateId: p.templateId,
+      results: validated,
+      completedById: ctx.userId,
+      completedAt,
+    };
+  } catch (e) {
+    const msg = e instanceof AppError ? e.message : 'invalid checklist results';
+    return { opId: '', status: 'VALIDATION_ERROR', error: { code: 'VALIDATION_ERROR', message: msg } };
+  }
+}
+
+function isOpResult(value: OpResult | Record<string, unknown>): value is OpResult {
+  return typeof value.status === 'string';
 }
 
 async function applyOp(tx: Prisma.TransactionClient, ctx: { userId: string; branch: string }, op: SyncOp): Promise<OpResult> {
@@ -142,7 +182,14 @@ async function applyOp(tx: Prisma.TransactionClient, ctx: { userId: string; bran
   }
 
   // CREATE — client supplies entityId (CC-MOB-1); persisted as-is so resultRef == id.
-  const data = buildCreateData(op.entity, op.payload, ctx, jo);
+  let data: Record<string, unknown>;
+  if (op.entity === 'ChecklistInstance') {
+    const checklistData = await buildChecklistCreateData(tx, op.payload, ctx);
+    if (isOpResult(checklistData)) return { ...checklistData, opId: op.opId };
+    data = checklistData;
+  } else {
+    data = buildCreateData(op.entity, op.payload, ctx, jo);
+  }
   const created = await delegate.create({ data: { id: op.entityId, jobOrderId: op.jobOrderId, opId: op.opId, reviewState, ...data } });
   await recordProcessedOp(tx, { opId: op.opId, entity: op.entity, action: 'CREATE', resultRef: created.id, status: flagged ? 'APPLIED_FLAGGED' : 'APPLIED' });
   await appendAudit(tx, ctx as any, { entityType: op.entity, entityId: created.id, action: 'CREATE', diff: { via: 'sync', flagged } });

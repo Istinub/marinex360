@@ -7,6 +7,7 @@ import Tag from 'primevue/tag';
 import { defineStore } from 'pinia';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
+import MobileBackLink from '@/components/MobileBackLink.vue';
 import { authenticatedFetch, currentSessionSnapshot } from '@/composables/useAuth';
 import { apiBase } from '@/composables/useOfflineExecution';
 
@@ -428,6 +429,7 @@ onBeforeUnmount(() => {
   <main class="job-documents" aria-labelledby="job-documents-title">
     <header class="job-documents__header">
       <div>
+        <MobileBackLink :to="`/jobs/${jobOrderId}`" label="Return" />
         <p class="job-documents__eyebrow">Job files</p>
         <h1 id="job-documents-title" class="job-documents__title">Documents</h1>
       </div>

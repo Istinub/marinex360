@@ -1,110 +1,25 @@
 <script setup lang="ts">
 import Button from 'primevue/button';
 import Card from 'primevue/card';
+import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
 import ProgressSpinner from 'primevue/progressspinner';
 import { defineStore } from 'pinia';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { RouterLink, useRoute } from 'vue-router';
-import { authenticatedFetch } from '@/composables/useAuth';
-import { apiBase } from '@/composables/useOfflineExecution';
+import {
+  loadCachedJobOrders,
+  loadLiveJobOrders,
+  selfAssignJobOrder,
+  type JobState,
+  type MobileJobOrder,
+} from '@/composables/useJobOrders';
 
-type JobState =
-  | 'DRAFT'
-  | 'SCHEDULED'
-  | 'IN_PROGRESS'
-  | 'PENDING_REVIEW'
-  | 'COMPLETED'
-  | 'INVOICED'
-  | 'CLOSED'
-  | 'ON_HOLD'
-  | 'CANCELLED';
-
-interface NamedRelation {
-  name?: string | null;
-}
-
-interface AssignedJobOrder {
-  id: string;
-  joNumber: string;
-  state: JobState;
-  scopeSummary: string;
-  plannedStartDate?: string | null;
-  // NEEDS: BE: live list rows must include client/vessel relation names; jo_cache already stores denormalized names.
-  clientName?: string | null;
-  vesselName?: string | null;
-  client?: NamedRelation | null;
-  vessel?: NamedRelation | null;
-}
-
-interface JoCacheRow {
-  id: string;
-  jo_number: string;
-  state: JobState;
-  scope_summary: string | null;
-  planned_start_date: string | null;
-  client_name: string | null;
-  vessel_name: string | null;
-}
-
-interface MobileSqlAdapter {
-  select<T>(sql: string, params?: unknown[]): Promise<T[]>;
-}
-
-interface MobileRuntime {
-  marinex360?: {
-    db?: MobileSqlAdapter;
-  };
-}
-
-const JO_CACHE_SQL = `
-  SELECT id, jo_number, state, scope_summary, planned_start_date, client_name, vessel_name
-  FROM jo_cache
-  ORDER BY planned_start_date IS NULL, planned_start_date ASC, jo_number ASC
-`;
-
-function mobileRuntime(): MobileRuntime {
-  return globalThis as typeof globalThis & MobileRuntime;
-}
-
-function fromCacheRow(row: JoCacheRow): AssignedJobOrder {
-  return {
-    id: row.id,
-    joNumber: row.jo_number,
-    state: row.state,
-    scopeSummary: row.scope_summary ?? '',
-    plannedStartDate: row.planned_start_date,
-    clientName: row.client_name,
-    vesselName: row.vessel_name,
-  };
-}
-
-async function loadFromJoCache(): Promise<AssignedJobOrder[]> {
-  const db = mobileRuntime().marinex360?.db;
-
-  // NEEDS: Mobile DB adapter should expose the S0-6 jo_cache table through this narrow SQL shape.
-  if (!db) return [];
-
-  return (await db.select<JoCacheRow>(JO_CACHE_SQL)).map(fromCacheRow);
-}
-
-async function loadFromLiveEndpoint(): Promise<AssignedJobOrder[]> {
-  // NEEDS: BE/mobile API wrapper: no apps/mobile/src/api/jobOrders.ts filtered-list function exists in-repo yet.
-  // Real v1.0 signature is GET /job-orders; technician assignment and branch scoping are enforced server-side.
-  const response = await authenticatedFetch(`${apiBase()}/job-orders`, {
-    headers: {
-      Accept: 'application/json',
-    },
-  });
-
-  if (!response.ok) throw new Error('Unable to load assigned jobs.');
-
-  return (await response.json()) as AssignedJobOrder[];
-}
+type AssignedJobOrder = MobileJobOrder;
 
 function relationName(job: AssignedJobOrder, key: 'client' | 'vessel'): string {
-  if (key === 'client') return job.clientName ?? job.client?.name ?? 'Client pending';
-  return job.vesselName ?? job.vessel?.name ?? 'Vessel pending';
+  if (key === 'client') return job.clientName ?? job.client?.name ?? 'No client on record';
+  return job.vesselName ?? job.vessel?.name ?? 'No vessel on record';
 }
 
 function formatDate(value?: string | null): string {
@@ -133,6 +48,10 @@ function jobPath(job: AssignedJobOrder): string {
   return `/jobs/${job.id}`;
 }
 
+function canOpenJob(job: AssignedJobOrder): boolean {
+  return job.canOpen !== false;
+}
+
 const useAssignedJobsStore = defineStore('assignedJobs', () => {
   const jobs = ref<AssignedJobOrder[]>([]);
   const isLoading = ref(false);
@@ -148,16 +67,16 @@ const useAssignedJobsStore = defineStore('assignedJobs', () => {
 
     try {
       if (isOffline.value) {
-        jobs.value = await loadFromJoCache();
+        jobs.value = await loadCachedJobOrders();
         source.value = 'cache';
         return;
       }
 
       try {
-        jobs.value = await loadFromLiveEndpoint();
+        jobs.value = await loadLiveJobOrders();
         source.value = 'live';
       } catch (error) {
-        const cachedJobs = await loadFromJoCache();
+        const cachedJobs = await loadCachedJobOrders();
         if (cachedJobs.length > 0) {
           jobs.value = cachedJobs;
           source.value = 'cache';
@@ -177,6 +96,11 @@ const useAssignedJobsStore = defineStore('assignedJobs', () => {
     isOffline.value = typeof navigator !== 'undefined' ? !navigator.onLine : false;
   }
 
+  function replaceJob(job: AssignedJobOrder): void {
+    jobs.value = [job, ...jobs.value.filter((item) => item.id !== job.id)];
+    source.value = 'live';
+  }
+
   return {
     jobs,
     sortedJobs,
@@ -186,12 +110,79 @@ const useAssignedJobsStore = defineStore('assignedJobs', () => {
     source,
     loadAssignedJobs,
     setOnlineStatus,
+    replaceJob,
   };
 });
 
 const assignedJobsStore = useAssignedJobsStore();
 const route = useRoute();
 const mfaEnrollmentRequired = computed(() => route.query.mfaEnrollmentRequired === 'true');
+const searchQuery = ref('');
+const selectedStatuses = ref<JobState[]>([]);
+const dateFrom = ref('');
+const dateTo = ref('');
+const claimingJobId = ref<string | null>(null);
+const claimMessage = ref<string | null>(null);
+
+const statusFilters: Array<{ value: JobState; label: string }> = [
+  { value: 'SCHEDULED', label: 'Scheduled' },
+  { value: 'IN_PROGRESS', label: 'In progress' },
+  { value: 'PENDING_REVIEW', label: 'Pending review' },
+  { value: 'ON_HOLD', label: 'On hold' },
+  { value: 'COMPLETED', label: 'Completed' },
+];
+
+function toggleStatus(status: JobState): void {
+  selectedStatuses.value = selectedStatuses.value.includes(status)
+    ? selectedStatuses.value.filter((value) => value !== status)
+    : [...selectedStatuses.value, status];
+}
+
+function matchesDateRange(job: AssignedJobOrder): boolean {
+  if (!job.plannedStartDate) return true;
+  const date = job.plannedStartDate.slice(0, 10);
+  return (!dateFrom.value || date >= dateFrom.value) && (!dateTo.value || date <= dateTo.value);
+}
+
+const filteredJobs = computed(() => {
+  const query = searchQuery.value.trim().toLowerCase();
+  return assignedJobsStore.sortedJobs.filter((job) => {
+    const matchesStatus = selectedStatuses.value.length === 0 || selectedStatuses.value.includes(job.state);
+    const searchable = [job.joNumber, relationName(job, 'vessel'), relationName(job, 'client'), job.scopeSummary]
+      .join(' ')
+      .toLowerCase();
+    const matchesSearch = !query || searchable.includes(query);
+    return matchesStatus && matchesSearch && matchesDateRange(job);
+  });
+});
+
+const activeFilterCount = computed(() => selectedStatuses.value.length
+  + (searchQuery.value.trim() ? 1 : 0)
+  + (dateFrom.value ? 1 : 0)
+  + (dateTo.value ? 1 : 0));
+
+function clearFilters(): void {
+  searchQuery.value = '';
+  selectedStatuses.value = [];
+  dateFrom.value = '';
+  dateTo.value = '';
+}
+
+async function claimJob(job: AssignedJobOrder): Promise<void> {
+  assignedJobsStore.errorMessage = null;
+  claimMessage.value = null;
+  claimingJobId.value = job.id;
+
+  try {
+    const updated = await selfAssignJobOrder(job);
+    assignedJobsStore.replaceJob(updated);
+    claimMessage.value = `${updated.joNumber} assigned to you.`;
+  } catch (error) {
+    assignedJobsStore.errorMessage = error instanceof Error ? error.message : 'Unable to claim job.';
+  } finally {
+    claimingJobId.value = null;
+  }
+}
 
 function handleOnlineStatusChange(): void {
   assignedJobsStore.setOnlineStatus();
@@ -246,21 +237,61 @@ onBeforeUnmount(() => {
     <div v-if="assignedJobsStore.errorMessage" class="assigned-jobs__error" role="alert">
       {{ assignedJobsStore.errorMessage }}
     </div>
+    <div v-if="claimMessage" class="assigned-jobs__notice" role="status">
+      {{ claimMessage }}
+    </div>
+
+    <section class="assigned-jobs__filters" aria-label="Filter assigned jobs">
+      <div class="assigned-jobs__filter-heading">
+        <h2>Filter jobs</h2>
+        <button
+          v-if="activeFilterCount > 0"
+          type="button"
+          class="assigned-jobs__clear"
+          @click="clearFilters"
+        >
+          Clear all ({{ activeFilterCount }})
+        </button>
+      </div>
+      <InputText v-model="searchQuery" class="assigned-jobs__search" placeholder="Search jobs, vessels, clients" aria-label="Search assigned jobs" />
+      <div class="assigned-jobs__status-filters" aria-label="Filter by job status">
+        <button
+          v-for="filter in statusFilters"
+          :key="filter.value"
+          type="button"
+          class="assigned-jobs__status-filter"
+          :class="{ 'assigned-jobs__status-filter--active': selectedStatuses.includes(filter.value) }"
+          :aria-pressed="selectedStatuses.includes(filter.value)"
+          @click="toggleStatus(filter.value)"
+        >
+          <span class="assigned-jobs__status-dot" :class="stateClass(filter.value)" aria-hidden="true" />
+          {{ filter.label }}
+        </button>
+      </div>
+      <div class="assigned-jobs__dates">
+        <label>From <input v-model="dateFrom" type="date" aria-label="Planned date from" /></label>
+        <label>To <input v-model="dateTo" type="date" aria-label="Planned date to" /></label>
+      </div>
+    </section>
 
     <div v-if="assignedJobsStore.isLoading" class="assigned-jobs__loading" aria-live="polite">
       <ProgressSpinner class="assigned-jobs__spinner" stroke-width="4" />
     </div>
 
-    <section v-else-if="assignedJobsStore.sortedJobs.length > 0" class="assigned-jobs__list" aria-label="Assigned job orders">
-      <RouterLink
-        v-for="job in assignedJobsStore.sortedJobs"
+    <section v-else-if="filteredJobs.length > 0" class="assigned-jobs__list" aria-label="Assigned job orders">
+      <Card
+        v-for="job in filteredJobs"
         :key="job.id"
-        class="assigned-jobs__link"
-        :to="jobPath(job)"
+        class="assigned-jobs__card"
+        :class="{ 'assigned-jobs__card--muted': !canOpenJob(job) }"
       >
-        <Card class="assigned-jobs__card">
-          <template #content>
-            <article class="assigned-jobs__content">
+        <template #content>
+          <article class="assigned-jobs__content">
+            <RouterLink
+              v-if="canOpenJob(job)"
+              class="assigned-jobs__link"
+              :to="jobPath(job)"
+            >
               <div class="assigned-jobs__topline">
                 <span class="assigned-jobs__number">{{ job.joNumber }}</span>
                 <span class="assigned-jobs__state" :class="stateClass(job.state)">
@@ -280,14 +311,52 @@ onBeforeUnmount(() => {
               <time class="assigned-jobs__planned" :datetime="job.plannedStartDate ?? undefined">
                 {{ formatDate(job.plannedStartDate) }}
               </time>
-            </article>
-          </template>
-        </Card>
-      </RouterLink>
+            </RouterLink>
+
+            <div
+              v-else
+              class="assigned-jobs__link assigned-jobs__link--static"
+            >
+              <div class="assigned-jobs__topline">
+                <span class="assigned-jobs__number">{{ job.joNumber }}</span>
+                <span class="assigned-jobs__state" :class="stateClass(job.state)">
+                  {{ job.state }}
+                </span>
+              </div>
+
+              <div class="assigned-jobs__identity">
+                <span>{{ relationName(job, 'vessel') }}</span>
+                <span>{{ relationName(job, 'client') }}</span>
+              </div>
+
+              <p class="assigned-jobs__scope">
+                {{ job.scopeSummary }}
+              </p>
+
+              <time class="assigned-jobs__planned" :datetime="job.plannedStartDate ?? undefined">
+                {{ formatDate(job.plannedStartDate) }}
+              </time>
+            </div>
+
+            <div v-if="job.isAvailable || !canOpenJob(job)" class="assigned-jobs__actions">
+              <span v-if="job.isAvailable" class="assigned-jobs__available">Available for self-assignment</span>
+              <span v-else class="assigned-jobs__available">Assigned</span>
+              <Button
+                v-if="job.isAvailable"
+                label="Claim job"
+                icon="pi pi-user-plus"
+                :loading="claimingJobId === job.id"
+                :disabled="assignedJobsStore.isOffline"
+                @click="claimJob(job)"
+              />
+            </div>
+          </article>
+        </template>
+      </Card>
     </section>
 
     <p v-else class="assigned-jobs__empty">
-      No assigned jobs.
+      {{ activeFilterCount > 0 ? 'No jobs match these filters.' : 'No assigned jobs.' }}
     </p>
   </main>
 </template>
@@ -363,13 +432,100 @@ onBeforeUnmount(() => {
   min-height: var(--tap-min);
 }
 
+.assigned-jobs__filters {
+  display: grid;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+  padding: var(--sp-4);
+  border: var(--border-1);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.assigned-jobs__filter-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.assigned-jobs__filter-heading h2 {
+  margin: 0;
+  font-size: var(--fs-body-lg);
+}
+
+.assigned-jobs__clear {
+  min-height: var(--tap-min);
+  border: 0;
+  background: transparent;
+  color: var(--color-brand);
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+}
+
+.assigned-jobs__search {
+  min-height: var(--tap-min);
+  width: 100%;
+}
+
+.assigned-jobs__status-filters,
+.assigned-jobs__dates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tap-gap);
+}
+
+.assigned-jobs__status-filter {
+  min-height: var(--tap-min);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: var(--border-1);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: var(--fs-body-sm);
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+}
+
+.assigned-jobs__status-filter--active {
+  border-color: var(--color-text);
+  color: var(--color-text);
+}
+
+.assigned-jobs__status-dot {
+  width: var(--sp-3);
+  height: var(--sp-3);
+  border-radius: 50%;
+}
+
+.assigned-jobs__dates label {
+  display: grid;
+  gap: var(--sp-1);
+  color: var(--color-text-muted);
+  font-size: var(--fs-body-sm);
+  font-weight: var(--fw-semibold);
+}
+
+.assigned-jobs__dates input {
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-2);
+  border: var(--border-1);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
 .assigned-jobs__list {
   display: grid;
   gap: var(--tap-gap);
 }
 
 .assigned-jobs__link {
-  display: block;
+  display: grid;
+  gap: var(--sp-3);
   min-height: var(--tap-min);
   color: inherit;
   text-decoration: none;
@@ -380,6 +536,10 @@ onBeforeUnmount(() => {
   outline-offset: var(--sp-1);
 }
 
+.assigned-jobs__link--static {
+  cursor: default;
+}
+
 .assigned-jobs__card {
   overflow: hidden;
   border: var(--border-1);
@@ -387,10 +547,40 @@ onBeforeUnmount(() => {
   background: var(--color-surface);
 }
 
+.assigned-jobs__card--muted {
+  opacity: 0.62;
+  background: var(--color-canvas);
+}
+
+.assigned-jobs__card--muted .assigned-jobs__number,
+.assigned-jobs__card--muted .assigned-jobs__scope,
+.assigned-jobs__card--muted .assigned-jobs__identity,
+.assigned-jobs__card--muted .assigned-jobs__planned {
+  color: var(--color-text-muted);
+}
+
 .assigned-jobs__content {
   display: grid;
   gap: var(--sp-3);
   min-height: var(--tap-field);
+}
+
+.assigned-jobs__actions {
+  display: grid;
+  gap: var(--tap-gap);
+  padding-top: var(--sp-3);
+  border-top: var(--border-1);
+}
+
+.assigned-jobs__actions :deep(.p-button) {
+  min-height: var(--tap-field);
+}
+
+.assigned-jobs__available {
+  color: var(--color-text-muted);
+  font-size: var(--fs-body-sm);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-base);
 }
 
 .assigned-jobs__topline,

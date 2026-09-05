@@ -16,7 +16,7 @@ export const TERMINAL_STATES: ReadonlySet<JoState> = new Set<JoState>(['CLOSED',
 const HEADER_EDITABLE: ReadonlySet<JoState> = new Set<JoState>(['DRAFT', 'SCHEDULED']);
 export const isHeaderLocked = (state: JoState) => !HEADER_EDITABLE.has(state);
 
-type Gate = { execOwner: true } | { roles: Role[] };
+type Gate = { execOwner: true } | { roles: Role[] } | { roles: Role[]; orExecOwner: true };
 type Kind = 'FORWARD' | 'SIDE' | 'RESUME' | 'REJECT';
 
 interface Rule { from: JoState; to: JoState; gate: Gate; requiresReason: boolean; kind: Kind; }
@@ -24,6 +24,7 @@ interface Rule { from: JoState; to: JoState; gate: Gate; requiresReason: boolean
 // Office/supervisor roles that drive scheduling and side-controls.
 const OFFICE: Role[] = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN', 'DIRECTOR'];
 const CANCEL_ROLES: Role[] = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN', 'DIRECTOR']; // [INFERRED] who may cancel
+const FINANCE_FLOW: Role[] = ['FINANCE', 'SYSTEM_ADMIN', 'DIRECTOR'];
 
 export const RULES: Rule[] = [
   // Forward pipeline
@@ -31,21 +32,21 @@ export const RULES: Rule[] = [
   { from: 'SCHEDULED',      to: 'IN_PROGRESS',    gate: { execOwner: true },          requiresReason: false, kind: 'FORWARD' }, // assignee-gated
   { from: 'IN_PROGRESS',    to: 'PENDING_REVIEW', gate: { execOwner: true },          requiresReason: false, kind: 'FORWARD' }, // assignee-gated
   { from: 'PENDING_REVIEW', to: 'COMPLETED',      gate: { roles: OFFICE },            requiresReason: false, kind: 'FORWARD' }, // supervisor verify (FR-30)
-  { from: 'COMPLETED',      to: 'INVOICED',       gate: { roles: ['FINANCE', 'SYSTEM_ADMIN'] }, requiresReason: false, kind: 'FORWARD' },
-  { from: 'INVOICED',       to: 'CLOSED',         gate: { roles: ['FINANCE', 'SYSTEM_ADMIN'] }, requiresReason: false, kind: 'FORWARD' },
+  { from: 'COMPLETED',      to: 'INVOICED',       gate: { roles: FINANCE_FLOW },        requiresReason: false, kind: 'FORWARD' },
+  { from: 'INVOICED',       to: 'CLOSED',         gate: { roles: FINANCE_FLOW },        requiresReason: false, kind: 'FORWARD' },
   // Supervisor rejection (ADR-2 "rejection arrow -> IN_PROGRESS, tech data retained"). Resolves JOSM-7.
   { from: 'PENDING_REVIEW', to: 'IN_PROGRESS',    gate: { roles: OFFICE },            requiresReason: true,  kind: 'REJECT' },
   // ON_HOLD (from SCHEDULED / IN_PROGRESS only)
-  { from: 'SCHEDULED',      to: 'ON_HOLD',        gate: { roles: OFFICE },            requiresReason: true,  kind: 'SIDE' },
-  { from: 'IN_PROGRESS',    to: 'ON_HOLD',        gate: { roles: OFFICE },            requiresReason: true,  kind: 'SIDE' },
+  { from: 'SCHEDULED',      to: 'ON_HOLD',        gate: { roles: OFFICE, orExecOwner: true }, requiresReason: true,  kind: 'SIDE' },
+  { from: 'IN_PROGRESS',    to: 'ON_HOLD',        gate: { roles: OFFICE, orExecOwner: true }, requiresReason: true,  kind: 'SIDE' },
   // CANCELLED (from DRAFT / SCHEDULED / IN_PROGRESS / PENDING_REVIEW — ADR-2). NOT from COMPLETED+.
   { from: 'DRAFT',          to: 'CANCELLED',      gate: { roles: CANCEL_ROLES },      requiresReason: true,  kind: 'SIDE' },
   { from: 'SCHEDULED',      to: 'CANCELLED',      gate: { roles: CANCEL_ROLES },      requiresReason: true,  kind: 'SIDE' },
   { from: 'IN_PROGRESS',    to: 'CANCELLED',      gate: { roles: CANCEL_ROLES },      requiresReason: true,  kind: 'SIDE' },
   { from: 'PENDING_REVIEW', to: 'CANCELLED',      gate: { roles: CANCEL_ROLES },      requiresReason: true,  kind: 'SIDE' },
   // RESUME is handled specially (target computed from history); see resumeTarget().
-  { from: 'ON_HOLD',        to: 'IN_PROGRESS',    gate: { roles: OFFICE },            requiresReason: true,  kind: 'RESUME' },
-  { from: 'ON_HOLD',        to: 'SCHEDULED',      gate: { roles: OFFICE },            requiresReason: true,  kind: 'RESUME' },
+  { from: 'ON_HOLD',        to: 'IN_PROGRESS',    gate: { roles: OFFICE, orExecOwner: true }, requiresReason: true,  kind: 'RESUME' },
+  { from: 'ON_HOLD',        to: 'SCHEDULED',      gate: { roles: OFFICE, orExecOwner: true }, requiresReason: true,  kind: 'RESUME' },
 ];
 
 export interface Actor { userId: string; roles: Role[]; }
@@ -73,6 +74,7 @@ export function resumeTarget(history: { fromState: string; toState: string }[] |
 
 function gateAllows(gate: Gate, actor: Actor, execOwnerId?: string | null): boolean {
   if ('execOwner' in gate) return !!execOwnerId && actor.userId === execOwnerId;
+  if ('orExecOwner' in gate && execOwnerId && actor.userId === execOwnerId) return true;
   return actor.roles.some((r) => gate.roles.includes(r));
 }
 

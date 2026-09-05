@@ -4,8 +4,15 @@ import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
 import Select from 'primevue/select';
 import Textarea from 'primevue/textarea';
-import { computed, reactive, ref } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { computed, onMounted, reactive, ref } from 'vue';
+import { useRoute } from 'vue-router';
+import MobileBackLink from '@/components/MobileBackLink.vue';
+import {
+  deleteUnsyncedLocalEntry,
+  listLocalMaterials,
+  updateLocalMaterial,
+  type LocalMaterialEntry,
+} from '@/composables/useLocalExecutionEntries';
 import {
   moneyTextToMinorUnits,
   normalizeCurrency,
@@ -27,11 +34,12 @@ const props = defineProps<{
 }>();
 
 const route = useRoute();
-const router = useRouter();
 const materialLines = useMaterialLines();
 const { isSubmitting } = materialLines;
 const errors = reactive<Partial<Record<FieldErrorKey, string>>>({});
 const successMessage = ref<string | null>(null);
+const materials = ref<LocalMaterialEntry[]>([]);
+const editingEntry = ref<LocalMaterialEntry | null>(null);
 
 const form = reactive({
   description: '',
@@ -59,6 +67,7 @@ function resetForm(): void {
   form.unit = '';
   form.unitCostText = '';
   form.unitCostCurrency = 'SGD';
+  editingEntry.value = null;
 }
 
 function validatedInput(): MaterialLineCreateInput | null {
@@ -99,19 +108,61 @@ async function submitLine(addAnother = false): Promise<void> {
   if (!input) return;
 
   try {
-    const queued = await materialLines.enqueueCreate(input);
-    successMessage.value = `${queued.description} queued.`;
+    if (editingEntry.value) {
+      await updateLocalMaterial(editingEntry.value, input.jobOrderId, {
+        description: input.description,
+        quantity: input.quantity,
+        unit: input.unit,
+        unitCostAmountMinor: input.unitCostAmountMinor,
+        unitCostCurrency: input.unitCostCurrency,
+      });
+      successMessage.value = `${input.description} updated.`;
+    } else {
+      const queued = await materialLines.enqueueCreate(input);
+      successMessage.value = `${queued.description} queued.`;
+    }
+    await refreshEntries();
+    resetForm();
 
     if (addAnother) {
-      resetForm();
       return;
     }
-
-    await router.push(`/jobs/${queued.jobOrderId}`);
   } catch (error) {
     errors.jobOrderId = error instanceof Error ? error.message : 'Unable to queue material line.';
   }
 }
+
+async function refreshEntries(): Promise<void> {
+  const jobOrderId = resolvedJobOrderId.value;
+  materials.value = jobOrderId ? await listLocalMaterials(jobOrderId) : [];
+}
+
+function editMaterial(entry: LocalMaterialEntry): void {
+  editingEntry.value = entry;
+  form.description = entry.description;
+  form.quantity = entry.quantity;
+  form.unit = entry.unit;
+  form.unitCostText = (entry.unitCostAmountMinor / 100).toFixed(2);
+  form.unitCostCurrency = entry.unitCostCurrency;
+  successMessage.value = null;
+}
+
+async function deleteMaterial(entry: LocalMaterialEntry): Promise<void> {
+  try {
+    await deleteUnsyncedLocalEntry('MaterialLine', entry.id);
+    if (editingEntry.value?.id === entry.id) resetForm();
+    successMessage.value = `${entry.description} deleted.`;
+    await refreshEntries();
+  } catch (error) {
+    errors.jobOrderId = error instanceof Error ? error.message : 'Unable to delete material line.';
+  }
+}
+
+onMounted(() => {
+  void refreshEntries().catch((error) => {
+    errors.jobOrderId = error instanceof Error ? error.message : 'Unable to load material lines.';
+  });
+});
 
 // NEEDS: BE: no part-catalog lookup endpoint exists in-repo, so this form intentionally records free-text description only.
 </script>
@@ -120,6 +171,7 @@ async function submitLine(addAnother = false): Promise<void> {
   <main class="material-line-form" aria-labelledby="material-line-title">
     <header class="material-line-form__header">
       <div>
+        <MobileBackLink :to="`/jobs/${resolvedJobOrderId}`" label="Return" />
         <p class="material-line-form__eyebrow">Materials</p>
         <h1 id="material-line-title" class="material-line-form__title">Add material used</h1>
       </div>
@@ -204,9 +256,24 @@ async function submitLine(addAnother = false): Promise<void> {
           :loading="isSubmitting"
           @click="submitLine(true)"
         />
-        <Button type="submit" label="Save line" :loading="isSubmitting" />
+        <Button type="submit" :label="editingEntry ? 'Update' : 'Save line'" :loading="isSubmitting" />
       </div>
     </form>
+
+    <section class="material-line-form__saved" aria-labelledby="saved-materials-title">
+      <h2 id="saved-materials-title">Saved this session</h2>
+      <p v-if="materials.length === 0" class="material-line-form__empty">No materials saved yet.</p>
+      <article v-for="entry in materials" :key="entry.id" class="material-line-form__entry">
+        <div>
+          <strong>{{ entry.description }}</strong>
+          <span>{{ entry.quantity }} {{ entry.unit }} · {{ entry.syncState }}</span>
+        </div>
+        <div class="material-line-form__entry-actions">
+          <Button type="button" label="Edit" severity="secondary" outlined @click="editMaterial(entry)" />
+          <Button type="button" label="Delete" severity="secondary" outlined @click="deleteMaterial(entry)" />
+        </div>
+      </article>
+    </section>
   </main>
 </template>
 
@@ -244,7 +311,10 @@ async function submitLine(addAnother = false): Promise<void> {
 }
 
 .material-line-form__field,
-.material-line-form__money {
+.material-line-form__money,
+.material-line-form__saved,
+.material-line-form__entry,
+.material-line-form__entry-actions {
   display: grid;
   gap: var(--sp-2);
 }
@@ -296,8 +366,40 @@ async function submitLine(addAnother = false): Promise<void> {
   margin-top: var(--sp-2);
 }
 
+.material-line-form__saved {
+  margin-top: var(--sp-6);
+  gap: var(--sp-3);
+}
+
+.material-line-form__saved h2 {
+  margin: 0;
+  font-size: var(--fs-h3);
+}
+
+.material-line-form__entry {
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border: var(--border-1);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.material-line-form__entry span,
+.material-line-form__empty {
+  color: var(--color-text-muted);
+  font-size: var(--fs-body-sm);
+}
+
+.material-line-form__entry-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .material-line-form__actions :deep(.p-button) {
   min-height: var(--tap-field);
+}
+
+.material-line-form__entry-actions :deep(.p-button) {
+  min-height: var(--tap-min);
 }
 
 @media (min-width: 720px) {

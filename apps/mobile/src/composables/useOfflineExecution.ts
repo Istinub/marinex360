@@ -452,6 +452,47 @@ export function useOfflineExecution() {
     return { id, opId };
   }
 
+  async function authorObservation(jobOrderId: string, body: string, templateKey: string | null = null, photoOpIds: string[] = []): Promise<QueuedOfflineCreate> {
+    const cleanBody = body.trim();
+    if (!cleanBody) throw new Error('Observation is required.');
+
+    const db = requireDb();
+    const authorId = await requireCurrentUserId();
+    const id = createUuid();
+    const opId = createUuid();
+    const createdAt = nowIso();
+    const payload = {
+      id,
+      jobOrderId,
+      templateKey,
+      photoOpIds,
+      body: cleanBody,
+      authorId,
+      createdAt,
+      opId,
+    };
+
+    await withTransaction(db, async () => {
+      await prefetchedJobOrder(db, jobOrderId);
+      await db.execute(
+        `INSERT INTO observation
+          (id, job_order_id, template_key, body, author_id, created_at, op_id, sync_state)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING')`,
+        [id, jobOrderId, templateKey, cleanBody, authorId, createdAt, opId],
+      );
+      await enqueueCreate(db, {
+        opId,
+        entity: 'Observation',
+        entityId: id,
+        jobOrderId,
+        payload,
+        clientTime: createdAt,
+      });
+    });
+
+    return { id, opId };
+  }
+
   async function authorPhotoCapture(
     jobOrderId: string,
     phase: PhotoPhase,
@@ -586,6 +627,7 @@ export function useOfflineExecution() {
   return {
     drainBinaryUploads,
     authorChecklistSubmit,
+    authorObservation,
     authorPhotoCapture,
     authorESignature,
   };

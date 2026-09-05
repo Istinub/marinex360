@@ -3,7 +3,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { PrismaClient } from '@prisma/client';
 import { AppError } from '../lib/errors.js';
-import { scopeWhere, assertBranchAccess } from '../services/branchScope.js';
+import { scopeWhere, assertBranchAccess, clientIdForUser } from '../services/branchScope.js';
 import { appendAudit } from '../services/audit.js';
 import { computeDueAt, assertCanIssue, deriveStatusFromSum } from '../domain/invoiceLifecycle.js';
 import { enqueueInvoicePdfGeneration } from '../services/invoicePdfQueue.js';
@@ -13,8 +13,10 @@ export function invoiceRoutes(app: FastifyInstance, prisma: PrismaClient): void 
   const w = (action: string) => ({ preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction(action as any)] });
 
   app.get('/api/v1/invoices', w('invoice:read'), async (req) => {
+    const clientId = await clientIdForUser(prisma, req.ctx);
+    const where: any = clientId ? { jobOrder: { clientId } } : scopeWhere(req.ctx);
     return prisma.invoice.findMany({
-      where: scopeWhere(req.ctx),
+      where,
       orderBy: { createdAt: 'desc' },
     });
   });
@@ -24,6 +26,10 @@ export function invoiceRoutes(app: FastifyInstance, prisma: PrismaClient): void 
     const invoice = await prisma.invoice.findFirst({ where: { id }, include: { lines: true, payments: true } });
     if (!invoice) throw new AppError('NOT_FOUND');
     assertBranchAccess(req.ctx, invoice.branch);
+    if (req.ctx.roles.includes('CLIENT' as any)) {
+      const clientId = await clientIdForUser(prisma, req.ctx);
+      if (!clientId || (invoice.jobOrderId && (await prisma.jobOrder.findFirst({ where: { id: invoice.jobOrderId, clientId } })) == null)) throw new AppError('NOT_FOUND');
+    }
     return invoice;
   });
 

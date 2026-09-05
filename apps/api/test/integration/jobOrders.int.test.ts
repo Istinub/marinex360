@@ -28,13 +28,15 @@ run('Job Orders (integration)', () => {
   let prisma: PrismaClient;
   let app: ReturnType<typeof buildApp>;
 
-  let sup: any, tech: any, otherTech: any, jo: any;
+  let admin: any, director: any, sup: any, tech: any, otherTech: any, jo: any;
 
   beforeAll(async () => {
     prisma = new PrismaClient();
     const presignPut = async () => ({ uploadUrl: 'http://minio/local', headers: {} });
     app = buildApp({ prisma, accessSecret: SECRET, presignPut });
     await app.ready();
+    admin = await prisma.user.findUniqueOrThrow({ where: { email: 'admin@tkmr.local' } });
+    director = await prisma.user.findUniqueOrThrow({ where: { email: 'director@tkmr.local' } });
     sup = await prisma.user.findUniqueOrThrow({ where: { email: 'ops@tkmr.local' } });
     tech = await prisma.user.findUniqueOrThrow({ where: { email: 'tech@tkmr.local' } });
     otherTech = await prisma.user.upsert({
@@ -132,6 +134,141 @@ run('Job Orders (integration)', () => {
   it('B2/CC-01: header edit on an IN_PROGRESS job is rejected (locked) or version-conflicts', async () => {
     const res = await app.inject({ method: 'PATCH', url: `/api/v1/job-orders/${jo.id}`, headers: { authorization: bearer(sup) }, payload: { scopeSummary: 'x', version: 0 } });
     expect([403, 409]).toContain(res.statusCode); // 403 header-locked (now IN_PROGRESS), else 409 stale version
+  });
+
+  it('updates service categories independently of header lock at DRAFT, IN_PROGRESS, and COMPLETED', async () => {
+    for (const state of ['DRAFT', 'IN_PROGRESS', 'COMPLETED']) {
+      const fixture = await prisma.jobOrder.create({
+        data: {
+          joNumber: `SG-INTTEST-CAT-${state}-${Date.now()}`,
+          branch: 'SG',
+          clientId: jo.clientId,
+          vesselId: jo.vesselId,
+          scopeSummary: `Category update ${state}`,
+          origin: 'MANUAL',
+          quotedAmountMinor: 100000,
+          quotedCurrency: 'SGD',
+          state,
+          createdBy: sup.id,
+        },
+      });
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/job-orders/${fixture.id}/categories`,
+        headers: { authorization: bearer(sup) },
+        payload: { serviceCategories: ['inspection', 'safety'], version: fixture.version },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().serviceCategories).toEqual(['inspection', 'safety']);
+      await expect(prisma.auditEntry.findFirst({ where: { entityId: fixture.id, action: 'UPDATE_CATEGORIES' } })).resolves.toBeTruthy();
+    }
+  });
+
+  it('rejects invalid service categories', async () => {
+    const fixture = await prisma.jobOrder.create({
+      data: {
+        joNumber: `SG-INTTEST-CAT-BAD-${Date.now()}`,
+        branch: 'SG',
+        clientId: jo.clientId,
+        vesselId: jo.vesselId,
+        scopeSummary: 'Invalid category fixture',
+        origin: 'MANUAL',
+        quotedAmountMinor: 100000,
+        quotedCurrency: 'SGD',
+        state: 'DRAFT',
+        createdBy: sup.id,
+      },
+    });
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/job-orders/${fixture.id}/categories`,
+      headers: { authorization: bearer(sup) },
+      payload: { serviceCategories: ['inspection', 'naval-architecture'], version: fixture.version },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('returns VERSION_CONFLICT for stale service category updates', async () => {
+    const fixture = await prisma.jobOrder.create({
+      data: {
+        joNumber: `SG-INTTEST-CAT-CONFLICT-${Date.now()}`,
+        branch: 'SG',
+        clientId: jo.clientId,
+        vesselId: jo.vesselId,
+        scopeSummary: 'Category conflict fixture',
+        origin: 'MANUAL',
+        quotedAmountMinor: 100000,
+        quotedCurrency: 'SGD',
+        state: 'COMPLETED',
+        version: 4,
+        createdBy: sup.id,
+      },
+    });
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/job-orders/${fixture.id}/categories`,
+      headers: { authorization: bearer(sup) },
+      payload: { serviceCategories: ['mechanical'], version: 3 },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.code).toBe('VERSION_CONFLICT');
+  });
+
+  it('job order archive purge gate: SYSTEM_ADMIN cannot purge archived, DIRECTOR can', async () => {
+    const adminArchive = await prisma.jobOrder.create({
+      data: {
+        joNumber: `SG-INTTEST-ARCHIVE-ADMIN-${Date.now()}`,
+        branch: 'SG',
+        clientId: jo.clientId,
+        vesselId: jo.vesselId,
+        scopeSummary: 'Archived purge admin fixture',
+        origin: 'MANUAL',
+        quotedAmountMinor: 100000,
+        quotedCurrency: 'SGD',
+        state: 'COMPLETED',
+        archivedAt: new Date(),
+        createdBy: sup.id,
+      },
+    });
+    const directorArchive = await prisma.jobOrder.create({
+      data: {
+        joNumber: `SG-INTTEST-ARCHIVE-DIR-${Date.now()}`,
+        branch: 'SG',
+        clientId: jo.clientId,
+        vesselId: jo.vesselId,
+        scopeSummary: 'Archived purge director fixture',
+        origin: 'MANUAL',
+        quotedAmountMinor: 100000,
+        quotedCurrency: 'SGD',
+        state: 'COMPLETED',
+        archivedAt: new Date(),
+        createdBy: sup.id,
+      },
+    });
+
+    const adminRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${adminArchive.id}/purge`,
+      headers: { authorization: bearer(admin) },
+    });
+    expect(adminRes.statusCode).toBe(403);
+    expect(adminRes.json().error.code).toBe('FORBIDDEN');
+
+    const directorRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${directorArchive.id}/purge`,
+      headers: { authorization: bearer(director) },
+    });
+    expect(directorRes.statusCode).toBe(200);
+    expect(directorRes.json().purged).toBe(true);
+    await expect(prisma.jobOrder.findUniqueOrThrow({ where: { id: directorArchive.id } })).resolves.toMatchObject({ purgedAt: expect.any(Date) });
   });
 
   it('AUDIT-3: AuditEntry is immutable at the DB level (app role has no UPDATE)', async () => {

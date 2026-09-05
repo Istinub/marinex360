@@ -4,6 +4,7 @@ import Column from 'primevue/column';
 import DataTable from 'primevue/datatable';
 import { onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import BackLink from '@/components/common/BackLink.vue';
 import MonoText from '@/components/common/MonoText.vue';
 import NotFoundState from '@/components/common/NotFoundState.vue';
 import { get } from '@/lib/api/client';
@@ -48,7 +49,7 @@ onMounted(async () => {
   <main v-else class="office-route crm-page" aria-labelledby="vessel-history-title">
     <header class="crm-page__header">
       <div>
-        <p class="crm-page__eyebrow">Vessel</p>
+        <BackLink to="/vessels" label="Vessels" />
         <h1 id="vessel-history-title" class="crm-page__title">Service history</h1>
         <p class="record-form__version">
           Vessel ID <MonoText :value="vesselId" />

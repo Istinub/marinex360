@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import Button from 'primevue/button';
-import Dialog from 'primevue/dialog';
 import { defineStore } from 'pinia';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import SyncStatusPanel from './SyncStatusPanel.vue';
+import { useRouter } from 'vue-router';
 
 type ActionableQueueStatus = 'PENDING' | 'SYNCING' | 'CONFLICT' | 'ERROR';
 
@@ -82,12 +81,11 @@ const useSyncStatusChipStore = defineStore('syncStatusChip', () => {
 });
 
 const syncChipStore = useSyncStatusChipStore();
-const panelOpen = ref(false);
+const router = useRouter();
 let refreshTimer: number | null = null;
 
 function openPanel(): void {
-  panelOpen.value = true;
-  void syncChipStore.loadCount();
+  void router.push('/sync');
 }
 
 onMounted(() => {
@@ -117,16 +115,6 @@ onBeforeUnmount(() => {
     @click="openPanel"
   />
 
-  <Dialog
-    v-model:visible="panelOpen"
-    modal
-    dismissable-mask
-    header="Sync status"
-    class="sync-chip__dialog"
-    @hide="syncChipStore.loadCount"
-  >
-    <SyncStatusPanel @queue-changed="syncChipStore.loadCount" />
-  </Dialog>
 </template>
 
 <style scoped>
@@ -141,8 +129,4 @@ onBeforeUnmount(() => {
   min-width: var(--sp-4);
 }
 
-.sync-chip__dialog {
-  width: calc(100vw - var(--sp-8));
-  max-width: calc(var(--tap-field) * 14);
-}
 </style>

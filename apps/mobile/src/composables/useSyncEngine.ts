@@ -74,6 +74,20 @@ interface AssignedPullResponse {
   cursor: string | null;
 }
 
+interface ApiAssignedDeltaResponse {
+  changes?: PullChange[];
+  cursor?: string | null;
+  jobOrders?: Record<string, unknown>[];
+  children?: {
+    worklogs?: Record<string, unknown>[];
+    photos?: Record<string, unknown>[];
+    observations?: Record<string, unknown>[];
+    checklists?: Record<string, unknown>[];
+    materials?: Record<string, unknown>[];
+    esignatures?: Record<string, unknown>[];
+  };
+}
+
 interface SyncAuth {
   userId?: string | null;
   [key: string]: unknown;
@@ -131,6 +145,29 @@ async function responseJson<T>(response: Response): Promise<T | Record<string, n
   }
 }
 
+function normalizeAssignedPull(body: ApiAssignedDeltaResponse | Record<string, never>): Omit<AssignedPullResponse, 'httpStatus'> {
+  if (Array.isArray(body.changes)) {
+    return {
+      changes: body.changes,
+      cursor: body.cursor ?? null,
+    };
+  }
+
+  const children = body.children ?? {};
+  return {
+    cursor: body.cursor ?? null,
+    changes: [
+      ...(body.jobOrders ?? []).map((row) => ({ entity: 'JobOrder', row })),
+      ...(children.worklogs ?? []).map((row) => ({ entity: 'WorkLog', row })),
+      ...(children.photos ?? []).map((row) => ({ entity: 'Photo', row })),
+      ...(children.observations ?? []).map((row) => ({ entity: 'Observation', row })),
+      ...(children.checklists ?? []).map((row) => ({ entity: 'ChecklistInstance', row })),
+      ...(children.materials ?? []).map((row) => ({ entity: 'MaterialLine', row })),
+      ...(children.esignatures ?? []).map((row) => ({ entity: 'ESignature', row })),
+    ],
+  };
+}
+
 export function createSyncTransport(): SyncTransport {
   return {
     async batch(req) {
@@ -160,12 +197,11 @@ export function createSyncTransport(): SyncTransport {
           Accept: 'application/json',
         },
       });
-      const body = await responseJson<AssignedPullResponse>(response);
+      const body = await responseJson<ApiAssignedDeltaResponse>(response);
+      const normalized = normalizeAssignedPull(body);
       const payload = {
-        ...body,
+        ...normalized,
         httpStatus: response.status,
-        changes: Array.isArray(body.changes) ? body.changes : [],
-        cursor: body.cursor ?? null,
       } as AssignedPullResponse;
 
       if (response.status === 401 || response.ok) return payload;

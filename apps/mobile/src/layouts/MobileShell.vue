@@ -104,11 +104,31 @@ onBeforeUnmount(() => {
     <section class="mobile-shell__content" aria-label="Mobile workspace">
       <RouterView />
     </section>
+
+    <nav class="mobile-shell__tabs" aria-label="Primary navigation">
+      <RouterLink class="mobile-shell__tab" to="/jobs">
+        <i class="pi pi-briefcase" aria-hidden="true" />
+        <span>Jobs</span>
+      </RouterLink>
+      <RouterLink class="mobile-shell__tab" to="/dashboard">
+        <i class="pi pi-chart-bar" aria-hidden="true" />
+        <span>Dashboard</span>
+      </RouterLink>
+      <RouterLink class="mobile-shell__tab" to="/profile">
+        <i class="pi pi-user" aria-hidden="true" />
+        <span>Profile</span>
+      </RouterLink>
+      <RouterLink class="mobile-shell__tab" to="/sync">
+        <i class="pi pi-cloud-upload" aria-hidden="true" />
+        <span>Sync</span>
+      </RouterLink>
+    </nav>
   </div>
 </template>
 
 <style scoped>
 .mobile-shell {
+  --mobile-shell-tabs-height: calc(var(--tap-min) + var(--sp-4));
   min-height: 100vh;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -190,6 +210,43 @@ onBeforeUnmount(() => {
 .mobile-shell__content {
   min-width: 0;
   min-height: 0;
+  padding-bottom: calc(var(--mobile-shell-tabs-height) + env(safe-area-inset-bottom, 0px));
   background: var(--color-canvas);
+}
+
+.mobile-shell__tabs {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 10;
+  min-height: var(--mobile-shell-tabs-height);
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: var(--sp-1) max(var(--sp-2), env(safe-area-inset-left)) var(--sp-1) max(var(--sp-2), env(safe-area-inset-right));
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  border-top: var(--border-1);
+  background: var(--color-surface);
+}
+
+.mobile-shell__tab {
+  min-height: var(--tap-min);
+  display: grid;
+  place-items: center;
+  gap: var(--sp-1);
+  border-bottom: 3px solid transparent;
+  color: var(--color-text-muted);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
+  text-decoration: none;
+}
+
+.mobile-shell__tab.router-link-active {
+  border-bottom-color: var(--color-field-action);
+  color: var(--color-text);
+}
+
+.mobile-shell__tab .pi {
+  font-size: var(--fs-body-lg);
 }
 </style>
