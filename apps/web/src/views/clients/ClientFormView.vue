@@ -139,40 +139,58 @@ onMounted(loadForEdit);
 
     <p v-if="isLoading" class="crm-empty">Loading client...</p>
 
-    <form v-else class="record-form" @submit.prevent="saveClient(false)">
+    <form v-else class="record-form record-form--structured" @submit.prevent="saveClient(false)">
       <p v-if="formError" class="auth-message auth-message--error" role="alert">
         {{ formError }}
       </p>
 
-      <label class="auth-field" for="client-name">
-        <span>Name</span>
-        <input id="client-name" v-model="form.name" class="auth-input" required />
-        <FieldError :message="fieldErrors.name" />
-      </label>
+      <section class="record-form__section" aria-labelledby="client-details-heading">
+        <h2 id="client-details-heading" class="record-form__section-heading">Details</h2>
 
-      <label class="auth-field" for="client-status">
-        <span>Status</span>
-        <input id="client-status" v-model="form.status" class="auth-input" />
-        <FieldError :message="fieldErrors.status" />
-      </label>
+        <label class="auth-field" for="client-name">
+          <span>Name</span>
+          <input id="client-name" v-model="form.name" class="auth-input" placeholder="Client name" required />
+          <FieldError :message="fieldErrors.name" />
+        </label>
 
-      <label class="auth-field" for="client-address">
-        <span>Address</span>
-        <textarea id="client-address" v-model="form.address" class="auth-input record-form__textarea" />
-        <FieldError :message="fieldErrors.address" />
-      </label>
+        <label class="auth-field" for="client-status">
+          <span>Status</span>
+          <input id="client-status" v-model="form.status" class="auth-input" />
+          <FieldError :message="fieldErrors.status" />
+        </label>
+      </section>
 
-      <label class="auth-field" for="client-credit-terms">
-        <span>Credit terms</span>
-        <input id="client-credit-terms" v-model="form.creditTerms" class="auth-input" />
-        <FieldError :message="fieldErrors.creditTerms" />
-      </label>
+      <section class="record-form__section" aria-labelledby="client-address-heading">
+        <h2 id="client-address-heading" class="record-form__section-heading">Address</h2>
 
-      <label class="auth-field" for="client-contact-id">
-        <span>Primary contact ID</span>
-        <input id="client-contact-id" v-model="form.primaryContactId" class="auth-input" />
-        <FieldError :message="fieldErrors.primaryContactId" />
-      </label>
+        <label class="auth-field record-form__field--full" for="client-address">
+          <span>Address</span>
+          <textarea
+            id="client-address"
+            v-model="form.address"
+            class="auth-input record-form__textarea"
+            placeholder="Client address"
+          />
+          <FieldError :message="fieldErrors.address" />
+        </label>
+      </section>
+
+      <section class="record-form__section" aria-labelledby="client-contact-heading">
+        <h2 id="client-contact-heading" class="record-form__section-heading">Terms &amp; contact</h2>
+
+        <label class="auth-field" for="client-credit-terms">
+          <span>Credit terms</span>
+          <input id="client-credit-terms" v-model="form.creditTerms" class="auth-input" placeholder="e.g. NET30" />
+          <FieldError :message="fieldErrors.creditTerms" />
+        </label>
+
+        <label class="auth-field" for="client-contact-id">
+          <span>Primary contact</span>
+          <input id="client-contact-id" v-model="form.primaryContactId" class="auth-input" placeholder="Contact name" />
+          <small class="record-form__helper">Enter the contact's name for now.</small>
+          <FieldError :message="fieldErrors.primaryContactId" />
+        </label>
+      </section>
 
       <p v-if="loadedClient" class="record-form__version">
         Version <MonoText :value="loadedClient.version" />

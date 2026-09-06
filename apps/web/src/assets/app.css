@@ -635,6 +635,97 @@ button {
   width: 100%;
 }
 
+.record-form__section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  min-width: 0;
+}
+
+.record-form__section-heading {
+  grid-column: 1 / -1;
+  margin: 18px 0 8px;
+  color: #8B98A3;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.record-form__section:first-of-type .record-form__section-heading {
+  margin-top: 0;
+}
+
+.record-form__section-optional {
+  font-weight: 400;
+  text-transform: none;
+}
+
+.record-form--structured .auth-input {
+  min-height: 32px;
+  height: 32px;
+  padding-block: 4px;
+  border: 1px solid #D3DCE3;
+  border-radius: 6px;
+  color: #11202E;
+}
+
+.record-form--structured .record-form__textarea {
+  min-height: var(--textarea-min-height, 7rem);
+  height: auto;
+}
+
+.record-form--structured .record-form__select {
+  min-height: 32px;
+  height: 32px;
+  border-color: #D3DCE3;
+  border-radius: 6px;
+  color: #11202E;
+}
+
+.record-form--structured .auth-input::placeholder {
+  color: #B0BAC2;
+  opacity: 1;
+}
+
+.record-form--structured .mono-input {
+  font-family: monospace;
+}
+
+.record-form__control--placeholder {
+  color: #B0BAC2 !important;
+}
+
+.record-form__preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #F4F7FA;
+  color: #11202E;
+  font-style: normal;
+  font-weight: 400;
+}
+
+.record-form__preview--empty {
+  color: #5C7081;
+  font-style: italic;
+}
+
+.record-form__helper {
+  margin: -4px 0 0;
+  color: #8B98A3;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.record-form__field--full,
+.record-form__preview {
+  grid-column: 1 / -1;
+}
+
 .record-form__textarea {
   min-height: var(--textarea-min-height, 7rem);
   resize: vertical;
@@ -680,6 +771,12 @@ button {
 
 .mono-input {
   font-family: var(--font-code);
+}
+
+@media (min-width: 768px) {
+  .record-form__section {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
 }
 
 .jo-chip {

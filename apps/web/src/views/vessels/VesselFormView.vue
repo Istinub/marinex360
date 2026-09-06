@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import Button from 'primevue/button';
-import { reactive, ref } from 'vue';
+import { onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import FieldError from '@/components/common/FieldError.vue';
-import MonoText from '@/components/common/MonoText.vue';
 import { post } from '@/lib/api/client';
 import { ApiResponseError } from '@/lib/api/errors';
 import type { Vessel } from '@/lib/api/types';
+import { useClientsStore } from '@/stores/clients';
 
 type VesselField = 'clientId' | 'imoNumber' | 'name' | 'type' | 'flag' | 'classification';
 
@@ -20,6 +20,8 @@ interface VesselCreateInput {
 }
 
 const router = useRouter();
+const clientsStore = useClientsStore();
+const isLoadingClients = ref(true);
 const isSaving = ref(false);
 const formError = ref<string | null>(null);
 const fieldErrors = reactive<Partial<Record<VesselField, string>>>({});
@@ -83,6 +85,16 @@ async function saveVessel(): Promise<void> {
     isSaving.value = false;
   }
 }
+
+onMounted(async () => {
+  try {
+    await clientsStore.loadClients();
+  } catch (error) {
+    formError.value = error instanceof ApiResponseError ? error.message : 'Unable to load clients.';
+  } finally {
+    isLoadingClients.value = false;
+  }
+});
 </script>
 
 <template>
@@ -94,50 +106,87 @@ async function saveVessel(): Promise<void> {
       </div>
     </header>
 
-    <form class="record-form" @submit.prevent="saveVessel">
+    <form class="record-form record-form--structured" @submit.prevent="saveVessel">
       <p v-if="formError" class="auth-message auth-message--error" role="alert">
         {{ formError }}
       </p>
 
-      <label class="auth-field" for="vessel-client-id">
-        <span>Client ID</span>
-        <input id="vessel-client-id" v-model="form.clientId" class="auth-input mono-input" required />
-        <FieldError :message="fieldErrors.clientId" />
-      </label>
+      <section class="record-form__section" aria-labelledby="vessel-ownership-heading">
+        <h2 id="vessel-ownership-heading" class="record-form__section-heading">Ownership &amp; registration</h2>
 
-      <label class="auth-field" for="vessel-imo-number">
-        <span>IMO number</span>
-        <input id="vessel-imo-number" v-model="form.imoNumber" class="auth-input mono-input" required />
-        <FieldError :message="fieldErrors.imoNumber" />
-      </label>
+        <label class="auth-field" for="vessel-client-id">
+          <span>Client</span>
+          <select
+            id="vessel-client-id"
+            v-model="form.clientId"
+            class="auth-input"
+            :class="{ 'record-form__control--placeholder': !form.clientId }"
+            :disabled="isLoadingClients"
+            required
+          >
+            <option value="">{{ isLoadingClients ? 'Loading clients...' : 'Select client' }}</option>
+            <option v-for="client in clientsStore.sortedClients" :key="client.id" :value="client.id">
+              {{ client.name }}
+            </option>
+          </select>
+          <FieldError :message="fieldErrors.clientId" />
+        </label>
 
-      <p class="record-form__version">
-        IMO preview <MonoText :value="form.imoNumber || null" />
-      </p>
+        <label class="auth-field" for="vessel-imo-number">
+          <span>IMO number</span>
+          <input
+            id="vessel-imo-number"
+            v-model="form.imoNumber"
+            class="auth-input mono-input"
+            placeholder="IMO number"
+            required
+          />
+          <FieldError :message="fieldErrors.imoNumber" />
+        </label>
 
-      <label class="auth-field" for="vessel-name">
-        <span>Name</span>
-        <input id="vessel-name" v-model="form.name" class="auth-input" required />
-        <FieldError :message="fieldErrors.name" />
-      </label>
+        <p class="record-form__preview" :class="{ 'record-form__preview--empty': !form.imoNumber.trim() }">
+          <span class="pi pi-info-circle" aria-hidden="true" />
+          <template v-if="form.imoNumber.trim()">IMO {{ form.imoNumber.trim() }}</template>
+          <template v-else>IMO number will appear once entered</template>
+        </p>
+      </section>
 
-      <label class="auth-field" for="vessel-type">
-        <span>Type</span>
-        <input id="vessel-type" v-model="form.type" class="auth-input" />
-        <FieldError :message="fieldErrors.type" />
-      </label>
+      <section class="record-form__section" aria-labelledby="vessel-details-heading">
+        <h2 id="vessel-details-heading" class="record-form__section-heading">Vessel details</h2>
 
-      <label class="auth-field" for="vessel-flag">
-        <span>Flag</span>
-        <input id="vessel-flag" v-model="form.flag" class="auth-input" />
-        <FieldError :message="fieldErrors.flag" />
-      </label>
+        <label class="auth-field" for="vessel-name">
+          <span>Name</span>
+          <input id="vessel-name" v-model="form.name" class="auth-input" placeholder="Vessel name" required />
+          <FieldError :message="fieldErrors.name" />
+        </label>
 
-      <label class="auth-field" for="vessel-classification">
-        <span>Classification</span>
-        <input id="vessel-classification" v-model="form.classification" class="auth-input" />
-        <FieldError :message="fieldErrors.classification" />
-      </label>
+        <label class="auth-field" for="vessel-type">
+          <span>Type</span>
+          <input id="vessel-type" v-model="form.type" class="auth-input" placeholder="Vessel type" />
+          <FieldError :message="fieldErrors.type" />
+        </label>
+      </section>
+
+      <section class="record-form__section" aria-labelledby="vessel-classification-heading">
+        <h2 id="vessel-classification-heading" class="record-form__section-heading">Flag &amp; classification</h2>
+
+        <label class="auth-field" for="vessel-flag">
+          <span>Flag</span>
+          <input id="vessel-flag" v-model="form.flag" class="auth-input" placeholder="Flag" />
+          <FieldError :message="fieldErrors.flag" />
+        </label>
+
+        <label class="auth-field" for="vessel-classification">
+          <span>Classification</span>
+          <input
+            id="vessel-classification"
+            v-model="form.classification"
+            class="auth-input"
+            placeholder="Classification"
+          />
+          <FieldError :message="fieldErrors.classification" />
+        </label>
+      </section>
 
       <div class="record-form__actions">
         <Button label="Cancel" severity="secondary" @click="router.back()" />
