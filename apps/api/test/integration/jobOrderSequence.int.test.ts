@@ -160,10 +160,10 @@ run('Core Job Order sequence (integration)', () => {
     }
   });
 
-  it('technician sees all branch jobs with openability tags, then self-assigns the available one', async () => {
+  it('technician sees all branch scheduled jobs with openability tags', async () => {
     const assigned = await createJobOrder('SCHEDULED', tech);
     const assignedToOtherTech = await createJobOrder('IN_PROGRESS', otherTech);
-    const available = await createJobOrder('SCHEDULED');
+    const unassigned = await createJobOrder('SCHEDULED');
 
     const list = await app.inject({
       method: 'GET',
@@ -172,22 +172,11 @@ run('Core Job Order sequence (integration)', () => {
     });
     expect(list.statusCode).toBe(200);
     const rows = list.json();
-    expect(rows.find((row: any) => row.id === assigned.id)?.isAvailable).toBe(false);
     expect(rows.find((row: any) => row.id === assigned.id)?.canOpen).toBe(true);
-    expect(rows.find((row: any) => row.id === assignedToOtherTech.id)?.isAvailable).toBe(false);
+    expect(rows.find((row: any) => row.id === assigned.id)?.canStart).toBe(true);
     expect(rows.find((row: any) => row.id === assignedToOtherTech.id)?.canOpen).toBe(false);
-    expect(rows.find((row: any) => row.id === available.id)?.isAvailable).toBe(true);
-    expect(rows.find((row: any) => row.id === available.id)?.canOpen).toBe(true);
-
-    const claimed = await app.inject({
-      method: 'POST',
-      url: `/api/v1/job-orders/${available.id}/self-assign`,
-      headers: { authorization: bearer(tech) },
-      payload: { version: available.version },
-    });
-    expect(claimed.statusCode).toBe(200);
-    expect(claimed.json().executionOwnerId).toBe(tech.id);
-    expect(claimed.json().assignedTechnicianIds).toContain(tech.id);
+    expect(rows.find((row: any) => row.id === unassigned.id)?.canOpen).toBe(true);
+    expect(rows.find((row: any) => row.id === unassigned.id)?.canStart).toBe(false);
   });
 
   it('technician detail access allows unassigned and own jobs while masking other-owner and cross-branch jobs', async () => {
@@ -262,14 +251,14 @@ run('Core Job Order sequence (integration)', () => {
     expect(rows.find((row: any) => row.id === jobs.get('DRAFT').id)).toBeUndefined();
     expect(rows.find((row: any) => row.id === jobs.get('CANCELLED').id)).toBeUndefined();
 
-    const expectedListAccess: Record<string, { canOpen: boolean; readOnly: boolean; isAvailable: boolean }> = {
-      SCHEDULED: { canOpen: true, readOnly: false, isAvailable: false },
-      IN_PROGRESS: { canOpen: false, readOnly: false, isAvailable: false },
-      ON_HOLD: { canOpen: true, readOnly: false, isAvailable: false },
-      PENDING_REVIEW: { canOpen: true, readOnly: true, isAvailable: false },
-      COMPLETED: { canOpen: true, readOnly: true, isAvailable: false },
-      INVOICED: { canOpen: true, readOnly: true, isAvailable: false },
-      CLOSED: { canOpen: true, readOnly: true, isAvailable: false },
+    const expectedListAccess: Record<string, { canOpen: boolean; readOnly: boolean; canStart: boolean }> = {
+      SCHEDULED: { canOpen: true, readOnly: false, canStart: true },
+      IN_PROGRESS: { canOpen: false, readOnly: false, canStart: false },
+      ON_HOLD: { canOpen: true, readOnly: false, canStart: false },
+      PENDING_REVIEW: { canOpen: true, readOnly: true, canStart: false },
+      COMPLETED: { canOpen: true, readOnly: true, canStart: false },
+      INVOICED: { canOpen: true, readOnly: true, canStart: false },
+      CLOSED: { canOpen: true, readOnly: true, canStart: false },
     };
 
     for (const [state, expected] of Object.entries(expectedListAccess)) {
@@ -277,17 +266,17 @@ run('Core Job Order sequence (integration)', () => {
       expect(row, state).toBeTruthy();
       expect(row.canOpen, state).toBe(expected.canOpen);
       expect(row.readOnly, state).toBe(expected.readOnly);
-      expect(row.isAvailable, state).toBe(expected.isAvailable);
+      expect(row.canStart, state).toBe(expected.canStart);
     }
 
-    const availableScheduled = await createJobOrder('SCHEDULED');
-    const availableList = await app.inject({
+    const unassignedScheduled = await createJobOrder('SCHEDULED');
+    const unassignedList = await app.inject({
       method: 'GET',
       url: '/api/v1/job-orders',
       headers: { authorization: bearer(tech) },
     });
-    const availableRow = availableList.json().find((row: any) => row.id === availableScheduled.id);
-    expect(availableRow).toMatchObject({ canOpen: true, readOnly: false, isAvailable: true, canStart: true });
+    const unassignedRow = unassignedList.json().find((row: any) => row.id === unassignedScheduled.id);
+    expect(unassignedRow).toMatchObject({ canOpen: true, readOnly: false, canStart: false });
 
     for (const state of ['SCHEDULED', 'ON_HOLD', 'PENDING_REVIEW', 'COMPLETED', 'INVOICED', 'CLOSED'] as const) {
       const detail = await app.inject({

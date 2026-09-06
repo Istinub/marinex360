@@ -8,8 +8,8 @@ import JobDetail from '@/views/JobDetail.vue';
 import JobDocumentsList from '@/views/JobDocumentsList.vue';
 import Login from '@/views/Login.vue';
 import MaterialLineForm from '@/views/MaterialLineForm.vue';
+import More from '@/views/More.vue';
 import ObservationForm from '@/views/ObservationForm.vue';
-import Profile from '@/views/Profile.vue';
 import SignatureCapture from '@/views/SignatureCapture.vue';
 import SyncStatusPanel from '@/components/SyncStatusPanel.vue';
 import { useAuth } from '@/composables/useAuth';
@@ -46,9 +46,9 @@ const routes = [
         component: Dashboard,
       },
       {
-        path: 'profile',
-        name: 'profile',
-        component: Profile,
+        path: 'more',
+        name: 'more',
+        component: More,
       },
       {
         path: 'sync',

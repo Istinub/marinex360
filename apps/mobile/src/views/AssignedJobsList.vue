@@ -10,7 +10,6 @@ import { RouterLink, useRoute } from 'vue-router';
 import {
   loadCachedJobOrders,
   loadLiveJobOrders,
-  selfAssignJobOrder,
   type JobState,
   type MobileJobOrder,
 } from '@/composables/useJobOrders';
@@ -96,11 +95,6 @@ const useAssignedJobsStore = defineStore('assignedJobs', () => {
     isOffline.value = typeof navigator !== 'undefined' ? !navigator.onLine : false;
   }
 
-  function replaceJob(job: AssignedJobOrder): void {
-    jobs.value = [job, ...jobs.value.filter((item) => item.id !== job.id)];
-    source.value = 'live';
-  }
-
   return {
     jobs,
     sortedJobs,
@@ -110,7 +104,6 @@ const useAssignedJobsStore = defineStore('assignedJobs', () => {
     source,
     loadAssignedJobs,
     setOnlineStatus,
-    replaceJob,
   };
 });
 
@@ -121,8 +114,6 @@ const searchQuery = ref('');
 const selectedStatuses = ref<JobState[]>([]);
 const dateFrom = ref('');
 const dateTo = ref('');
-const claimingJobId = ref<string | null>(null);
-const claimMessage = ref<string | null>(null);
 
 const statusFilters: Array<{ value: JobState; label: string }> = [
   { value: 'SCHEDULED', label: 'Scheduled' },
@@ -168,22 +159,6 @@ function clearFilters(): void {
   dateTo.value = '';
 }
 
-async function claimJob(job: AssignedJobOrder): Promise<void> {
-  assignedJobsStore.errorMessage = null;
-  claimMessage.value = null;
-  claimingJobId.value = job.id;
-
-  try {
-    const updated = await selfAssignJobOrder(job);
-    assignedJobsStore.replaceJob(updated);
-    claimMessage.value = `${updated.joNumber} assigned to you.`;
-  } catch (error) {
-    assignedJobsStore.errorMessage = error instanceof Error ? error.message : 'Unable to claim job.';
-  } finally {
-    claimingJobId.value = null;
-  }
-}
-
 function handleOnlineStatusChange(): void {
   assignedJobsStore.setOnlineStatus();
   void assignedJobsStore.loadAssignedJobs();
@@ -212,7 +187,7 @@ onBeforeUnmount(() => {
     <header class="assigned-jobs__header">
       <div>
         <p class="assigned-jobs__eyebrow">My work</p>
-        <h1 id="assigned-jobs-title" class="assigned-jobs__title">Assigned jobs</h1>
+        <h1 id="assigned-jobs-title" class="assigned-jobs__title">Available jobs</h1>
       </div>
 
       <Button
@@ -237,10 +212,6 @@ onBeforeUnmount(() => {
     <div v-if="assignedJobsStore.errorMessage" class="assigned-jobs__error" role="alert">
       {{ assignedJobsStore.errorMessage }}
     </div>
-    <div v-if="claimMessage" class="assigned-jobs__notice" role="status">
-      {{ claimMessage }}
-    </div>
-
     <section class="assigned-jobs__filters" aria-label="Filter assigned jobs">
       <div class="assigned-jobs__filter-heading">
         <h2>Filter jobs</h2>
@@ -338,17 +309,8 @@ onBeforeUnmount(() => {
               </time>
             </div>
 
-            <div v-if="job.isAvailable || !canOpenJob(job)" class="assigned-jobs__actions">
-              <span v-if="job.isAvailable" class="assigned-jobs__available">Available for self-assignment</span>
-              <span v-else class="assigned-jobs__available">Assigned</span>
-              <Button
-                v-if="job.isAvailable"
-                label="Claim job"
-                icon="pi pi-user-plus"
-                :loading="claimingJobId === job.id"
-                :disabled="assignedJobsStore.isOffline"
-                @click="claimJob(job)"
-              />
+            <div v-if="!canOpenJob(job)" class="assigned-jobs__actions">
+              <span class="assigned-jobs__assignment">Assigned</span>
             </div>
           </article>
         </template>
@@ -576,7 +538,7 @@ onBeforeUnmount(() => {
   min-height: var(--tap-field);
 }
 
-.assigned-jobs__available {
+.assigned-jobs__assignment {
   color: var(--color-text-muted);
   font-size: var(--fs-body-sm);
   font-weight: var(--fw-semibold);

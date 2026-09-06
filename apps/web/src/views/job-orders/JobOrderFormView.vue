@@ -6,7 +6,7 @@ import { useRouter } from 'vue-router';
 import FieldError from '@/components/common/FieldError.vue';
 import MonoText from '@/components/common/MonoText.vue';
 import { ApiResponseError } from '@/lib/api/errors';
-import { JOB_ORDER_CATEGORY_OPTIONS } from '@/lib/jobOrderCategories';
+import { useChecklistCategoriesStore } from '@/stores/checklistCategories';
 import { useClientsStore } from '@/stores/clients';
 import { useJobOrdersStore, type JobOrderCreateInput } from '@/stores/jobOrders';
 
@@ -23,6 +23,7 @@ type JobOrderField =
 
 const router = useRouter();
 const clientsStore = useClientsStore();
+const checklistCategoriesStore = useChecklistCategoriesStore();
 const jobOrdersStore = useJobOrdersStore();
 
 const isLoadingClients = ref(true);
@@ -43,6 +44,7 @@ const form = reactive({
 });
 
 const vesselOptions = computed(() => clientsStore.selectedClient?.vessels ?? []);
+const categoryOptions = computed(() => checklistCategoriesStore.options);
 
 function clearFieldErrors(): void {
   for (const key of Object.keys(fieldErrors) as JobOrderField[]) delete fieldErrors[key];
@@ -130,9 +132,9 @@ watch(() => form.clientId, (clientId) => {
 
 onMounted(async () => {
   try {
-    await clientsStore.loadClients();
+    await Promise.all([clientsStore.loadClients(), checklistCategoriesStore.load()]);
   } catch (error) {
-    formError.value = error instanceof ApiResponseError ? error.message : 'Unable to load clients.';
+    formError.value = error instanceof ApiResponseError ? error.message : 'Unable to load form data.';
   } finally {
     isLoadingClients.value = false;
   }
@@ -181,7 +183,7 @@ onMounted(async () => {
           id="jo-service-categories-create"
           v-model="form.serviceCategories"
           class="record-form__select"
-          :options="JOB_ORDER_CATEGORY_OPTIONS"
+          :options="categoryOptions"
           option-label="label"
           option-value="value"
           display="chip"

@@ -18,6 +18,37 @@ export interface User {
   version: number;
 }
 
+export interface DeviceUserLookup {
+  id: string;
+  name: string;
+  email: string;
+  roles: string[];
+  branch: string;
+}
+
+export interface Device {
+  id: string;
+  name?: string | null;
+  assignedUserId: string;
+  branch: string;
+  createdAt: string;
+  assignedUser?: DeviceUserLookup;
+}
+
+export interface ChecklistTemplateItem {
+  id: string;
+  categoryId: string;
+  label: string;
+  sortOrder: number;
+}
+
+export interface ChecklistCategory {
+  id: string;
+  name: string;
+  sortOrder: number;
+  items: ChecklistTemplateItem[];
+}
+
 export interface Client {
   id: string;
   branch: string;

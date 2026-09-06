@@ -1,10 +1,8 @@
 <script setup lang="ts">
 import Button from 'primevue/button';
 import Card from 'primevue/card';
-import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
-import Password from 'primevue/password';
-import { computed, nextTick, reactive, ref } from 'vue';
+import { computed, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { LoginError, useAuth, type LoginErrorKind } from '@/composables/useAuth';
 
@@ -12,19 +10,12 @@ const auth = useAuth();
 const route = useRoute();
 const router = useRouter();
 
-const form = reactive({
-  email: '',
-  password: '',
-  totp: '',
-});
-const showTotp = ref(false);
+const pin = ref('');
 const isSubmitting = ref(false);
 const errorKind = ref<LoginErrorKind | null>(null);
 const errorMessage = ref<string | null>(null);
-const mfaEnrollmentRequired = ref(false);
-const totpInput = ref<HTMLInputElement | null>(null);
 
-const messageSeverity = computed(() => errorKind.value === 'totp-required' ? 'warn' : 'error');
+const maskedPin = computed(() => pin.value.padEnd(4, ' ').split('').map((digit) => (digit.trim() ? '*' : 'o')));
 
 function intendedDestination(): string {
   const redirect = route.query.redirect;
@@ -32,54 +23,47 @@ function intendedDestination(): string {
   return redirect;
 }
 
-function setLoginError(kind: LoginErrorKind): void {
+function setLoginError(kind: LoginErrorKind, message?: string): void {
   errorKind.value = kind;
   const messages: Record<LoginErrorKind, string> = {
-    credentials: 'Email or password is incorrect.',
-    'totp-required': 'Enter the six-digit code from your authenticator app.',
-    'totp-invalid': 'The authenticator code is invalid. Check the code and try again.',
+    credentials: 'PIN is incorrect.',
+    'totp-required': 'This device requires setup by an administrator.',
+    'totp-invalid': 'Device unlock could not be completed.',
     network: 'Unable to reach the server. Check your connection and try again.',
-    request: 'Sign in could not be completed. Please try again.',
+    request: message ?? 'Device unlock could not be completed. Please try again.',
   };
   errorMessage.value = messages[kind];
+}
+
+function pressDigit(value: string): void {
+  errorMessage.value = null;
+  if (pin.value.length >= 4) return;
+  pin.value += value;
+}
+
+function backspace(): void {
+  pin.value = pin.value.slice(0, -1);
 }
 
 async function submit(): Promise<void> {
   errorKind.value = null;
   errorMessage.value = null;
-  mfaEnrollmentRequired.value = false;
 
-  if (showTotp.value && !form.totp.trim()) {
-    setLoginError('totp-required');
+  if (!/^\d{4}$/.test(pin.value)) {
+    setLoginError('request', 'Enter the four-digit PIN.');
     return;
   }
 
   isSubmitting.value = true;
   try {
-    const result = await auth.login(
-      form.email,
-      form.password,
-      showTotp.value ? form.totp : undefined,
-    );
-    mfaEnrollmentRequired.value = result.mfaEnrollmentRequired;
-
-    if (result.mfaEnrollmentRequired) {
-      await router.replace({ path: '/jobs', query: { mfaEnrollmentRequired: 'true' } });
-      return;
-    }
-
+    await auth.unlockDevice(pin.value);
     await router.replace(intendedDestination());
   } catch (error) {
+    pin.value = '';
     if (error instanceof LoginError) {
-      setLoginError(error.kind);
-      if (error.kind === 'totp-required') {
-        showTotp.value = true;
-        await nextTick();
-        totpInput.value?.focus();
-      }
+      setLoginError(error.kind, error.message);
       return;
     }
-
     setLoginError('request');
   } finally {
     isSubmitting.value = false;
@@ -92,72 +76,30 @@ async function submit(): Promise<void> {
     <Card class="login__card">
       <template #content>
         <header class="login__header">
-          <p class="login__eyebrow">MarineX360 Mobile</p>
-          <h1 id="login-title" class="login__title">Sign in</h1>
-          <p class="login__intro">Use your assigned account to access jobs saved on this device.</p>
+          <h1 id="login-title" class="login__title">MarineX360 Mobile</h1>
+          <p class="login__intro">Type your PIN to access the app.</p>
         </header>
 
-        <Message v-if="errorMessage" :severity="messageSeverity" :closable="false">
+        <Message v-if="errorMessage" :severity="errorKind === 'request' ? 'warn' : 'error'" :closable="false">
           {{ errorMessage }}
         </Message>
 
-        <Message v-if="mfaEnrollmentRequired" severity="warn" :closable="false">
-          Multi-factor authentication enrollment is still required for this account.
-        </Message>
-
         <form class="login__form" novalidate @submit.prevent="submit">
-          <div class="login__field">
-            <label for="email">Email</label>
-            <InputText
-              id="email"
-              v-model="form.email"
-              class="login__control"
-              type="email"
-              autocomplete="email"
-              inputmode="email"
-              required
-              fluid
-            />
+          <div class="login__pin" aria-label="PIN">
+            <span v-for="(digit, index) in maskedPin" :key="index">{{ digit }}</span>
           </div>
 
-          <div class="login__field">
-            <label for="password">Password</label>
-            <Password
-              v-model="form.password"
-              class="login__control"
-              input-id="password"
-              autocomplete="current-password"
-              :feedback="false"
-              toggle-mask
-              required
-              fluid
-            />
+          <div class="login__pad" aria-label="PIN pad">
+            <button v-for="digit in ['1','2','3','4','5','6','7','8','9']" :key="digit" type="button" @click="pressDigit(digit)">
+              {{ digit }}
+            </button>
+            <button type="button" @click="backspace">Back</button>
+            <button type="button" @click="pressDigit('0')">0</button>
+            <Button type="submit" icon="pi pi-check" aria-label="Unlock" :loading="isSubmitting" />
           </div>
-
-          <div v-if="showTotp" class="login__field">
-            <label for="totp">Authenticator code</label>
-            <InputText
-              id="totp"
-              ref="totpInput"
-              v-model="form.totp"
-              class="login__control login__totp"
-              inputmode="numeric"
-              autocomplete="one-time-code"
-              maxlength="6"
-              pattern="[0-9]*"
-              required
-              fluid
-            />
-          </div>
-
-          <Button
-            type="submit"
-            label="Sign in"
-            icon="pi pi-sign-in"
-            class="login__submit"
-            :loading="isSubmitting"
-          />
         </form>
+
+        <p class="login__help">Forgot your PIN? Contact your supervisor or IT.</p>
       </template>
     </Card>
   </main>
@@ -184,13 +126,6 @@ async function submit(): Promise<void> {
   margin-bottom: var(--sp-6);
 }
 
-.login__eyebrow {
-  margin: 0 0 var(--sp-1);
-  color: var(--color-text-muted);
-  font-size: var(--fs-body-sm);
-  font-weight: var(--fw-semibold);
-}
-
 .login__title {
   margin: 0;
   font-size: var(--fs-h1);
@@ -207,39 +142,45 @@ async function submit(): Promise<void> {
 
 .login__form {
   display: grid;
-  gap: var(--sp-4);
+  gap: var(--sp-3);
+}
+
+.login__form {
   margin-top: var(--sp-4);
 }
 
-.login__field {
-  display: grid;
-  gap: var(--sp-2);
+.login__pin {
+  display: flex;
+  justify-content: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) 0;
+  color: var(--color-text);
+  font-size: var(--fs-h2);
+  font-family: var(--font-code);
 }
 
-.login__field label {
-  font-size: var(--fs-body);
+.login__pad {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--tap-gap);
+}
+
+.login__pad button,
+.login__pad :deep(.p-button) {
+  min-height: var(--tap-field);
+  border: var(--border-1);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--fs-body-lg);
   font-weight: var(--fw-semibold);
 }
 
-.login__control,
-.login__submit {
-  width: 100%;
-  min-height: var(--tap-min);
-}
-
-.login__control :deep(input),
-.login__control:deep(input),
-.login__totp {
-  min-height: var(--tap-min);
-  font-size: var(--fs-body);
-}
-
-.login__totp {
-  font-family: var(--font-code);
-  letter-spacing: 0.2em;
-}
-
-.login__submit {
-  margin-top: var(--sp-2);
+.login__help {
+  margin: var(--sp-5) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-body-sm);
+  line-height: var(--lh-base);
+  text-align: center;
 }
 </style>

@@ -162,3 +162,7 @@ export function patch<TResponse, TBody = unknown>(
 ): Promise<TResponse> {
   return request<TResponse, TBody>('PATCH', path, { ...options, body });
 }
+
+export function del<TResponse>(path: string, options?: Omit<RequestOptions, 'body'>): Promise<TResponse> {
+  return request<TResponse>('DELETE', path, options);
+}

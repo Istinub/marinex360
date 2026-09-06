@@ -12,10 +12,10 @@ import NotFoundState from '@/components/common/NotFoundState.vue';
 import VersionConflictDialog from '@/components/common/VersionConflictDialog.vue';
 import { post } from '@/lib/api/client';
 import { ApiResponseError } from '@/lib/api/errors';
-import { JOB_ORDER_CATEGORY_OPTIONS } from '@/lib/jobOrderCategories';
 import type { JobOrder, JobState, Variation } from '@/lib/api/types';
 import { formatMoney } from '@/lib/money';
 import { useAuthStore } from '@/stores/auth';
+import { useChecklistCategoriesStore } from '@/stores/checklistCategories';
 import { useJobOrdersStore, type JobOrderAssignInput, type JobOrderCategoriesInput, type JobOrderPatchInput, type TechnicianLookup } from '@/stores/jobOrders';
 
 type HeaderField = 'scopeSummary' | 'port' | 'plannedStartDate' | 'externalQuoteRef' | 'externalRfqRef';
@@ -57,6 +57,7 @@ interface MaterialLineDraft {
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
+const checklistCategoriesStore = useChecklistCategoriesStore();
 const jobOrdersStore = useJobOrdersStore();
 const jobOrderId = computed(() => String(route.params.id));
 
@@ -108,6 +109,7 @@ const lifecycleError = ref<string | null>(null);
 const technicians = ref<TechnicianLookup[]>([]);
 const techniciansError = ref<string | null>(null);
 const techniciansLoading = ref(false);
+const categoryOptions = computed(() => checklistCategoriesStore.options);
 
 const officeRoles = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN', 'DIRECTOR'];
 const financeRoles = ['FINANCE', 'SYSTEM_ADMIN', 'DIRECTOR'];
@@ -628,7 +630,7 @@ async function decideVariation(variation: Variation, decision: VariationDecision
 onMounted(async () => {
   isLoading.value = true;
   try {
-    await loadTechnicianLookup();
+    await Promise.all([loadTechnicianLookup(), checklistCategoriesStore.load()]);
     await loadJobOrder();
   } catch (error) {
     if (error instanceof ApiResponseError && error.code === 'NOT_FOUND') {
@@ -646,7 +648,7 @@ watch(jobOrderId, async () => {
   isNotFound.value = false;
   formError.value = null;
   try {
-    await loadJobOrder();
+    await Promise.all([checklistCategoriesStore.load(), loadJobOrder()]);
   } catch (error) {
     if (error instanceof ApiResponseError && error.code === 'NOT_FOUND') {
       isNotFound.value = true;
@@ -930,7 +932,7 @@ watch(() => assignmentForm.technicianIds, syncExecutionOwnerSelection);
               id="jo-service-categories"
               v-model="categoryForm.serviceCategories"
               class="record-form__select"
-              :options="JOB_ORDER_CATEGORY_OPTIONS"
+              :options="categoryOptions"
               option-label="label"
               option-value="value"
               display="chip"

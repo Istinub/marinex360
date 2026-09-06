@@ -429,7 +429,7 @@ onBeforeUnmount(() => {
   <main class="job-documents" aria-labelledby="job-documents-title">
     <header class="job-documents__header">
       <div>
-        <MobileBackLink :to="`/jobs/${jobOrderId}`" label="Return" />
+        <MobileBackLink :to="`/jobs/${resolvedJobOrderId}`" label="Return" />
         <p class="job-documents__eyebrow">Job files</p>
         <h1 id="job-documents-title" class="job-documents__title">Documents</h1>
       </div>

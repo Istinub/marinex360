@@ -32,6 +32,11 @@ interface RefreshResponse {
   refresh: string;
 }
 
+interface DeviceUnlockResponse {
+  access: string;
+  refresh: string;
+}
+
 interface ApiErrorEnvelope {
   error?: {
     code?: string;
@@ -213,6 +218,39 @@ export async function login(
   return { ...session, mfaEnrollmentRequired: result.mfaEnrollmentRequired };
 }
 
+export async function unlockDevice(pin: string): Promise<MobileSession> {
+  let response: Response;
+  try {
+    response = await fetch(`${apiBase()}/devices/unlock-by-pin`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ pin }),
+    });
+  } catch {
+    throw new LoginError('network', 'Unable to reach the server. Check your connection and try again.');
+  }
+
+  const body = await parseResponseBody(response);
+  if (!response.ok) {
+    const error = apiError(body);
+    if (response.status === 401) throw new LoginError('credentials', 'PIN is incorrect.');
+    if (response.status === 429) throw new LoginError('request', 'Too many attempts. Please try again later.');
+    throw new LoginError('request', error?.message ?? `Device unlock failed (${response.status}).`);
+  }
+
+  const result = body as Partial<DeviceUnlockResponse>;
+  if (typeof result.access !== 'string' || typeof result.refresh !== 'string') {
+    throw new LoginError('request', 'The server returned an invalid unlock response.');
+  }
+
+  const session = sessionFromAccess(result.access, result.refresh);
+  await persistSession(session);
+  return session;
+}
+
 async function performRefresh(): Promise<MobileSession> {
   const session = await currentSession();
   if (!session?.refresh) {
@@ -285,6 +323,7 @@ export async function authenticatedFetch(input: RequestInfo | URL, init: Request
 
 const auth = {
   login,
+  unlockDevice,
   refresh,
   logout,
   currentSession,

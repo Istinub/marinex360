@@ -66,6 +66,13 @@ CREATE TABLE IF NOT EXISTS op_queue (
 CREATE INDEX IF NOT EXISTS idx_op_queue_status ON op_queue (status, next_attempt_at);
 CREATE INDEX IF NOT EXISTS idx_op_queue_job ON op_queue (job_order_id);
 
+CREATE TABLE IF NOT EXISTS job_open_activity (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_order_id  TEXT NOT NULL,
+  opened_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_job_open_activity_opened_at ON job_open_activity (opened_at);
+
 -- ---------------------------------------------------------------------
 -- 2. Binary upload queue — photos / signature images (two-phase sync)
 --    Binaries go to S3 via a presigned PUT (BE endpoint owed) BEFORE the

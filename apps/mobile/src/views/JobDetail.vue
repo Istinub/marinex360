@@ -7,10 +7,11 @@ import { computed, onMounted, ref } from 'vue';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
 import MobileBackLink from '@/components/MobileBackLink.vue';
 import { currentSessionSnapshot } from '@/composables/useAuth';
+import { jobOrderStateMeta } from '@/composables/useJobOrderStateMeta';
+import { recordJobOpened } from '@/composables/useTodayActivity';
 import {
   loadCachedJobOrder,
   loadLiveJobOrder,
-  selfAssignJobOrder,
   transitionJobOrder,
   type JobState,
   type MobileJobOrder,
@@ -41,16 +42,24 @@ const showResumeDialog = ref(false);
 
 const currentUserId = computed(() => currentSessionSnapshot()?.userId ?? null);
 const isExecutionOwner = computed(() => Boolean(jobOrder.value?.executionOwnerId && jobOrder.value.executionOwnerId === currentUserId.value));
-const canStart = computed(() => jobOrder.value?.canStart === true && jobOrder.value.readOnly !== true);
+const showOwnerWarning = computed(() => Boolean(jobOrder.value?.executionOwnerId && !isExecutionOwner.value));
+const canStart = computed(() => jobOrder.value?.state === 'SCHEDULED' && jobOrder.value.canStart !== false && jobOrder.value.readOnly !== true);
 const canPause = computed(() => jobOrder.value?.state === 'IN_PROGRESS' && jobOrder.value.readOnly !== true && isExecutionOwner.value);
 const canComplete = computed(() => jobOrder.value?.state === 'IN_PROGRESS' && jobOrder.value.readOnly !== true && isExecutionOwner.value);
-const canResume = computed(() => jobOrder.value?.canResume === true && jobOrder.value.readOnly !== true);
+const canResume = computed(() => jobOrder.value?.state === 'ON_HOLD' && jobOrder.value.canResume !== false && jobOrder.value.readOnly !== true);
+const canTransitionToInProgress = computed(() => canStart.value || canResume.value);
+const inProgressTransitionLabel = computed(() => (jobOrder.value?.state === 'SCHEDULED' ? 'Start job' : 'Resume'));
 const showExecutionTabs = computed(() => jobOrder.value?.state === 'IN_PROGRESS' && jobOrder.value.readOnly !== true);
 const categoryText = computed(() => {
   const categories = jobOrder.value?.serviceCategories ?? [];
   return categories.length > 0 ? categories.join(', ') : 'No category on record';
 });
 const scopeSummary = computed(() => jobOrder.value?.scopeSummary?.trim() || 'No description on record');
+const stateMeta = computed(() => jobOrder.value ? jobOrderStateMeta(jobOrder.value.state) : null);
+
+function isEmptyField(value: string): boolean {
+  return value.startsWith('No ') && value.endsWith(' on record');
+}
 
 function applyJobOrder(nextJobOrder: MobileJobOrder): void {
   jobOrder.value = nextJobOrder;
@@ -110,12 +119,7 @@ async function startJob(): Promise<void> {
   successMessage.value = null;
 
   try {
-    let startable = jobOrder.value;
-    if (startable.isAvailable) {
-      startable = await selfAssignJobOrder(startable);
-      applyJobOrder(startable);
-    }
-    const updated = await transitionJobOrder(startable, 'IN_PROGRESS');
+    const updated = await transitionJobOrder(jobOrder.value, 'IN_PROGRESS');
     applyJobOrder(updated);
     successMessage.value = 'Job started.';
   } catch (error) {
@@ -175,14 +179,22 @@ async function resumeJob(): Promise<void> {
   }
 }
 
+function beginInProgressTransition(): void {
+  if (jobOrder.value?.state === 'SCHEDULED') {
+    void startJob();
+    return;
+  }
+  if (jobOrder.value?.state === 'ON_HOLD') showResumeDialog.value = true;
+}
+
 const checklistPath = computed(() => `/jobs/${jobOrderId.value}/checklist`);
 const materialsPath = computed(() => `/jobs/${jobOrderId.value}/materials`);
 const documentsPath = computed(() => `/jobs/${jobOrderId.value}/documents`);
 const signaturePath = computed(() => `/jobs/${jobOrderId.value}/sign`);
 const observationsPath = computed(() => `/jobs/${jobOrderId.value}/observations`);
-const completionPreviewPath = computed(() => `/jobs/${jobOrderId.value}/completion-preview`);
 
 onMounted(() => {
+  if (jobOrderId.value) void recordJobOpened(jobOrderId.value);
   void loadJob();
 });
 </script>
@@ -190,14 +202,14 @@ onMounted(() => {
 <template>
   <main class="job-detail" aria-labelledby="job-detail-title">
     <header class="job-detail__header">
-      <MobileBackLink to="/jobs" label="Assigned jobs" />
+      <MobileBackLink to="/jobs" label="Jobs" />
       <div class="job-detail__identity">
         <p class="job-detail__eyebrow">Job execution</p>
-        <h1 id="job-detail-title" class="job-detail__title">{{ jobNumber }}</h1>
+        <h1 id="job-detail-title" class="job-detail__title" :class="{ 'job-detail__empty-value': isEmptyField(vesselName) }">{{ vesselName }}</h1>
         <p class="job-detail__context">
-          <span>{{ vesselName }}</span>
-          <span aria-hidden="true">·</span>
-          <span>{{ clientName }}</span>
+          <span>{{ jobNumber }}</span>
+          <span aria-hidden="true"> · </span>
+          <span :class="{ 'job-detail__empty-value': isEmptyField(clientName) }">{{ clientName }}</span>
         </p>
       </div>
     </header>
@@ -210,47 +222,32 @@ onMounted(() => {
       {{ errorMessage }}
     </Message>
 
-    <Message v-if="successMessage" class="job-detail__message" severity="success" :closable="false">
+    <!-- TODO(ux): consider toast pattern. -->
+    <Message
+      v-if="successMessage && stateMeta"
+      class="job-detail__message job-detail__state-message"
+      :class="stateMeta.className"
+      severity="secondary"
+      :closable="false"
+    >
       {{ successMessage }}
     </Message>
 
     <section v-if="jobOrder" class="job-detail__status" aria-label="Job status">
       <div>
-        <span class="job-detail__state">{{ jobOrder.state }}</span>
-        <p class="job-detail__owner">
-          Execution owner {{ isExecutionOwner ? 'matches this device session' : 'is assigned by the office' }}
+        <span v-if="stateMeta" class="job-detail__state" :class="stateMeta.className">{{ stateMeta.label }}</span>
+        <p v-if="showOwnerWarning" class="job-detail__owner">
+          Assigned to another technician
         </p>
       </div>
 
       <div class="job-detail__actions">
         <Button
-          v-if="canStart"
-          label="Start job"
+          v-if="canTransitionToInProgress"
+          :label="inProgressTransitionLabel"
           icon="pi pi-play"
           :loading="isSaving"
-          @click="startJob"
-        />
-        <Button
-          v-if="canPause"
-          label="Pause"
-          icon="pi pi-pause"
-          severity="secondary"
-          :loading="isSaving"
-          @click="showPauseDialog = true"
-        />
-        <Button
-          v-if="canComplete"
-          label="Complete"
-          icon="pi pi-send"
-          :loading="isSaving"
-          @click="router.push(completionPreviewPath)"
-        />
-        <Button
-          v-if="canResume"
-          label="Resume"
-          icon="pi pi-play"
-          :loading="isSaving"
-          @click="showResumeDialog = true"
+          @click="beginInProgressTransition"
         />
       </div>
     </section>
@@ -259,45 +256,67 @@ onMounted(() => {
       <dl class="job-detail__facts">
         <div>
           <dt>Client</dt>
-          <dd>{{ clientName }}</dd>
+          <dd :class="{ 'job-detail__empty-value': isEmptyField(clientName) }">{{ clientName }}</dd>
         </div>
         <div>
           <dt>Vessel</dt>
-          <dd>{{ vesselName }}</dd>
+          <dd :class="{ 'job-detail__empty-value': isEmptyField(vesselName) }">{{ vesselName }}</dd>
         </div>
         <div>
           <dt>Category</dt>
-          <dd>{{ categoryText }}</dd>
+          <dd :class="{ 'job-detail__empty-value': isEmptyField(categoryText) }">{{ categoryText }}</dd>
         </div>
         <div>
           <dt>Description</dt>
-          <dd>{{ scopeSummary }}</dd>
+          <dd :class="{ 'job-detail__empty-value': isEmptyField(scopeSummary) }">{{ scopeSummary }}</dd>
         </div>
       </dl>
-    </section>
 
-    <nav v-if="showExecutionTabs" class="job-detail__tabs" aria-label="Job detail sections">
-      <RouterLink class="job-detail__tab job-detail__tab--primary" :to="observationsPath">
-        <i class="pi pi-align-left" aria-hidden="true" />
-        Observation
-      </RouterLink>
-      <RouterLink class="job-detail__tab" :to="checklistPath">
-        <i class="pi pi-check-square" aria-hidden="true" />
-        Checklist
-      </RouterLink>
-      <RouterLink class="job-detail__tab" :to="materialsPath">
-        <i class="pi pi-box" aria-hidden="true" />
-        Materials
-      </RouterLink>
-      <RouterLink class="job-detail__tab" :to="documentsPath">
+      <RouterLink v-if="!jobOrder.readOnly" class="job-detail__documents-link" :to="documentsPath">
         <i class="pi pi-file" aria-hidden="true" />
         Documents
       </RouterLink>
-      <RouterLink class="job-detail__tab" :to="signaturePath">
-        <i class="pi pi-pencil" aria-hidden="true" />
-        Sign
-      </RouterLink>
-    </nav>
+    </section>
+
+    <section v-if="showExecutionTabs" class="job-detail__execution" aria-label="Execution actions">
+      <div class="job-detail__work-grid" aria-label="Job data entry">
+        <RouterLink class="job-detail__work-action" :to="checklistPath">
+          <i class="pi pi-check-square" aria-hidden="true" />
+          <span>Checklist</span>
+        </RouterLink>
+        <RouterLink class="job-detail__work-action" :to="observationsPath">
+          <i class="pi pi-align-left" aria-hidden="true" />
+          <span>Observation</span>
+        </RouterLink>
+        <RouterLink class="job-detail__work-action" :to="materialsPath">
+          <i class="pi pi-box" aria-hidden="true" />
+          <span>Materials</span>
+        </RouterLink>
+      </div>
+
+      <div class="job-detail__finish-panel" aria-label="Finish job">
+        <button
+          v-if="canComplete"
+          class="job-detail__finish-action job-detail__finish-action--primary"
+          type="button"
+          :disabled="isSaving"
+          @click="router.push(signaturePath)"
+        >
+          <i class="pi pi-pencil" aria-hidden="true" />
+          <span>Proceed to sign</span>
+        </button>
+        <button
+          v-if="canPause"
+          class="job-detail__pause-action"
+          type="button"
+          :disabled="isSaving"
+          @click="showPauseDialog = true"
+        >
+          <i class="pi pi-pause" aria-hidden="true" />
+          <span>Pause</span>
+        </button>
+      </div>
+    </section>
 
     <div v-if="showPauseDialog" class="job-detail__dialog" role="presentation">
       <section class="job-detail__dialog-card" role="dialog" aria-modal="true" aria-labelledby="pause-title">
@@ -324,7 +343,7 @@ onMounted(() => {
         </label>
         <div class="job-detail__dialog-actions">
           <Button label="Cancel" severity="secondary" @click="showResumeDialog = false" />
-          <Button label="Resume" :loading="isSaving" @click="resumeJob" />
+          <Button :label="inProgressTransitionLabel" :loading="isSaving" @click="resumeJob" />
         </div>
       </section>
     </div>
@@ -361,6 +380,10 @@ onMounted(() => {
   margin: var(--sp-4);
 }
 
+.job-detail__state-message {
+  border-color: transparent;
+}
+
 .job-detail__status {
   display: grid;
   gap: var(--sp-3);
@@ -372,20 +395,18 @@ onMounted(() => {
 .job-detail__state {
   display: inline-flex;
   align-items: center;
-  min-height: var(--tap-min);
-  padding: var(--sp-2) var(--sp-3);
+  padding: 3px 10px;
   border-radius: var(--radius-pill);
-  background: var(--color-field-action);
-  color: var(--color-surface);
-  font-size: var(--fs-caption);
-  font-weight: var(--fw-semibold);
+  font-size: 12px;
+  font-weight: 500;
   line-height: var(--lh-tight);
 }
 
 .job-detail__owner {
   margin: var(--sp-2) 0 0;
-  color: var(--color-text-muted);
+  color: var(--jo-onhold-fg);
   font-size: var(--fs-body-sm);
+  font-weight: var(--fw-semibold);
   line-height: var(--lh-base);
 }
 
@@ -427,7 +448,32 @@ onMounted(() => {
   line-height: var(--lh-base);
 }
 
-.job-detail__tab:focus-visible {
+.job-detail__documents-link,
+.job-detail__work-action,
+.job-detail__finish-action,
+.job-detail__pause-action {
+  text-decoration: none;
+}
+
+.job-detail__documents-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: var(--tap-field);
+  margin-top: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border: var(--border-1);
+  border-radius: var(--radius-md);
+  color: var(--color-brand);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-semibold);
+}
+
+.job-detail__documents-link:focus-visible,
+.job-detail__work-action:focus-visible,
+.job-detail__finish-action:focus-visible,
+.job-detail__pause-action:focus-visible {
   outline: 2px solid var(--color-field-action);
   outline-offset: 2px;
 }
@@ -446,60 +492,100 @@ onMounted(() => {
 
 .job-detail__title {
   margin: 0;
-  font-size: var(--fs-h1);
-  font-weight: var(--fw-semibold);
+  color: #11202E;
+  font-size: 19px;
+  font-weight: 600;
   line-height: var(--lh-tight);
 }
 
 .job-detail__context {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-2);
   margin: 0;
-  color: var(--color-text-muted);
-  font-size: var(--fs-body);
+  color: #5C7081;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 12px;
+  line-height: var(--lh-base);
 }
 
-.job-detail__tabs {
-  display: flex;
-  overflow-x: auto;
-  padding: 0 var(--sp-2);
-  border-bottom: var(--border-1);
-  background: var(--color-surface);
-  scrollbar-width: none;
+.job-detail__empty-value {
+  color: #5C7081;
+  font-style: italic;
 }
 
-.job-detail__tabs::-webkit-scrollbar {
-  display: none;
+.job-detail__execution {
+  display: grid;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
 }
 
-.job-detail__tab {
-  min-height: var(--tap-min);
-  flex: 1 0 auto;
+.job-detail__work-grid {
+  display: grid;
+  gap: var(--sp-3);
+}
+
+.job-detail__work-action,
+.job-detail__finish-action,
+.job-detail__pause-action {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: var(--sp-2);
-  padding: var(--sp-3) var(--sp-4);
-  border-bottom: 3px solid transparent;
-  color: var(--color-text-muted);
-  font-size: var(--fs-body);
+  gap: var(--sp-3);
+  border: var(--border-1);
+  border-radius: var(--radius-md);
   font-weight: var(--fw-semibold);
-  text-decoration: none;
-  white-space: nowrap;
 }
 
-.job-detail__tab.router-link-active {
-  border-bottom-color: var(--color-field-action);
+.job-detail__work-action {
+  min-height: 112px;
+  padding: var(--sp-5);
+  background: var(--color-surface);
   color: var(--color-text);
+  font-size: var(--fs-h3);
 }
 
-.job-detail__tab--primary {
+.job-detail__work-action .pi {
+  color: var(--color-field-action);
+  font-size: var(--fs-h2);
+}
+
+.job-detail__finish-panel {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border-top: var(--border-2);
+  background: var(--color-surface);
+}
+
+.job-detail__finish-action,
+.job-detail__pause-action {
+  width: 100%;
+  min-height: var(--tap-field);
+  padding: var(--sp-3) var(--sp-4);
+  font-size: var(--fs-body-lg);
+}
+
+.job-detail__finish-action {
   color: var(--color-brand);
 }
 
-.job-detail__tab .pi {
-  font-size: var(--fs-body-lg);
+.job-detail__finish-action--primary {
+  border-color: var(--color-field-action);
+  background: var(--color-field-action);
+  color: var(--color-surface);
+  cursor: pointer;
+}
+
+.job-detail__pause-action {
+  border-color: var(--color-border);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: var(--fs-body);
+}
+
+.job-detail__finish-action--primary:disabled,
+.job-detail__pause-action:disabled {
+  cursor: wait;
+  opacity: 0.72;
 }
 
 .job-detail__dialog {
@@ -564,6 +650,24 @@ onMounted(() => {
   .job-detail__actions {
     grid-auto-flow: column;
     justify-content: end;
+  }
+
+  .job-detail__work-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .job-detail__work-action {
+    min-height: 148px;
+    flex-direction: column;
+  }
+
+  .job-detail__work-action .pi {
+    font-size: var(--fs-display);
+  }
+
+  .job-detail__finish-panel {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(9rem, max-content);
+    align-items: center;
   }
 
   .job-detail__dialog-actions {

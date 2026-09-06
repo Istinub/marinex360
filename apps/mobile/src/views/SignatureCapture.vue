@@ -1,15 +1,14 @@
 <script setup lang="ts">
 import { Directory, Filesystem } from '@capacitor/filesystem';
-import { Geolocation } from '@capacitor/geolocation';
 import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
 import ProgressSpinner from 'primevue/progressspinner';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import MobileBackLink from '@/components/MobileBackLink.vue';
 import { currentSessionSnapshot } from '@/composables/useAuth';
-import { currentUserDisplayName, useOfflineExecution } from '@/composables/useOfflineExecution';
+import { loadSignatureDraft, saveSignatureDraft } from '@/composables/useSignatureDraft';
 
 interface OwnerRow {
   execution_owner_id: string | null;
@@ -33,42 +32,32 @@ function db(): MobileSqlAdapter | null {
   return mobileRuntime().marinex360?.db ?? null;
 }
 
-function currentUserId(): string | null {
-  return currentSessionSnapshot()?.userId ?? null;
-}
-
 function strokeColor(): string {
   if (typeof window === 'undefined') return 'CanvasText';
   return getComputedStyle(document.documentElement).getPropertyValue('--color-text').trim() || 'CanvasText';
 }
 
-async function captureGeo(): Promise<{ lat: number | null; lng: number | null }> {
-  try {
-    const position = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 8000 });
-    return {
-      lat: position.coords.latitude,
-      lng: position.coords.longitude,
-    };
-  } catch {
-    return { lat: null, lng: null };
-  }
+function currentUserId(): string | null {
+  return currentSessionSnapshot()?.userId ?? null;
 }
 
 const route = useRoute();
-const offlineExecution = useOfflineExecution();
+const router = useRouter();
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const isLoading = ref(false);
 const isOwner = ref(false);
 const isSubmitting = ref(false);
 const hasInk = ref(false);
-const confirming = ref(false);
 const errorMessage = ref<string | null>(null);
 const successMessage = ref<string | null>(null);
+const restoredImageDataUrl = ref<string | null>(null);
 
 const form = reactive({
   signerName: '',
-  signerRole: '',
+  technicianId: '',
+  signerPhone: '',
+  signerEmail: '',
 });
 
 let ctx: CanvasRenderingContext2D | null = null;
@@ -96,6 +85,7 @@ async function loadOwnerGate(): Promise<void> {
     if (isOwner.value) {
       await nextTick();
       resizeCanvas();
+      restoreDraftImage();
     }
   } catch (error) {
     isOwner.value = false;
@@ -122,6 +112,21 @@ function resizeCanvas(): void {
   ctx.lineJoin = 'round';
   ctx.lineWidth = 3;
   ctx.strokeStyle = strokeColor();
+  restoreDraftImage();
+}
+
+function restoreDraftImage(): void {
+  const canvas = canvasRef.value;
+  if (!canvas || !ctx || !restoredImageDataUrl.value) return;
+
+  const image = new Image();
+  image.onload = () => {
+    if (!canvas || !ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(image, 0, 0, canvas.getBoundingClientRect().width, canvas.getBoundingClientRect().height);
+    hasInk.value = true;
+  };
+  image.src = restoredImageDataUrl.value;
 }
 
 function pointFromEvent(event: PointerEvent): { x: number; y: number } {
@@ -147,6 +152,7 @@ function draw(event: PointerEvent): void {
   if (!drawing || !ctx || !lastPoint) return;
   event.preventDefault();
   const next = pointFromEvent(event);
+  restoredImageDataUrl.value = null;
   ctx.beginPath();
   ctx.moveTo(lastPoint.x, lastPoint.y);
   ctx.lineTo(next.x, next.y);
@@ -167,7 +173,7 @@ function clearPad(): void {
   const canvas = canvasRef.value;
   if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
   hasInk.value = false;
-  confirming.value = false;
+  restoredImageDataUrl.value = null;
   successMessage.value = null;
 }
 
@@ -175,8 +181,8 @@ function validate(): boolean {
   errorMessage.value = null;
   successMessage.value = null;
 
-  if (!form.signerName.trim()) errorMessage.value = 'Signer name is required.';
-  else if (!form.signerRole.trim()) errorMessage.value = 'Signer role is required.';
+  if (!form.signerName.trim()) errorMessage.value = 'Name is required.';
+  else if (!form.technicianId.trim()) errorMessage.value = 'Technician ID is required.';
   else if (!hasInk.value) errorMessage.value = 'Capture the signature before submitting.';
 
   return errorMessage.value == null;
@@ -186,6 +192,12 @@ function canvasBase64(): string {
   const canvas = canvasRef.value;
   if (!canvas) throw new Error('Signature pad is not available.');
   return canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '');
+}
+
+function canvasDataUrl(): string {
+  const canvas = canvasRef.value;
+  if (!canvas) throw new Error('Signature pad is not available.');
+  return canvas.toDataURL('image/png');
 }
 
 async function saveSignatureImage(): Promise<string> {
@@ -202,34 +214,46 @@ async function saveSignatureImage(): Promise<string> {
 async function submitSignature(): Promise<void> {
   if (!isOwner.value || !validate()) return;
 
-  if (!confirming.value) {
-    confirming.value = true;
-    return;
-  }
-
   isSubmitting.value = true;
+  errorMessage.value = null;
+  successMessage.value = null;
   try {
-    const geo = await captureGeo();
     const localPath = await saveSignatureImage();
-    await offlineExecution.authorESignature(
-      jobOrderId.value,
-      form.signerName,
-      form.signerRole,
-      geo.lat,
-      geo.lng,
-      localPath,
-    );
-    successMessage.value = 'Signature submitted — this cannot be edited';
-    confirming.value = false;
+    const imageDataUrl = canvasDataUrl();
+    await saveSignatureDraft({
+      jobOrderId: jobOrderId.value,
+      signerName: form.signerName.trim(),
+      technicianId: form.technicianId.trim(),
+      signerPhone: form.signerPhone.trim(),
+      signerEmail: form.signerEmail.trim(),
+      imageLocalPath: localPath,
+      imageDataUrl,
+    });
+    await router.push(`/jobs/${jobOrderId.value}/completion-preview`);
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'Unable to submit signature.';
+    errorMessage.value = error instanceof Error ? error.message : 'Unable to save signature.';
   } finally {
     isSubmitting.value = false;
   }
 }
 
+async function loadDraftAndPrefill(): Promise<void> {
+  const session = currentSessionSnapshot();
+  form.technicianId = session?.userId ?? '';
+
+  const draft = await loadSignatureDraft(jobOrderId.value);
+  if (!draft) return;
+
+  form.signerName = draft.signerName;
+  form.technicianId = draft.technicianId;
+  form.signerPhone = draft.signerPhone;
+  form.signerEmail = draft.signerEmail;
+  restoredImageDataUrl.value = draft.imageDataUrl;
+  hasInk.value = Boolean(draft.imageDataUrl);
+}
+
 onMounted(async () => {
-  form.signerName = await currentUserDisplayName();
+  await loadDraftAndPrefill();
   void loadOwnerGate();
   if (typeof window !== 'undefined') window.addEventListener('resize', resizeCanvas);
 });
@@ -265,21 +289,25 @@ onBeforeUnmount(() => {
       <Message v-if="errorMessage" severity="error" :closable="false">
         {{ errorMessage }}
       </Message>
-      <Message v-if="successMessage" severity="success" :closable="false">
-        {{ successMessage }}
-      </Message>
-      <Message v-if="confirming" severity="warn" :closable="false">
-        Signature submitted — this cannot be edited
-      </Message>
 
       <label class="signature-capture__field" for="signer-name">
-        <span>Signer name</span>
+        <span>Name</span>
         <InputText id="signer-name" v-model="form.signerName" class="signature-capture__input" autocomplete="name" />
       </label>
 
-      <label class="signature-capture__field" for="signer-role">
-        <span>Signer role</span>
-        <InputText id="signer-role" v-model="form.signerRole" class="signature-capture__input" autocomplete="organization-title" />
+      <label class="signature-capture__field" for="technician-id">
+        <span>Technician ID</span>
+        <InputText id="technician-id" v-model="form.technicianId" class="signature-capture__input" autocomplete="off" />
+      </label>
+
+      <label class="signature-capture__field" for="signer-phone">
+        <span>Phone <small>optional</small></span>
+        <InputText id="signer-phone" v-model="form.signerPhone" class="signature-capture__input" inputmode="tel" autocomplete="tel" />
+      </label>
+
+      <label class="signature-capture__field" for="signer-email">
+        <span>Email <small>optional</small></span>
+        <InputText id="signer-email" v-model="form.signerEmail" class="signature-capture__input" inputmode="email" autocomplete="email" />
       </label>
 
       <section class="signature-capture__pad-wrap" aria-label="Signature pad">
@@ -298,7 +326,7 @@ onBeforeUnmount(() => {
         <Button type="button" label="Clear" severity="secondary" icon="pi pi-eraser" @click="clearPad" />
         <Button
           type="submit"
-          :label="confirming ? 'Confirm and submit' : 'Submit signature'"
+          label="Submit for review"
           icon="pi pi-check"
           :loading="isSubmitting"
         />
@@ -361,6 +389,12 @@ onBeforeUnmount(() => {
   color: var(--color-text);
   font-size: var(--fs-body);
   font-weight: var(--fw-semibold);
+}
+
+.signature-capture__field small {
+  color: var(--color-text-muted);
+  font-size: var(--fs-body-sm);
+  font-weight: var(--fw-regular);
 }
 
 .signature-capture__input {

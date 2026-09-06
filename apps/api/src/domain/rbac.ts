@@ -10,7 +10,7 @@ export type Action =
   | 'client:read' | 'client:write'
   | 'contact:read' | 'contact:write'
   | 'vessel:read' | 'vessel:write'
-  | 'jobOrder:read' | 'jobOrder:create' | 'jobOrder:updateHeader' | 'jobOrder:assign' | 'jobOrder:selfAssign'
+  | 'jobOrder:read' | 'jobOrder:create' | 'jobOrder:updateHeader' | 'jobOrder:assign'
   | 'jobRequest:read' | 'jobRequest:create' | 'jobRequest:convert' | 'jobRequest:decline'
   | 'variation:create' | 'variation:approve' | 'variation:reject'
   | 'review:read' | 'review:resolve'
@@ -31,7 +31,7 @@ const MATRIX: Record<Role, ReadonlySet<Action>> = {
   // [INFERRED] admin superset (routine ownership); PM confirm scope of SYSTEM_ADMIN.
   SYSTEM_ADMIN: new Set<Action>([
     'client:read', 'client:write', 'contact:read', 'contact:write', 'vessel:read', 'vessel:write',
-    'jobOrder:read', 'jobOrder:create', 'jobOrder:updateHeader', 'jobOrder:assign', 'jobOrder:selfAssign',
+    'jobOrder:read', 'jobOrder:create', 'jobOrder:updateHeader', 'jobOrder:assign',
     'jobRequest:read', 'jobRequest:create', 'jobRequest:convert', 'jobRequest:decline',
     'variation:create', 'variation:approve', 'variation:reject',
     'review:read', 'review:resolve', 'invoice:read', 'invoice:create', 'invoice:issue', 'invoice:recordPayment',
@@ -44,7 +44,7 @@ const MATRIX: Record<Role, ReadonlySet<Action>> = {
     'client:read', 'client:write', 'contact:read', 'contact:write', 'vessel:read', 'vessel:write',
     'jobOrder:read', 'jobOrder:create', 'jobOrder:updateHeader', 'jobOrder:assign',
     'jobRequest:read', 'jobRequest:create', 'jobRequest:convert', 'jobRequest:decline',
-    'jobOrder:selfAssign', 'variation:approve', 'variation:reject', 'review:read', 'review:resolve',
+    'variation:approve', 'variation:reject', 'review:read', 'review:resolve',
     'invoice:read', 'invoice:create', 'invoice:issue', 'invoice:recordPayment', 'document:read', 'document:write',
     'certificate:read', 'certificate:write', 'material:write', 'audit:read', 'user:admin',
   ]),
@@ -67,7 +67,7 @@ const MATRIX: Record<Role, ReadonlySet<Action>> = {
   // Technician: reads ONLY their assigned jobs (row-level IDOR check is separate, RBAC-IDOR-1);
   // adds field materials (OD-01). Execution-state transitions are execution-owner-gated in JOSM,
   // not role-gated here. [INFERRED where not covered by contract]
-  TECHNICIAN: new Set<Action>(['jobOrder:read', 'jobOrder:selfAssign', 'material:write']),
+  TECHNICIAN: new Set<Action>(['jobOrder:read', 'material:write']),
   CLIENT: new Set<Action>(['jobOrder:read', 'jobRequest:create', 'invoice:read', 'client:read', 'vessel:read']),
 };
 

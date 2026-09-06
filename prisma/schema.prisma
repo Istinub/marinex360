@@ -51,6 +51,7 @@ model User {
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
   refreshTokens     RefreshToken[]
+  devices           Device[]
   client            Client?        @relation(fields: [clientId], references: [id])
 
   @@index([branch])
@@ -69,6 +70,38 @@ model RefreshToken {
   createdAt DateTime  @default(now())
 
   @@index([userId])
+}
+
+model Device {
+  id             String   @id @default(uuid())
+  name           String?
+  pin            String
+  assignedUser   User     @relation(fields: [assignedUserId], references: [id])
+  assignedUserId String
+  branch         String
+  createdAt      DateTime @default(now())
+
+  @@index([branch])
+  @@index([assignedUserId])
+}
+
+model ChecklistCategory {
+  id        String                  @id @default(uuid())
+  name      String
+  sortOrder Int                     @default(0)
+  items     ChecklistTemplateItem[]
+
+  @@index([sortOrder])
+}
+
+model ChecklistTemplateItem {
+  id         String            @id @default(uuid())
+  category   ChecklistCategory @relation(fields: [categoryId], references: [id])
+  categoryId String
+  label      String
+  sortOrder  Int               @default(0)
+
+  @@index([categoryId, sortOrder])
 }
 
 // ===================== CRM (OD-03) =====================

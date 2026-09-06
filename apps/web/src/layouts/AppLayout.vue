@@ -6,33 +6,108 @@ import { useAuthStore } from '@/stores/auth';
 interface NavItem {
   label: string;
   to: string;
+  icon: string;
   internal?: boolean;
   client?: boolean;
   roles?: string[];
 }
 
-const navItems: NavItem[] = [
-  { label: 'Dashboard', to: '/dashboard', internal: true },
-  { label: 'Clients', to: '/clients', internal: true },
-  { label: 'Vessels', to: '/vessels', internal: true },
-  { label: 'Job Orders', to: '/job-orders', internal: true },
-  { label: 'Trash', to: '/job-orders/trash', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
-  { label: 'Archive', to: '/job-orders/archive', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
-  { label: 'My dashboard', to: '/client-dashboard', client: true },
-  { label: 'Job requests', to: '/job-requests', internal: true, roles: ['OPS_SUPERVISOR', 'DIRECTOR', 'SYSTEM_ADMIN'] },
+interface NavGroup {
+  label: string;
+  icon: string;
+  items: NavItem[];
+  roles?: string[];
+  client?: boolean;
+  internal?: boolean;
+}
+
+const navGroups: NavGroup[] = [
+  {
+    label: 'Workspace',
+    icon: 'pi pi-th-large',
+    internal: true,
+    items: [
+      { label: 'Dashboard', to: '/dashboard', icon: 'pi pi-chart-bar', internal: true },
+    ],
+  },
+  {
+    label: 'Job Management',
+    icon: 'pi pi-briefcase',
+    internal: true,
+    items: [
+      { label: 'Job Orders', to: '/job-orders', icon: 'pi pi-list-check', internal: true },
+      { label: 'Job Requests', to: '/job-requests', icon: 'pi pi-inbox', internal: true, roles: ['OPS_SUPERVISOR', 'DIRECTOR', 'SYSTEM_ADMIN'] },
+      { label: 'Archive', to: '/job-orders/archive', icon: 'pi pi-folder', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
+      { label: 'Trash', to: '/job-orders/trash', icon: 'pi pi-trash', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
+    ],
+  },
+  {
+    label: 'Reports',
+    icon: 'pi pi-file-pdf',
+    internal: true,
+    items: [
+      // TODO(ux): pending PM decision on group/item label rename
+      { label: 'Reports', to: '/reports', icon: 'pi pi-file', internal: true },
+    ],
+  },
+  {
+    label: 'Business Analytics',
+    icon: 'pi pi-chart-line',
+    internal: true,
+    items: [
+      // TODO(ux): pending PM decision on group/item label rename
+      { label: 'Analytics', to: '/analytics', icon: 'pi pi-chart-line', internal: true },
+    ],
+  },
+  {
+    label: 'Settings',
+    icon: 'pi pi-cog',
+    internal: true,
+    items: [
+      { label: 'Account Management', to: '/settings/account-management', icon: 'pi pi-users', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
+      { label: 'Job Execution Settings', to: '/settings/job-execution', icon: 'pi pi-sliders-h', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
+      { label: 'Devices', to: '/settings/devices', icon: 'pi pi-tablet', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
+    ],
+  },
+  {
+    label: 'App Settings',
+    icon: 'pi pi-wrench',
+    internal: true,
+    roles: ['SYSTEM_ADMIN'],
+    items: [
+      { label: 'Device Troubleshooting', to: '/app-settings/device-troubleshooting', icon: 'pi pi-mobile', internal: true, roles: ['SYSTEM_ADMIN'] },
+      { label: 'Error Log', to: '/app-settings/error-log', icon: 'pi pi-exclamation-triangle', internal: true, roles: ['SYSTEM_ADMIN'] },
+    ],
+  },
+  {
+    label: 'Client',
+    icon: 'pi pi-home',
+    client: true,
+    items: [
+      { label: 'My dashboard', to: '/client-dashboard', icon: 'pi pi-home', client: true },
+    ],
+  },
 ];
 
 const auth = useAuthStore();
 const router = useRouter();
 const tkmrLockupSrc = `${import.meta.env.BASE_URL}tkmr_new.png`;
 const isUserMenuOpen = ref(false);
-const visibleNavItems = computed(() => navItems.filter((item) => {
+function canSeeNavItem(item: Pick<NavItem, 'client' | 'roles' | 'internal'>): boolean {
   const roles = auth.identity?.roles ?? [];
   if (item.client) return roles.includes('CLIENT');
   if (item.roles) return item.roles.some((role) => roles.includes(role));
   if (item.internal) return !roles.includes('CLIENT');
   return true;
-}));
+}
+
+const visibleNavGroups = computed(() => navGroups
+  .filter((group) => canSeeNavItem(group))
+  .map((group) => ({
+    ...group,
+    items: group.items.filter((item) => canSeeNavItem(item)),
+  }))
+  .filter((group) => group.items.length > 0));
 
 function toggleUserMenu(): void {
   isUserMenuOpen.value = !isUserMenuOpen.value;
@@ -85,15 +160,21 @@ function logout(): void {
     <div class="app-layout__body">
       <aside class="app-layout__sidebar" aria-label="Primary">
         <nav class="app-layout__nav">
-          <RouterLink
-            v-for="item in visibleNavItems"
-            :key="item.label"
-            class="app-layout__nav-item"
-            :to="item.to"
-            @click="closeUserMenu"
-          >
-            {{ item.label }}
-          </RouterLink>
+          <section v-for="group in visibleNavGroups" :key="group.label" class="app-layout__nav-group">
+            <p class="app-layout__nav-group-label">
+              <span>{{ group.label }}</span>
+            </p>
+            <RouterLink
+              v-for="item in group.items"
+              :key="item.label"
+              class="app-layout__nav-item"
+              :to="item.to"
+              @click="closeUserMenu"
+            >
+              <span :class="item.icon" aria-hidden="true" />
+              <span>{{ item.label }}</span>
+            </RouterLink>
+          </section>
         </nav>
       </aside>
 

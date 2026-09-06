@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import Column from 'primevue/column';
 import Button from 'primevue/button';
+import Calendar from 'primevue/calendar';
 import DataTable from 'primevue/datatable';
 import InputText from 'primevue/inputtext';
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import MonoText from '@/components/common/MonoText.vue';
+import { jobOrderStateClass, jobOrderStateLabel } from '@/composables/useJobOrderStateMeta';
 import { ApiResponseError } from '@/lib/api/errors';
 import type { JobOrder, JobState } from '@/lib/api/types';
 import { useAuthStore } from '@/stores/auth';
@@ -20,8 +22,8 @@ const vesselsStore = useVesselsStore();
 const router = useRouter();
 const stateFilter = ref<JobState | ''>('');
 const search = ref('');
-const plannedFrom = ref('');
-const plannedTo = ref('');
+const plannedFrom = ref<Date | null>(null);
+const plannedTo = ref<Date | null>(null);
 const errorMessage = ref<string | null>(null);
 const createRoles = ['SYSTEM_ADMIN', 'DIRECTOR', 'OPS_SUPERVISOR'];
 const canCreateJobOrder = computed(() => (auth.identity?.roles ?? []).some((role) => createRoles.includes(role)));
@@ -41,6 +43,7 @@ const jobStates: JobState[] = [
 const clientNameById = computed(() => new Map(clientsStore.clients.map((client) => [client.id, client.name])));
 const vesselNameById = computed(() => new Map(vesselsStore.vessels.map((vessel) => [vessel.id, vessel.name])));
 const hasActiveFilters = computed(() => Boolean(stateFilter.value || search.value.trim() || plannedFrom.value || plannedTo.value));
+const stateOptions = computed(() => jobStates.map((state) => ({ value: state, label: jobOrderStateLabel(state) })));
 
 const filteredJobOrders = computed(() => {
   const query = search.value.trim().toLowerCase();
@@ -61,40 +64,37 @@ const filteredJobOrders = computed(() => {
       if (!searchable.includes(query)) return false;
     }
 
-    if (plannedFrom.value || plannedTo.value) {
+    const plannedFromDate = dateFilterValue(plannedFrom.value);
+    const plannedToDate = dateFilterValue(plannedTo.value);
+    if (plannedFromDate || plannedToDate) {
       if (!jobOrder.plannedStartDate) return false;
       const plannedDate = jobOrder.plannedStartDate.slice(0, 10);
-      if (plannedFrom.value && plannedDate < plannedFrom.value) return false;
-      if (plannedTo.value && plannedDate > plannedTo.value) return false;
+      if (plannedFromDate && plannedDate < plannedFromDate) return false;
+      if (plannedToDate && plannedDate > plannedToDate) return false;
     }
 
     return true;
   });
 });
 
-function jobOrderStateClass(state: JobState): string {
-  const tokenName: Record<JobState, string> = {
-    DRAFT: 'draft',
-    SCHEDULED: 'scheduled',
-    IN_PROGRESS: 'inprogress',
-    PENDING_REVIEW: 'review',
-    COMPLETED: 'completed',
-    INVOICED: 'invoiced',
-    CLOSED: 'closed',
-    ON_HOLD: 'onhold',
-    CANCELLED: 'cancelled',
-  };
-
-  return `mx-jo-${tokenName[state]}`;
-}
-
 function formatDate(value?: string | null): string {
-  if (!value) return '—';
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(value));
+  if (!value) return '-';
+  return new Intl.DateTimeFormat('en-SG', { day: '2-digit', month: 'short' }).format(new Date(value));
 }
 
-function moneyLabel(jobOrder: JobOrder): string {
-  return `${jobOrder.quotedCurrency} ${(jobOrder.quotedAmountMinor / 100).toFixed(2)}`;
+function quoteAmount(jobOrder: JobOrder): string {
+  return new Intl.NumberFormat('en-SG', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(jobOrder.quotedAmountMinor / 100);
+}
+
+function dateFilterValue(value: Date | null): string {
+  if (!value) return '';
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function clientLabel(jobOrder: JobOrder): string {
@@ -146,20 +146,32 @@ onMounted(loadJobOrders);
         <span>State</span>
         <select id="job-order-state-filter" v-model="stateFilter" class="auth-input">
           <option value="">All states</option>
-          <option v-for="state in jobStates" :key="state" :value="state">
-            {{ state }}
+          <option v-for="state in stateOptions" :key="state.value" :value="state.value">
+            {{ state.label }}
           </option>
         </select>
       </label>
 
       <label class="crm-filter" for="job-order-planned-from">
         <span>From</span>
-        <input id="job-order-planned-from" v-model="plannedFrom" class="auth-input" type="date" />
+        <Calendar
+          v-model="plannedFrom"
+          input-id="job-order-planned-from"
+          class="auth-input job-orders__calendar"
+          date-format="dd/mm/yy"
+          show-icon
+        />
       </label>
 
       <label class="crm-filter" for="job-order-planned-to">
         <span>To</span>
-        <input id="job-order-planned-to" v-model="plannedTo" class="auth-input" type="date" />
+        <Calendar
+          v-model="plannedTo"
+          input-id="job-order-planned-to"
+          class="auth-input job-orders__calendar"
+          date-format="dd/mm/yy"
+          show-icon
+        />
       </label>
     </section>
 
@@ -188,30 +200,39 @@ onMounted(loadJobOrders);
 
       <Column field="joNumber" header="JO" sortable>
         <template #body="{ data }">
-          <MonoText :value="data.joNumber" />
+          <span class="job-orders__jo">
+            <MonoText :value="data.joNumber" />
+            <!-- version is the OD-05 optimistic-lock field, kept visible only for debugging. -->
+            <span class="job-orders__version-badge">v{{ data.version }}</span>
+          </span>
         </template>
       </Column>
       <Column field="state" header="State" sortable>
         <template #body="{ data }">
           <span class="jo-chip" :class="jobOrderStateClass(data.state)">
-            {{ data.state }}
+            {{ jobOrderStateLabel(data.state) }}
           </span>
         </template>
       </Column>
-      <Column field="scopeSummary" header="Scope" sortable />
-      <Column field="clientId" header="Client" sortable>
+      <Column field="clientId" header="Client / Vessel" sortable>
         <template #body="{ data }">
-          {{ clientLabel(data) }}
+          <span class="job-orders__party">
+            <span>{{ clientLabel(data) }}</span>
+            <span>{{ vesselLabel(data) }}</span>
+          </span>
         </template>
       </Column>
-      <Column field="vesselId" header="Vessel" sortable>
+      <Column field="scopeSummary" header="Scope" sortable>
         <template #body="{ data }">
-          {{ vesselLabel(data) }}
+          <span class="job-orders__scope" :title="data.scopeSummary">{{ data.scopeSummary }}</span>
         </template>
       </Column>
-      <Column field="quotedAmountMinor" header="Quote" sortable>
+      <Column field="quotedAmountMinor" header="Quote" sortable body-class="job-orders__quote-cell" header-class="job-orders__quote-cell">
         <template #body="{ data }">
-          <span class="mx-money">{{ moneyLabel(data) }}</span>
+          <span class="job-orders__quote">
+            <span>{{ data.quotedCurrency }}</span>
+            <span class="mx-money">{{ quoteAmount(data) }}</span>
+          </span>
         </template>
       </Column>
       <Column field="plannedStartDate" header="Planned" sortable>
@@ -219,11 +240,71 @@ onMounted(loadJobOrders);
           {{ formatDate(data.plannedStartDate) }}
         </template>
       </Column>
-      <Column field="version" header="Version" sortable>
-        <template #body="{ data }">
-          <MonoText :value="data.version" />
-        </template>
-      </Column>
     </DataTable>
   </main>
 </template>
+
+<style scoped>
+.job-orders__calendar {
+  padding: 0;
+}
+
+.job-orders__calendar :deep(.p-inputtext) {
+  width: 100%;
+  min-height: var(--tap-min);
+  font-family: var(--font-ui);
+}
+
+.job-orders__jo,
+.job-orders__party,
+.job-orders__quote {
+  display: inline-grid;
+  gap: var(--sp-1);
+}
+
+.job-orders__jo {
+  grid-auto-flow: column;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.job-orders__version-badge {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.job-orders__party span:first-child {
+  color: var(--color-text);
+}
+
+.job-orders__party span:last-child {
+  color: #5C7081;
+  font-size: 12px;
+}
+
+.job-orders__scope {
+  display: block;
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-orders__quote-cell {
+  text-align: right;
+}
+
+.job-orders__quote {
+  justify-items: end;
+}
+
+.job-orders__quote span:first-child {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.job-orders__quote .mx-money {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+}
+</style>

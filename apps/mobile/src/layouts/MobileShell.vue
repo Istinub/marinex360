@@ -114,9 +114,9 @@ onBeforeUnmount(() => {
         <i class="pi pi-chart-bar" aria-hidden="true" />
         <span>Dashboard</span>
       </RouterLink>
-      <RouterLink class="mobile-shell__tab" to="/profile">
-        <i class="pi pi-user" aria-hidden="true" />
-        <span>Profile</span>
+      <RouterLink class="mobile-shell__tab" to="/more">
+        <i class="pi pi-ellipsis-h" aria-hidden="true" />
+        <span>More</span>
       </RouterLink>
       <RouterLink class="mobile-shell__tab" to="/sync">
         <i class="pi pi-cloud-upload" aria-hidden="true" />

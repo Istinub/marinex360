@@ -210,8 +210,4 @@ run('Job requests (integration)', () => {
     await expect(prisma.jobRequest.findUniqueOrThrow({ where: { id: convertRequest.id } })).resolves.toMatchObject({ status: 'PENDING', convertedJobOrderId: null });
     await expect(prisma.jobRequest.findUniqueOrThrow({ where: { id: declineRequest.id } })).resolves.toMatchObject({ status: 'PENDING', convertedJobOrderId: null });
   });
-
-  it('keeps technician self-assignment capability available', async () => {
-    expect((await app.inject({ method: 'POST', url: '/api/v1/job-orders/does-not-exist/self-assign', headers: { authorization: bearer(tech) }, payload: { version: 0 } })).statusCode).toBe(404);
-  });
 });

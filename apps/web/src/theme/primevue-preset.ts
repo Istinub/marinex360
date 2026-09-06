@@ -48,6 +48,8 @@ export function installMarineXThemeUtilities(ownerDocument: Document = document)
   if (ownerDocument.getElementById(styleId)) return;
 
   const css = [
+    ':root { --p-font-family: var(--font-ui); }',
+    '.p-component { font-family: var(--font-ui); }',
     ...statusTokens.map((status) => pillClass(`.mx-status-${status}`, `status-${status}`)),
     ...jobOrderTokens.map((status) => pillClass(`.mx-jo-${status}`, `jo-${status}`)),
   ].join('\n');

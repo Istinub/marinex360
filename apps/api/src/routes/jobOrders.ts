@@ -12,12 +12,11 @@ import { buildDraftInvoice } from '../domain/invoice.js';
 import { buildFinancialSummary } from '../domain/financialSummary.js';
 
 const HEADER_FIELDS = ['scopeSummary', 'port', 'plannedStartDate', 'externalQuoteRef', 'externalRfqRef'];
-const SERVICE_CATEGORIES = ['inspection', 'electrical', 'mechanical', 'hull', 'safety', 'other'];
 const isTech = (roles: string[]) => roles.includes('TECHNICIAN') && roles.length === 1;
 const isAdminOrDirector = (roles: string[]) => roles.includes('SYSTEM_ADMIN') || roles.includes('DIRECTOR');
 const isDirector = (roles: string[]) => roles.includes('DIRECTOR');
 
-type TechnicianJoAccess = { visible: boolean; canOpen: boolean; readOnly: boolean; isAvailable: boolean; canStart: boolean; canResume: boolean };
+type TechnicianJoAccess = { visible: boolean; canOpen: boolean; readOnly: boolean; canStart: boolean; canResume: boolean };
 
 // P3-11: technician visibility/editability rules should become admin-configurable here.
 function technicianAccessFor(jo: { state: string; executionOwnerId?: string | null }, userId: string): TechnicianJoAccess {
@@ -25,20 +24,20 @@ function technicianAccessFor(jo: { state: string; executionOwnerId?: string | nu
   switch (jo.state) {
     case 'DRAFT':
     case 'CANCELLED':
-      return { visible: false, canOpen: false, readOnly: true, isAvailable: false, canStart: false, canResume: false };
+      return { visible: false, canOpen: false, readOnly: true, canStart: false, canResume: false };
     case 'SCHEDULED':
-      return { visible: true, canOpen: true, readOnly: false, isAvailable: jo.executionOwnerId == null, canStart: jo.executionOwnerId == null || isOwner, canResume: false };
+      return { visible: true, canOpen: true, readOnly: false, canStart: isOwner, canResume: false };
     case 'IN_PROGRESS':
-      return { visible: true, canOpen: isOwner, readOnly: false, isAvailable: false, canStart: false, canResume: false };
+      return { visible: true, canOpen: isOwner, readOnly: false, canStart: false, canResume: false };
     case 'ON_HOLD':
-      return { visible: true, canOpen: true, readOnly: false, isAvailable: false, canStart: false, canResume: true };
+      return { visible: true, canOpen: true, readOnly: false, canStart: false, canResume: true };
     case 'PENDING_REVIEW':
     case 'COMPLETED':
     case 'INVOICED':
     case 'CLOSED':
-      return { visible: true, canOpen: true, readOnly: true, isAvailable: false, canStart: false, canResume: false };
+      return { visible: true, canOpen: true, readOnly: true, canStart: false, canResume: false };
     default:
-      return { visible: false, canOpen: false, readOnly: true, isAvailable: false, canStart: false, canResume: false };
+      return { visible: false, canOpen: false, readOnly: true, canStart: false, canResume: false };
   }
 }
 
@@ -46,15 +45,23 @@ function withTechnicianAccess<T extends { state: string; executionOwnerId?: stri
   return { ...jo, ...technicianAccessFor(jo, userId) };
 }
 
-function validateServiceCategories(serviceCategories: unknown): string[] {
+async function validateServiceCategories(prisma: PrismaClient | Prisma.TransactionClient, serviceCategories: unknown): Promise<string[]> {
   if (!Array.isArray(serviceCategories)) {
     throw new AppError('VALIDATION_ERROR', 'serviceCategories must be an array', { field: 'serviceCategories', reason: 'type' });
   }
-  const invalid = serviceCategories.find((category) => typeof category !== 'string' || !SERVICE_CATEGORIES.includes(category));
+  const invalid = serviceCategories.find((category) => typeof category !== 'string' || !category.trim());
   if (invalid != null) {
     throw new AppError('VALIDATION_ERROR', 'serviceCategories contains an invalid category', { field: 'serviceCategories', reason: 'invalid' });
   }
-  return serviceCategories;
+  const categories = [...new Set(serviceCategories.map((category) => category.trim()))];
+  if (categories.length !== serviceCategories.length) {
+    throw new AppError('VALIDATION_ERROR', 'serviceCategories must be unique', { field: 'serviceCategories', reason: 'duplicate' });
+  }
+  const known = await prisma.checklistCategory.findMany({ where: { id: { in: categories } }, select: { id: true } });
+  if (known.length !== categories.length) {
+    throw new AppError('VALIDATION_ERROR', 'serviceCategories contains an invalid category', { field: 'serviceCategories', reason: 'invalid' });
+  }
+  return categories;
 }
 
 async function assertJobOrderCreateScope(prisma: PrismaClient, branch: string, clientId: string, vesselId: string): Promise<void> {
@@ -117,11 +124,12 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
     const branch = branchForCreate(req.ctx); // never from client (RBAC-SPOOF-1)
     await assertJobOrderCreateScope(prisma, branch, b.clientId, b.vesselId);
     const created = await prisma.$transaction(async (tx) => {
+      const serviceCategories = await validateServiceCategories(tx, b.serviceCategories ?? []);
       const joNumber = await nextJoNumber(tx, branch);
       const jo = await tx.jobOrder.create({
         data: {
           joNumber, branch, clientId: b.clientId, vesselId: b.vesselId,
-          serviceCategories: b.serviceCategories ?? [], port: b.port ?? null, scopeSummary: b.scopeSummary,
+          serviceCategories, port: b.port ?? null, scopeSummary: b.scopeSummary,
           origin: 'MANUAL', externalQuoteRef: b.externalQuoteRef ?? null, externalRfqRef: b.externalRfqRef ?? null,
           quotedAmountMinor: b.quotedAmountMinor, quotedCurrency: b.quotedCurrency,
           labourRateAmountMinor: b.labourRateAmountMinor ?? DEFAULT_LABOUR_RATE.amountMinor,
@@ -312,9 +320,9 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
   app.patch('/api/v1/job-orders/:id/categories', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('jobOrder:updateHeader')] }, async (req) => {
     const { id } = req.params as any;
     const b = (req.body ?? {}) as any;
-    const serviceCategories = validateServiceCategories(b.serviceCategories);
     if (typeof b.version !== 'number') throw new AppError('VALIDATION_ERROR', 'version required');
     return prisma.$transaction(async (tx) => {
+      const serviceCategories = await validateServiceCategories(tx, b.serviceCategories);
       const jo = await tx.jobOrder.findFirst({ where: { id, deletedAt: null, archivedAt: null, purgedAt: null } });
       if (!jo) throw new AppError('NOT_FOUND');
       assertBranchAccess(req.ctx, jo.branch);
@@ -346,34 +354,6 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
       const res = await tx.jobOrder.updateMany({ where: { id, version }, data: { assignedTechnicianIds: technicianIds, executionOwnerId, version: { increment: 1 } } });
       if (res.count === 0) throw new AppError('VERSION_CONFLICT');
       await appendAudit(tx, req.ctx, { entityType: 'JobOrder', entityId: id, action: 'ASSIGN', diff: { technicianIds, executionOwnerId } });
-      return tx.jobOrder.findUnique({ where: { id } });
-    });
-  });
-
-  // SELF-ASSIGN (D-070): a technician claims an available SCHEDULED job in their own branch.
-  app.post('/api/v1/job-orders/:id/self-assign', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('jobOrder:selfAssign')] }, async (req) => {
-    const { id } = req.params as any;
-    const { version } = (req.body ?? {}) as any;
-    if (typeof version !== 'number') throw new AppError('VALIDATION_ERROR', 'version required');
-    return prisma.$transaction(async (tx) => {
-      const jo = await tx.jobOrder.findFirst({ where: { id, deletedAt: null, archivedAt: null, purgedAt: null } });
-      if (!jo) throw new AppError('NOT_FOUND');
-      assertBranchAccess(req.ctx, jo.branch);
-      if (jo.state !== 'SCHEDULED') {
-        throw new AppError('STATE_TRANSITION_INVALID', 'only a SCHEDULED job can be self-assigned');
-      }
-      if (jo.executionOwnerId != null) {
-        throw new AppError('VERSION_CONFLICT');
-      }
-      const technicianIds = (jo.assignedTechnicianIds ?? []).includes(req.ctx.userId)
-        ? jo.assignedTechnicianIds
-        : [...(jo.assignedTechnicianIds ?? []), req.ctx.userId];
-      const res = await tx.jobOrder.updateMany({
-        where: { id, version, executionOwnerId: null },
-        data: { assignedTechnicianIds: technicianIds, executionOwnerId: req.ctx.userId, version: { increment: 1 } },
-      });
-      if (res.count === 0) throw new AppError('VERSION_CONFLICT');
-      await appendAudit(tx, req.ctx, { entityType: 'JobOrder', entityId: id, action: 'SELF_ASSIGN', diff: { executionOwnerId: req.ctx.userId } });
       return tx.jobOrder.findUnique({ where: { id } });
     });
   });

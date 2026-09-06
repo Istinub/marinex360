@@ -2,16 +2,11 @@ import { Device as CapacitorDevice } from '@capacitor/device';
 import { Filesystem } from '@capacitor/filesystem';
 import { authenticatedFetch, currentSession } from './useAuth.ts';
 
-export type ChecklistItemType = 'bool' | 'text' | 'number' | 'select' | 'photo';
 export type PhotoPhase = 'BEFORE' | 'DURING' | 'AFTER';
 
 export interface ChecklistItemDef {
   id: string;
   label: string;
-  type: ChecklistItemType;
-  required: boolean;
-  options?: string[];
-  unit?: string;
 }
 
 export interface ChecklistItemResult {
@@ -27,6 +22,12 @@ export interface QueuedOfflineCreate {
   uploadId?: string;
   documentHash?: string;
   snapshotJson?: string;
+}
+
+export interface ESignatureEvidence {
+  signerPhone?: string | null;
+  signerEmail?: string | null;
+  signatureImageDataUrl?: string | null;
 }
 
 type BinaryUploadEntity = 'Photo' | 'ESignature';
@@ -232,6 +233,7 @@ async function signatureSnapshot(
   signerName: string,
   signerRole: string,
   signedAt: string,
+  evidence: ESignatureEvidence = {},
 ): Promise<Record<string, unknown>> {
   const checklistInstanceIds = await sortedColumnValues(
     db,
@@ -252,7 +254,18 @@ async function signatureSnapshot(
     'id',
   );
 
-  return { jobOrderId, checklistInstanceIds, photoOpIds, materialLineIds, signerName, signerRole, signedAt };
+  return {
+    jobOrderId,
+    checklistInstanceIds,
+    photoOpIds,
+    materialLineIds,
+    signerName,
+    signerRole,
+    signerPhone: evidence.signerPhone ?? null,
+    signerEmail: evidence.signerEmail ?? null,
+    signatureImageDataUrl: evidence.signatureImageDataUrl ?? null,
+    signedAt,
+  };
 }
 
 async function pendingUploads(db: MobileSqlAdapter): Promise<BinaryUploadRow[]> {
@@ -553,6 +566,7 @@ export function useOfflineExecution() {
     geoLat: number | null,
     geoLng: number | null,
     imageLocalPath: string,
+    evidence: ESignatureEvidence = {},
   ): Promise<QueuedOfflineCreate> {
     if (!imageLocalPath) throw new Error('Signature image path is not available.');
 
@@ -569,7 +583,12 @@ export function useOfflineExecution() {
     const deviceId = await currentDeviceId();
     const cleanSignerName = signerName.trim();
     const cleanSignerRole = signerRole.trim();
-    const snapshotJson = sortedStringify(await signatureSnapshot(db, jobOrderId, cleanSignerName, cleanSignerRole, signedAt));
+    const cleanEvidence: ESignatureEvidence = {
+      signerPhone: evidence.signerPhone?.trim() || null,
+      signerEmail: evidence.signerEmail?.trim() || null,
+      signatureImageDataUrl: evidence.signatureImageDataUrl ?? null,
+    };
+    const snapshotJson = sortedStringify(await signatureSnapshot(db, jobOrderId, cleanSignerName, cleanSignerRole, signedAt, cleanEvidence));
     const documentHash = await sha256Hex(snapshotJson);
     const payload = {
       id,

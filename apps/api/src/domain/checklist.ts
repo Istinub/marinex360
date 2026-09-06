@@ -8,8 +8,8 @@ export type ChecklistItemType = 'bool' | 'text' | 'number' | 'select' | 'photo';
 export interface ChecklistItemDef {
   id: string;
   label: string;
-  type: ChecklistItemType;
-  required: boolean;
+  type?: ChecklistItemType;
+  required?: boolean;
   options?: string[]; // 'select' only
   unit?: string;       // 'number' only
 }
@@ -22,6 +22,7 @@ export interface ChecklistItemResult {
 }
 
 const TYPES: ReadonlySet<ChecklistItemType> = new Set(['bool', 'text', 'number', 'select', 'photo']);
+const CATEGORY_COMMENT_ITEM_ID = '__categoryComment';
 
 function fail(msg: string): never {
   throw new AppError('VALIDATION_ERROR', `checklist: ${msg}`);
@@ -38,8 +39,8 @@ export function validateItemDefs(items: unknown): ChecklistItemDef[] {
     if (ids.has(it.id)) fail(`duplicate item id "${it.id}"`);
     ids.add(it.id);
     if (!it.label || typeof it.label !== 'string') fail(`item "${it.id}": label is required`);
-    if (!it.type || !TYPES.has(it.type as ChecklistItemType)) fail(`item "${it.id}": invalid type "${it.type}"`);
-    if (typeof it.required !== 'boolean') fail(`item "${it.id}": required must be boolean`);
+    if (it.type !== undefined && !TYPES.has(it.type as ChecklistItemType)) fail(`item "${it.id}": invalid type "${it.type}"`);
+    if (it.required !== undefined && typeof it.required !== 'boolean') fail(`item "${it.id}": required must be boolean`);
     if (it.type === 'select') {
       if (!Array.isArray(it.options) || it.options.length === 0) fail(`item "${it.id}": select requires non-empty options[]`);
       if (it.options.some((o) => typeof o !== 'string')) fail(`item "${it.id}": options must be strings`);
@@ -67,23 +68,29 @@ export function validateResults(defs: ChecklistItemDef[], results: unknown): Che
     if (!r || typeof r !== 'object' || !r.itemId) fail('each result requires itemId');
     if (seen.has(r.itemId)) fail(`duplicate result for item "${r.itemId}"`);
     seen.add(r.itemId);
+    if (r.itemId === CATEGORY_COMMENT_ITEM_ID) {
+      if (r.value !== undefined && r.value !== null && typeof r.value !== 'string') fail('category comment must be text');
+      continue;
+    }
     const def = byId.get(r.itemId);
     if (!def) fail(`result references unknown item "${r.itemId}"`);
+    const type = def.type ?? 'bool';
+    const required = def.required ?? false;
 
     if (r.na === true) continue; // N/A override short-circuits all checks
 
-    if (def.type === 'photo') {
+    if (type === 'photo') {
       // Photo items carry their payload in photoOpId; `value` is legitimately always null.
-      if (def.required && !r.photoOpId) fail(`item "${def.id}": photo item requires photoOpId`);
+      if (required && !r.photoOpId) fail(`item "${def.id}": photo item requires photoOpId`);
       if (r.photoOpId !== undefined && typeof r.photoOpId !== 'string') fail(`item "${def.id}": photoOpId must be a string`);
       continue;
     }
 
-    if (def.required && (r.value === null || r.value === undefined)) {
+    if (required && (r.value === null || r.value === undefined)) {
       fail(`item "${def.id}" ("${def.label}") is required`);
     }
     if (r.value !== null && r.value !== undefined) {
-      switch (def.type) {
+      switch (type) {
         case 'bool':
           if (typeof r.value !== 'boolean') fail(`item "${def.id}": expected boolean`);
           break;
@@ -102,7 +109,7 @@ export function validateResults(defs: ChecklistItemDef[], results: unknown): Che
     }
   }
 
-  const missingRequired = defs.filter((d) => d.required && !seen.has(d.id));
+  const missingRequired = defs.filter((d) => d.required === true && !seen.has(d.id));
   if (missingRequired.length) {
     fail(`missing required item(s): ${missingRequired.map((d) => d.id).join(', ')}`);
   }

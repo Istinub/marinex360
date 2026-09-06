@@ -2,6 +2,7 @@
 // One user per role, 2 clients, 2 vessels, 2 Job Orders in different states (+ status history).
 import { PrismaClient } from '@prisma/client';
 import { hashPassword } from '../apps/api/src/auth/password.js';
+import { SEEDED_CHECKLIST_CATEGORIES } from '../apps/api/src/domain/checklistCategories.js';
 
 // Seed runs as the owner (DIRECT_DATABASE_URL) so it can reset append-only tables.
 const prisma = new PrismaClient({
@@ -20,6 +21,8 @@ async function main() {
   const director = await mk('director@tkmr.local', 'Dinesh Director', ['DIRECTOR'], 'SG');
   const tech = await mk('tech@tkmr.local', 'Tariq Technician', ['TECHNICIAN'], 'SG',
     { skills: ['welding', 'hydraulics'], baseLocation: 'Jurong', available: true, designation: 'Senior Field Technician' });
+  const tech2 = await mk('tech2@tkmr.local', 'Talia Technician', ['TECHNICIAN'], 'SG',
+    { skills: ['electrical', 'inspection'], baseLocation: 'Tuas', available: true, designation: 'Field Technician' });
 
   const contactA = await prisma.contact.create({ data: { name: 'Operations Desk (Pacific Lines)', email: 'ops@pacificlines.example', phone: '+65-6000-0001' } });
   const contactB = await prisma.contact.create({ data: { name: 'Fleet Manager (Straits Bulk)', email: 'fleet@straitsbulk.example', phone: '+65-6000-0002' } });
@@ -62,7 +65,63 @@ async function main() {
     ],
   });
 
-  console.log('Seeded: 5 users, 2 contacts, 2 clients, 2 vessels, 2 job orders (DRAFT + IN_PROGRESS).');
+  const devices = [
+    { id: 'Device-1', name: 'Device-1', pin: '0000', assignedUserId: tech.id, branch: tech.branch },
+    { id: 'Device-2', name: 'Device-2', pin: '0002', assignedUserId: tech2.id, branch: tech2.branch },
+    { id: 'Device-Admin', name: 'Device-Admin', pin: '1111', assignedUserId: admin.id, branch: admin.branch },
+    { id: 'Device-Director', name: 'Device-Director', pin: '1234', assignedUserId: director.id, branch: director.branch },
+  ];
+  for (const device of devices) {
+    await prisma.device.upsert({
+      where: { id: device.id },
+      update: {
+        name: device.name,
+        pin: await hashPassword(device.pin),
+        assignedUserId: device.assignedUserId,
+        branch: device.branch,
+      },
+      create: {
+        id: device.id,
+        name: device.name,
+        pin: await hashPassword(device.pin),
+        assignedUserId: device.assignedUserId,
+        branch: device.branch,
+      },
+    });
+  }
+
+  for (const category of SEEDED_CHECKLIST_CATEGORIES) {
+    await prisma.checklistCategory.upsert({
+      where: { id: category.id },
+      update: { name: category.name, sortOrder: category.sortOrder },
+      create: { id: category.id, name: category.name, sortOrder: category.sortOrder },
+    });
+    for (const item of category.items) {
+      await prisma.checklistTemplateItem.upsert({
+        where: { id: item.id },
+        update: { categoryId: category.id, label: item.label, sortOrder: item.sortOrder },
+        create: { id: item.id, categoryId: category.id, label: item.label, sortOrder: item.sortOrder },
+      });
+    }
+    await prisma.checklistTemplate.upsert({
+      where: { id: `fixed-${category.id}` },
+      update: {
+        name: `${category.name} checklist`,
+        serviceCategory: category.id,
+        items: category.items.map((item) => ({ id: item.id, label: item.label })),
+        active: true,
+      },
+      create: {
+        id: `fixed-${category.id}`,
+        name: `${category.name} checklist`,
+        serviceCategory: category.id,
+        items: category.items.map((item) => ({ id: item.id, label: item.label })),
+        active: true,
+      },
+    });
+  }
+
+  console.log('Seeded: 6 users, 2 contacts, 2 clients, 2 vessels, 2 job orders (DRAFT + IN_PROGRESS), 4 devices, 6 checklist categories.');
   console.log(`Local login password for all seed users: ${PW}`);
 }
 

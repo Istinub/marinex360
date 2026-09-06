@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Geolocation } from '@capacitor/geolocation';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
 import ProgressSpinner from 'primevue/progressspinner';
@@ -7,15 +8,19 @@ import { RouterLink, useRoute, useRouter } from 'vue-router';
 import MobileBackLink from '@/components/MobileBackLink.vue';
 import { loadLiveJobOrder, transitionJobOrder, type MobileJobOrder } from '@/composables/useJobOrders';
 import { useExecutionSummary } from '@/composables/useExecutionSummary';
+import { useOfflineExecution } from '@/composables/useOfflineExecution';
+import { clearSignatureDraft, loadSignatureDraft, type SignatureDraft } from '@/composables/useSignatureDraft';
 
 const route = useRoute();
 const router = useRouter();
+const offlineExecution = useOfflineExecution();
 
 const jobOrderId = computed(() => {
   const id = route.params.id;
   return (Array.isArray(id) ? id[0] : id) ?? '';
 });
 const isReport = computed(() => route.name === 'job-completion-report');
+const returnPath = computed(() => (isReport.value ? '/jobs' : `/jobs/${jobOrderId.value}`));
 const {
   summary,
   isLoading: isSummaryLoading,
@@ -28,6 +33,8 @@ const isSubmitting = ref(false);
 const showConfirm = ref(false);
 const showSuccess = ref(false);
 const errorMessage = ref<string | null>(null);
+const signatureDraft = ref<SignatureDraft | null>(null);
+const hasPreviewContent = computed(() => hasContent.value || (!isReport.value && signatureDraft.value != null));
 
 function money(amountMinor: number, currency: string): string {
   return `${currency} ${(amountMinor / 100).toFixed(2)}`;
@@ -41,26 +48,58 @@ function resultText(value: unknown): string {
   return String(value ?? 'No value');
 }
 
+async function captureGeo(): Promise<{ lat: number | null; lng: number | null }> {
+  try {
+    const position = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 8000 });
+    return {
+      lat: position.coords.latitude,
+      lng: position.coords.longitude,
+    };
+  } catch {
+    return { lat: null, lng: null };
+  }
+}
+
 async function load(): Promise<void> {
   errorMessage.value = null;
   try {
-    const [job] = await Promise.all([
+    const [job, draft] = await Promise.all([
       loadLiveJobOrder(jobOrderId.value),
       loadSummary(),
+      isReport.value ? Promise.resolve(null) : loadSignatureDraft(jobOrderId.value),
     ]);
     jobOrder.value = job;
+    signatureDraft.value = draft;
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : 'Unable to load completion summary.';
   }
 }
 
-async function submitForReview(): Promise<void> {
+async function confirmSubmission(): Promise<void> {
   if (!jobOrder.value) return;
 
   isSubmitting.value = true;
   errorMessage.value = null;
   try {
+    const draft = await loadSignatureDraft(jobOrderId.value);
+    if (!draft) throw new Error('Capture a signature before submitting for review.');
+    const geo = await captureGeo();
+    await offlineExecution.authorESignature(
+      jobOrderId.value,
+      draft.signerName,
+      draft.technicianId,
+      geo.lat,
+      geo.lng,
+      draft.imageLocalPath,
+      {
+        signerPhone: draft.signerPhone,
+        signerEmail: draft.signerEmail,
+        signatureImageDataUrl: draft.imageDataUrl,
+      },
+    );
     await transitionJobOrder(jobOrder.value, 'PENDING_REVIEW');
+    await clearSignatureDraft(jobOrderId.value);
+    signatureDraft.value = null;
     showConfirm.value = false;
     showSuccess.value = true;
   } catch (error) {
@@ -83,7 +122,7 @@ onMounted(() => {
 <template>
   <main class="execution-summary" aria-labelledby="execution-summary-title">
     <header class="execution-summary__header">
-      <MobileBackLink :to="`/jobs/${jobOrderId}`" label="Return" />
+      <MobileBackLink :to="returnPath" label="Return" />
       <p class="execution-summary__eyebrow">{{ isReport ? 'Completion report' : 'Completion preview' }}</p>
       <h1 id="execution-summary-title" class="execution-summary__title">
         {{ isReport ? 'Submitted execution summary' : 'Review before submitting' }}

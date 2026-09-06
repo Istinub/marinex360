@@ -32,7 +32,6 @@ export interface MobileJobOrder {
   executionOwnerId?: string | null;
   version: number;
   visible?: boolean;
-  isAvailable?: boolean;
   canOpen?: boolean;
   readOnly?: boolean;
   canStart?: boolean;
@@ -224,7 +223,7 @@ export async function cacheJobOrder(job: MobileJobOrder): Promise<void> {
 
 export async function cacheAssignedJobOrders(jobs: MobileJobOrder[]): Promise<void> {
   for (const job of jobs) {
-    if (!job.isAvailable && job.canOpen !== false) await cacheJobOrder(job);
+    if (job.canOpen !== false) await cacheJobOrder(job);
   }
 }
 
@@ -252,39 +251,6 @@ export async function loadLiveJobOrder(id: string): Promise<MobileJobOrder> {
   const job = await jsonResponse<MobileJobOrder>(response);
   await cacheJobOrder(job);
   return job;
-}
-
-function isSelfAssignable(job: MobileJobOrder): boolean {
-  return job.state === 'SCHEDULED' && job.executionOwnerId == null;
-}
-
-async function postSelfAssign(job: MobileJobOrder): Promise<MobileJobOrder> {
-  const response = await authenticatedFetch(`${apiBase()}/job-orders/${job.id}/self-assign`, {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ version: job.version }),
-  });
-  const updated = await jsonResponse<MobileJobOrder>(response);
-  await cacheJobOrder(updated);
-  return { ...updated, isAvailable: false };
-}
-
-export async function selfAssignJobOrder(job: MobileJobOrder): Promise<MobileJobOrder> {
-  try {
-    return await postSelfAssign(job);
-  } catch (error) {
-    if (!(error instanceof MobileApiError) || error.code !== 'VERSION_CONFLICT') throw error;
-
-    const refreshed = await loadLiveJobOrder(job.id);
-    if (!isSelfAssignable(refreshed)) {
-      throw new Error('This job is no longer available for self-assignment.');
-    }
-
-    return postSelfAssign({ ...refreshed, isAvailable: true });
-  }
 }
 
 export async function transitionJobOrder(job: MobileJobOrder, to: JobState, reason?: string): Promise<MobileJobOrder> {

@@ -1,16 +1,9 @@
 <script setup lang="ts">
-import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
-import { Geolocation } from '@capacitor/geolocation';
 import Button from 'primevue/button';
-import Checkbox from 'primevue/checkbox';
-import InputNumber from 'primevue/inputnumber';
-import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
 import ProgressSpinner from 'primevue/progressspinner';
-import Select from 'primevue/select';
-import Tag from 'primevue/tag';
-import ToggleSwitch from 'primevue/toggleswitch';
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import Textarea from 'primevue/textarea';
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import MobileBackLink from '@/components/MobileBackLink.vue';
 import {
@@ -25,10 +18,11 @@ import {
   type ChecklistItemResult,
 } from '@/composables/useOfflineExecution';
 import {
-  JOB_ORDER_CATEGORY_OPTIONS,
-  checklistItemsForCategory,
-  type JobOrderCategory,
-} from '@/lib/checklistCategoryTemplates';
+  loadChecklistCategories,
+  type ChecklistCategory,
+} from '@/composables/useChecklistCategories';
+
+const CATEGORY_COMMENT_ITEM_ID = '__categoryComment';
 
 interface ChecklistTemplateOption {
   id: string;
@@ -36,36 +30,20 @@ interface ChecklistTemplateOption {
   items: ChecklistItemDef[];
 }
 
-async function captureGeo(): Promise<{ lat: number | null; lng: number | null }> {
-  try {
-    const position = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 8000 });
-    return {
-      lat: position.coords.latitude,
-      lng: position.coords.longitude,
-    };
-  } catch {
-    return { lat: null, lng: null };
-  }
-}
-
 const route = useRoute();
 const offlineExecution = useOfflineExecution();
 
-const selectedCategory = ref<JobOrderCategory | null>(null);
+const selectedCategory = ref<string | null>(null);
+const categories = ref<ChecklistCategory[]>([]);
 const isLoading = ref(false);
 const isSubmitting = ref(false);
 const errorMessage = ref<string | null>(null);
 const successMessage = ref<string | null>(null);
 const savedChecklists = ref<LocalChecklistEntry[]>([]);
 const editingEntry = ref<LocalChecklistEntry | null>(null);
-const fieldErrors = reactive<Record<string, string>>({});
-
-const boolValues = reactive<Record<string, boolean>>({});
-const textValues = reactive<Record<string, string>>({});
-const numberValues = reactive<Record<string, number | null>>({});
-const selectValues = reactive<Record<string, string | null>>({});
-const photoOpIds = reactive<Record<string, string | null>>({});
-const naValues = reactive<Record<string, boolean>>({});
+const hasSubmittedChecklist = ref(false);
+const checkedItems = reactive<Record<string, boolean>>({});
+const categoryComment = ref('');
 
 const jobOrderId = computed(() => {
   const id = route.params.id ?? route.params.jobOrderId;
@@ -74,31 +52,23 @@ const jobOrderId = computed(() => {
 
 const selectedTemplate = computed<ChecklistTemplateOption | null>(() => {
   if (!selectedCategory.value) return null;
-  const option = JOB_ORDER_CATEGORY_OPTIONS.find((category) => category.value === selectedCategory.value);
+  const option = categories.value.find((category) => category.id === selectedCategory.value);
   return {
     id: `fixed-${selectedCategory.value}`,
-    name: `${option?.label ?? selectedCategory.value} checklist`,
-    items: checklistItemsForCategory(selectedCategory.value),
+    name: `${option?.name ?? selectedCategory.value} checklist`,
+    items: option?.items.map((item) => ({ id: item.id, label: item.label })) ?? [],
   };
 });
 
+const submitButtonLabel = computed(() => (editingEntry.value ? 'Update checklist' : 'Submit checklist'));
+
 function resetItemState(template: ChecklistTemplateOption | null): void {
-  for (const key of Object.keys(boolValues)) delete boolValues[key];
-  for (const key of Object.keys(textValues)) delete textValues[key];
-  for (const key of Object.keys(numberValues)) delete numberValues[key];
-  for (const key of Object.keys(selectValues)) delete selectValues[key];
-  for (const key of Object.keys(photoOpIds)) delete photoOpIds[key];
-  for (const key of Object.keys(naValues)) delete naValues[key];
-  for (const key of Object.keys(fieldErrors)) delete fieldErrors[key];
+  for (const key of Object.keys(checkedItems)) delete checkedItems[key];
 
   for (const item of template?.items ?? []) {
-    boolValues[item.id] = false;
-    textValues[item.id] = '';
-    numberValues[item.id] = null;
-    selectValues[item.id] = null;
-    photoOpIds[item.id] = null;
-    naValues[item.id] = false;
+    checkedItems[item.id] = false;
   }
+  categoryComment.value = '';
 }
 
 function clearForm(): void {
@@ -108,101 +78,62 @@ function clearForm(): void {
 
 function applyResultsToForm(results: ChecklistItemResult[]): void {
   resetItemState(selectedTemplate.value);
-  const items = selectedTemplate.value?.items ?? [];
+  const itemIds = new Set(selectedTemplate.value?.items.map((item) => item.id) ?? []);
+
   for (const result of results) {
-    const item = items.find((candidate) => candidate.id === result.itemId);
-    if (!item) continue;
+    if (result.itemId === CATEGORY_COMMENT_ITEM_ID) {
+      categoryComment.value = typeof result.value === 'string' ? result.value : '';
+      continue;
+    }
 
-    naValues[item.id] = Boolean(result.na);
-    if (result.photoOpId) photoOpIds[item.id] = result.photoOpId;
-    if (result.na) continue;
-
-    switch (item.type) {
-      case 'bool':
-        boolValues[item.id] = Boolean(result.value);
-        break;
-      case 'text':
-        textValues[item.id] = typeof result.value === 'string' ? result.value : '';
-        break;
-      case 'number':
-        numberValues[item.id] = typeof result.value === 'number' ? result.value : null;
-        break;
-      case 'select':
-        selectValues[item.id] = typeof result.value === 'string' ? result.value : null;
-        break;
-      case 'photo':
-        break;
+    if (itemIds.has(result.itemId)) {
+      checkedItems[result.itemId] = result.value === true;
     }
   }
 }
 
-function categoryFromTemplateId(templateId: string): JobOrderCategory | null {
+function categoryFromTemplateId(templateId: string): string | null {
   const value = templateId.replace(/^fixed-/, '');
-  const match = JOB_ORDER_CATEGORY_OPTIONS.find((category) => category.value === value);
-  return match?.value ?? null;
+  const match = categories.value.find((category) => category.id === value);
+  return match?.id ?? null;
 }
 
-function itemLabel(templateId: string, result: ChecklistItemResult | undefined): string {
+function checklistResults(entry: LocalChecklistEntry): ChecklistItemResult[] {
+  return entry.results.filter((result) => result.itemId !== CATEGORY_COMMENT_ITEM_ID);
+}
+
+function checklistComment(entry: LocalChecklistEntry): string {
+  const comment = entry.results.find((result) => result.itemId === CATEGORY_COMMENT_ITEM_ID)?.value;
+  return typeof comment === 'string' ? comment : '';
+}
+
+function checkedCount(entry: LocalChecklistEntry): number {
+  return checklistResults(entry).filter((result) => result.value === true).length;
+}
+
+function totalCount(entry: LocalChecklistEntry): number {
+  return checklistResults(entry).length;
+}
+
+function categoryLabel(templateId: string): string {
   const category = categoryFromTemplateId(templateId);
-  const item = category && result ? checklistItemsForCategory(category).find((candidate) => candidate.id === result.itemId) : null;
-  return item?.label ?? result?.itemId ?? 'Checklist response';
-}
-
-function answerText(result: ChecklistItemResult | undefined): string {
-  if (!result) return 'No answer';
-  if (result.na) return 'N/A';
-  if (result.photoOpId) return 'Photo queued';
-  if (typeof result.value === 'boolean') return result.value ? 'Yes' : 'No';
-  return String(result.value ?? 'No answer');
-}
-
-function valueFor(item: ChecklistItemDef): boolean | string | number | null {
-  if (naValues[item.id]) return null;
-
-  switch (item.type) {
-    case 'bool':
-      return boolValues[item.id] ?? false;
-    case 'text':
-      return textValues[item.id]?.trim() || null;
-    case 'number':
-      return numberValues[item.id] ?? null;
-    case 'select':
-      return selectValues[item.id] ?? null;
-    case 'photo':
-      return null;
-  }
+  return categories.value.find((option) => option.id === category)?.name ?? 'Checklist';
 }
 
 function buildResults(): ChecklistItemResult[] | null {
-  for (const key of Object.keys(fieldErrors)) delete fieldErrors[key];
-
   const template = selectedTemplate.value;
   if (!template) {
     errorMessage.value = 'Select a checklist.';
     return null;
   }
 
-  const results: ChecklistItemResult[] = [];
-  for (const item of template.items) {
-    if (naValues[item.id]) {
-      results.push({ itemId: item.id, value: null, na: true });
-      continue;
-    }
-
-    if (item.type === 'photo') {
-      const photoOpId = photoOpIds[item.id];
-      if (item.required && !photoOpId) fieldErrors[item.id] = 'Capture a photo for this item.';
-      results.push({ itemId: item.id, value: null, ...(photoOpId ? { photoOpId } : {}) });
-      continue;
-    }
-
-    const value = valueFor(item);
-    const missing = value == null || (typeof value === 'string' && value.length === 0);
-    if (item.required && missing) fieldErrors[item.id] = 'This item is required.';
-    results.push({ itemId: item.id, value });
-  }
-
-  return Object.keys(fieldErrors).length > 0 ? null : results;
+  const results: ChecklistItemResult[] = template.items.map((item) => ({
+    itemId: item.id,
+    value: checkedItems[item.id] === true,
+  }));
+  const comment = categoryComment.value.trim();
+  if (comment) results.push({ itemId: CATEGORY_COMMENT_ITEM_ID, value: comment });
+  return results;
 }
 
 async function loadTemplates(): Promise<void> {
@@ -210,7 +141,8 @@ async function loadTemplates(): Promise<void> {
   errorMessage.value = null;
 
   try {
-    selectedCategory.value ??= JOB_ORDER_CATEGORY_OPTIONS[0]?.value ?? null;
+    categories.value = await loadChecklistCategories();
+    selectedCategory.value ??= categories.value[0]?.id ?? null;
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : 'Unable to load checklist templates.';
   } finally {
@@ -220,29 +152,6 @@ async function loadTemplates(): Promise<void> {
 
 async function refreshEntries(): Promise<void> {
   savedChecklists.value = await listLocalChecklists(jobOrderId.value);
-}
-
-async function capturePhotoFor(item: ChecklistItemDef): Promise<void> {
-  errorMessage.value = null;
-  successMessage.value = null;
-
-  try {
-    const photo = await Camera.getPhoto({
-      quality: 80,
-      resultType: CameraResultType.Uri,
-      source: CameraSource.Camera,
-    });
-    const localPath = photo.path ?? photo.webPath;
-    if (!localPath) throw new Error('Camera did not return a local photo path.');
-
-    const geo = await captureGeo();
-    const queued = await offlineExecution.authorPhotoCapture(jobOrderId.value, 'DURING', localPath, geo.lat, geo.lng);
-    photoOpIds[item.id] = queued.opId;
-    delete fieldErrors[item.id];
-    successMessage.value = 'Photo queued for this checklist item.';
-  } catch (error) {
-    fieldErrors[item.id] = error instanceof Error ? error.message : 'Unable to capture photo.';
-  }
 }
 
 async function submitChecklist(): Promise<void> {
@@ -263,6 +172,7 @@ async function submitChecklist(): Promise<void> {
       successMessage.value = 'Checklist queued.';
     }
     await refreshEntries();
+    hasSubmittedChecklist.value = true;
     clearForm();
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : 'Unable to queue checklist.';
@@ -271,13 +181,15 @@ async function submitChecklist(): Promise<void> {
   }
 }
 
-function editChecklist(entry: LocalChecklistEntry): void {
+async function editChecklist(entry: LocalChecklistEntry): Promise<void> {
   const category = categoryFromTemplateId(entry.templateId);
   if (category) selectedCategory.value = category;
   editingEntry.value = entry;
   successMessage.value = null;
   errorMessage.value = null;
+  await nextTick();
   applyResultsToForm(entry.results);
+  hasSubmittedChecklist.value = true;
 }
 
 async function deleteChecklist(entry: LocalChecklistEntry): Promise<void> {
@@ -291,7 +203,9 @@ async function deleteChecklist(entry: LocalChecklistEntry): Promise<void> {
   }
 }
 
-watch(selectedTemplate, (template) => resetItemState(template), { immediate: true });
+watch(selectedTemplate, (template) => {
+  resetItemState(template);
+}, { immediate: true });
 
 onMounted(() => {
   void loadTemplates();
@@ -337,88 +251,63 @@ onMounted(() => {
         <span class="checklist-execution__category-label">Category</span>
         <div class="checklist-execution__category-list">
           <Button
-            v-for="category in JOB_ORDER_CATEGORY_OPTIONS"
-            :key="category.value"
+            v-for="category in categories"
+            :key="category.id"
             type="button"
-            :label="category.label"
-            :severity="selectedCategory === category.value ? undefined : 'secondary'"
-            :outlined="selectedCategory !== category.value"
-            @click="selectedCategory = category.value"
+            :label="category.name"
+            :severity="selectedCategory === category.id ? undefined : 'secondary'"
+            :outlined="selectedCategory !== category.id"
+            @click="selectedCategory = category.id"
           />
         </div>
       </section>
 
       <section class="checklist-execution__items" aria-label="Checklist items">
-        <article v-for="item in selectedTemplate.items" :key="item.id" class="checklist-execution__item">
-          <header class="checklist-execution__item-header">
-            <div>
-              <h2 class="checklist-execution__item-title">{{ item.label }}</h2>
-              <p v-if="item.type === 'number' && item.unit" class="checklist-execution__item-meta">{{ item.unit }}</p>
-            </div>
-            <Tag v-if="item.required" value="Required" severity="info" />
-          </header>
-
-          <label class="checklist-execution__na">
-            <Checkbox v-model="naValues[item.id]" binary />
-            <span>Not applicable</span>
-          </label>
-
-          <div v-if="!naValues[item.id]" class="checklist-execution__control">
-            <ToggleSwitch v-if="item.type === 'bool'" v-model="boolValues[item.id]" />
-
-            <InputText
-              v-else-if="item.type === 'text'"
-              v-model="textValues[item.id]"
-              class="checklist-execution__input"
-              autocomplete="off"
-            />
-
-            <InputNumber
-              v-else-if="item.type === 'number'"
-              v-model="numberValues[item.id]"
-              class="checklist-execution__input"
-              :input-id="`number-item-${item.id}`"
-              :min-fraction-digits="0"
-              :max-fraction-digits="3"
-            />
-
-            <Select
-              v-else-if="item.type === 'select'"
-              v-model="selectValues[item.id]"
-              class="checklist-execution__input"
-              :options="item.options ?? []"
-            />
-
-            <div v-else-if="item.type === 'photo'" class="checklist-execution__photo">
-              <Button
-                type="button"
-                icon="pi pi-camera"
-                :label="photoOpIds[item.id] ? 'Photo queued' : 'Capture photo'"
-                severity="secondary"
-                @click="capturePhotoFor(item)"
-              />
-              <span v-if="photoOpIds[item.id]" class="checklist-execution__photo-op">
-                {{ photoOpIds[item.id] }}
-              </span>
-            </div>
-          </div>
-
-          <small v-if="fieldErrors[item.id]" class="checklist-execution__error">
-            {{ fieldErrors[item.id] }}
-          </small>
-        </article>
+        <label
+          v-for="item in selectedTemplate.items"
+          :key="item.id"
+          class="checklist-execution__tick-item"
+        >
+          <input
+            v-model="checkedItems[item.id]"
+            class="checklist-execution__checkbox"
+            type="checkbox"
+          />
+          <span>{{ item.label }}</span>
+        </label>
       </section>
 
-      <Button type="submit" :label="editingEntry ? 'Update' : 'Submit checklist'" icon="pi pi-check" :loading="isSubmitting" />
+      <label class="checklist-execution__comment">
+        <span>Category comment</span>
+        <Textarea
+          v-model="categoryComment"
+          class="checklist-execution__input"
+          rows="4"
+          auto-resize
+          placeholder="Optional notes for this checklist category"
+        />
+      </label>
+
+      <Button
+        type="submit"
+        :label="submitButtonLabel"
+        icon="pi pi-check"
+        :loading="isSubmitting"
+      />
     </form>
 
-    <section class="checklist-execution__saved" aria-labelledby="saved-checklists-title">
+    <section v-if="hasSubmittedChecklist" class="checklist-execution__saved" aria-labelledby="saved-checklists-title">
       <h2 id="saved-checklists-title">Saved this session</h2>
       <p v-if="savedChecklists.length === 0" class="checklist-execution__empty">No checklist responses saved yet.</p>
       <article v-for="entry in savedChecklists" :key="entry.id" class="checklist-execution__saved-entry">
         <div>
-          <strong>{{ itemLabel(entry.templateId, entry.results[0]) }}</strong>
-          <span>{{ answerText(entry.results[0]) }} · {{ entry.syncState }}</span>
+          <strong>{{ categoryLabel(entry.templateId) }}</strong>
+          <span>
+            {{ checkedCount(entry) }} of {{ totalCount(entry) }} checked · {{ entry.syncState }}
+          </span>
+          <span v-if="checklistComment(entry)" class="checklist-execution__saved-comment">
+            {{ checklistComment(entry) }}
+          </span>
         </div>
         <div class="checklist-execution__saved-actions">
           <Button type="button" label="Edit" severity="secondary" outlined @click="editChecklist(entry)" />
@@ -474,15 +363,12 @@ onMounted(() => {
 }
 
 .checklist-execution__form,
-.checklist-execution__items,
-.checklist-execution__item,
-.checklist-execution__field,
-.checklist-execution__control,
 .checklist-execution__categories,
+.checklist-execution__items,
+.checklist-execution__comment,
 .checklist-execution__saved,
 .checklist-execution__saved-entry,
-.checklist-execution__saved-actions,
-.checklist-execution__photo {
+.checklist-execution__saved-actions {
   display: grid;
   gap: var(--sp-3);
 }
@@ -492,14 +378,8 @@ onMounted(() => {
   gap: var(--sp-4);
 }
 
-.checklist-execution__item {
-  padding: var(--sp-4);
-  border: var(--border-1);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-}
-
-.checklist-execution__category-label {
+.checklist-execution__category-label,
+.checklist-execution__comment span {
   color: var(--color-text);
   font-size: var(--fs-body);
   font-weight: var(--fw-semibold);
@@ -515,42 +395,29 @@ onMounted(() => {
   min-height: var(--tap-min);
 }
 
-.checklist-execution__item-header {
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
+.checklist-execution__items {
+  padding: var(--sp-3);
+  border: var(--border-1);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.checklist-execution__tick-item {
+  display: grid;
+  grid-template-columns: var(--tap-min) minmax(0, 1fr);
+  align-items: center;
   gap: var(--sp-3);
-}
-
-.checklist-execution__item-title {
-  margin: 0;
-  font-size: var(--fs-body-lg);
-  font-weight: var(--fw-semibold);
-  line-height: var(--lh-tight);
-}
-
-.checklist-execution__item-meta,
-.checklist-execution__photo-op {
-  margin: var(--sp-1) 0 0;
-  color: var(--color-text-muted);
-  font-family: var(--font-code);
-  font-size: var(--fs-body-sm);
-  line-height: var(--lh-base);
-  word-break: break-all;
-}
-
-.checklist-execution__field span,
-.checklist-execution__na {
+  min-height: var(--tap-field);
   color: var(--color-text);
   font-size: var(--fs-body);
   font-weight: var(--fw-semibold);
 }
 
-.checklist-execution__na {
-  min-height: var(--tap-min);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--tap-gap);
+.checklist-execution__checkbox {
+  width: 1.35rem;
+  height: 1.35rem;
+  justify-self: center;
+  accent-color: var(--color-brand);
 }
 
 .checklist-execution__input {
@@ -560,15 +427,8 @@ onMounted(() => {
   font-size: var(--fs-body);
 }
 
-.checklist-execution__photo :deep(.p-button),
 .checklist-execution__form > :deep(.p-button) {
   min-height: var(--tap-field);
-}
-
-.checklist-execution__error {
-  color: var(--status-error-fg);
-  font-size: var(--fs-body-sm);
-  line-height: var(--lh-base);
 }
 
 .checklist-execution__saved {
@@ -591,6 +451,12 @@ onMounted(() => {
 .checklist-execution__empty {
   color: var(--color-text-muted);
   font-size: var(--fs-body-sm);
+}
+
+.checklist-execution__saved-comment {
+  display: block;
+  margin-top: var(--sp-1);
+  line-height: var(--lh-base);
 }
 
 .checklist-execution__saved-actions {

@@ -14,7 +14,7 @@ import { requiresMfaAtLogin, type Role } from '../domain/rbac.js';
 
 const hashCode = (c: string) => createHash('sha256').update(c.trim().toUpperCase()).digest('hex');
 
-async function issueSession(
+export async function issueSession(
   prisma: PrismaClient, secret: string,
   user: { id: string; roles: string[]; branch: string; mfaComplete: boolean },
   longLived: boolean,
