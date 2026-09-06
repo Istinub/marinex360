@@ -4,7 +4,6 @@ import MultiSelect from 'primevue/multiselect';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import FieldError from '@/components/common/FieldError.vue';
-import MonoText from '@/components/common/MonoText.vue';
 import { ApiResponseError } from '@/lib/api/errors';
 import { useChecklistCategoriesStore } from '@/stores/checklistCategories';
 import { useClientsStore } from '@/stores/clients';
@@ -39,12 +38,27 @@ const form = reactive({
   scopeSummary: '',
   externalQuoteRef: '',
   externalRfqRef: '',
-  quotedAmountMinor: '',
+  quotedAmount: '',
   quotedCurrency: 'SGD',
 });
 
 const vesselOptions = computed(() => clientsStore.selectedClient?.vessels ?? []);
 const categoryOptions = computed(() => checklistCategoriesStore.options);
+const selectedClientName = computed(() =>
+  clientsStore.sortedClients.find((client) => client.id === form.clientId)?.name ?? '');
+const selectedVesselName = computed(() =>
+  vesselOptions.value.find((vessel) => vessel.id === form.vesselId)?.name ?? '');
+const hasAssignmentPreview = computed(() => Boolean(selectedClientName.value && selectedVesselName.value));
+
+function decimalToMinorUnits(value: string): number | null {
+  const match = value.trim().match(/^(-?)(\d+)(?:\.(\d{1,2}))?$/);
+  if (!match) return null;
+
+  const absolute = (BigInt(match[2]) * 100n) + BigInt((match[3] ?? '').padEnd(2, '0'));
+  const minorUnits = match[1] === '-' ? -absolute : absolute;
+  if (minorUnits > BigInt(Number.MAX_SAFE_INTEGER) || minorUnits < BigInt(Number.MIN_SAFE_INTEGER)) return null;
+  return Number(minorUnits);
+}
 
 function clearFieldErrors(): void {
   for (const key of Object.keys(fieldErrors) as JobOrderField[]) delete fieldErrors[key];
@@ -71,8 +85,8 @@ function validateForm(): boolean {
   if (!form.clientId) fieldErrors.clientId = 'Client is required.';
   if (!form.vesselId) fieldErrors.vesselId = 'Vessel is required.';
   if (!form.scopeSummary.trim()) fieldErrors.scopeSummary = 'Scope summary is required.';
-  if (!/^-?\d+$/.test(form.quotedAmountMinor.trim())) {
-    fieldErrors.quotedAmountMinor = 'Quoted amount must be integer minor units.';
+  if (decimalToMinorUnits(form.quotedAmount) == null) {
+    fieldErrors.quotedAmountMinor = 'Enter a valid quoted amount with up to two decimal places.';
   }
   if (!form.quotedCurrency.trim()) fieldErrors.quotedCurrency = 'Currency is required.';
 
@@ -88,7 +102,7 @@ function payload(): JobOrderCreateInput {
     scopeSummary: form.scopeSummary.trim(),
     externalQuoteRef: form.externalQuoteRef.trim() || null,
     externalRfqRef: form.externalRfqRef.trim() || null,
-    quotedAmountMinor: Number.parseInt(form.quotedAmountMinor.trim(), 10),
+    quotedAmountMinor: decimalToMinorUnits(form.quotedAmount)!,
     quotedCurrency: form.quotedCurrency.trim().toUpperCase(),
   };
 }
@@ -150,80 +164,132 @@ onMounted(async () => {
       </div>
     </header>
 
-    <form class="record-form" @submit.prevent="saveJobOrder">
+    <form class="record-form record-form--structured" @submit.prevent="saveJobOrder">
       <p v-if="formError" class="auth-message auth-message--error" role="alert">
         {{ formError }}
       </p>
 
-      <label class="auth-field" for="jo-client-id">
-        <span>Client</span>
-        <select id="jo-client-id" v-model="form.clientId" class="auth-input" :disabled="isLoadingClients" required>
-          <option value="">{{ isLoadingClients ? 'Loading clients...' : 'Select client' }}</option>
-          <option v-for="client in clientsStore.sortedClients" :key="client.id" :value="client.id">
-            {{ client.name }}
-          </option>
-        </select>
-        <FieldError :message="fieldErrors.clientId" />
-      </label>
+      <section class="record-form__section" aria-labelledby="job-order-assignment-heading">
+        <h2 id="job-order-assignment-heading" class="record-form__section-heading">Assignment</h2>
 
-      <label class="auth-field" for="jo-vessel-id">
-        <span>Vessel</span>
-        <select id="jo-vessel-id" v-model="form.vesselId" class="auth-input" :disabled="!form.clientId || isLoadingVessels" required>
-          <option value="">{{ isLoadingVessels ? 'Loading vessels...' : 'Select vessel' }}</option>
-          <option v-for="vessel in vesselOptions" :key="vessel.id" :value="vessel.id">
-            {{ vessel.name }} · {{ vessel.imoNumber }}
-          </option>
-        </select>
-        <FieldError :message="fieldErrors.vesselId" />
-      </label>
+        <label class="auth-field" for="jo-client-id">
+          <span>Client</span>
+          <select
+            id="jo-client-id"
+            v-model="form.clientId"
+            class="auth-input"
+            :class="{ 'record-form__control--placeholder': !form.clientId }"
+            :disabled="isLoadingClients"
+            required
+          >
+            <option value="">{{ isLoadingClients ? 'Loading clients...' : 'Select client' }}</option>
+            <option v-for="client in clientsStore.sortedClients" :key="client.id" :value="client.id">
+              {{ client.name }}
+            </option>
+          </select>
+          <FieldError :message="fieldErrors.clientId" />
+        </label>
 
-      <label class="auth-field" for="jo-service-categories-create">
-        <span>Service categories</span>
-        <MultiSelect
-          id="jo-service-categories-create"
-          v-model="form.serviceCategories"
-          class="record-form__select"
-          :options="categoryOptions"
-          option-label="label"
-          option-value="value"
-          display="chip"
-          placeholder="Select categories"
-        />
-        <FieldError :message="fieldErrors.serviceCategories" />
-      </label>
+        <label class="auth-field" for="jo-vessel-id">
+          <span>Vessel</span>
+          <select
+            id="jo-vessel-id"
+            v-model="form.vesselId"
+            class="auth-input"
+            :class="{ 'record-form__control--placeholder': !form.vesselId }"
+            :disabled="!form.clientId || isLoadingVessels"
+            required
+          >
+            <option value="">{{ isLoadingVessels ? 'Loading vessels...' : 'Select vessel' }}</option>
+            <option v-for="vessel in vesselOptions" :key="vessel.id" :value="vessel.id">
+              {{ vessel.name }} · {{ vessel.imoNumber }}
+            </option>
+          </select>
+          <FieldError :message="fieldErrors.vesselId" />
+        </label>
 
-      <label class="auth-field" for="jo-port-create">
-        <span>Port</span>
-        <input id="jo-port-create" v-model="form.port" class="auth-input" />
-        <FieldError :message="fieldErrors.port" />
-      </label>
+        <p class="record-form__preview" :class="{ 'record-form__preview--empty': !hasAssignmentPreview }">
+          <template v-if="hasAssignmentPreview">{{ selectedClientName }} · {{ selectedVesselName }}</template>
+          <template v-else>Select a client and vessel to see a preview here</template>
+        </p>
+      </section>
 
-      <label class="auth-field" for="jo-scope-create">
-        <span>Scope summary</span>
-        <textarea id="jo-scope-create" v-model="form.scopeSummary" class="auth-input record-form__textarea" required />
-        <FieldError :message="fieldErrors.scopeSummary" />
-      </label>
+      <section class="record-form__section" aria-labelledby="job-order-scope-heading">
+        <h2 id="job-order-scope-heading" class="record-form__section-heading">Scope</h2>
 
-      <label class="auth-field" for="jo-external-quote-create">
-        <span>External quote ref</span>
-        <input id="jo-external-quote-create" v-model="form.externalQuoteRef" class="auth-input mono-input" />
-        <FieldError :message="fieldErrors.externalQuoteRef" />
-      </label>
+        <label class="auth-field" for="jo-service-categories-create">
+          <span>Service categories</span>
+          <MultiSelect
+            id="jo-service-categories-create"
+            v-model="form.serviceCategories"
+            class="record-form__select"
+            :options="categoryOptions"
+            option-label="label"
+            option-value="value"
+            display="chip"
+            placeholder="Select categories"
+          />
+          <FieldError :message="fieldErrors.serviceCategories" />
+        </label>
 
-      <label class="auth-field" for="jo-external-rfq-create">
-        <span>External RFQ ref</span>
-        <input id="jo-external-rfq-create" v-model="form.externalRfqRef" class="auth-input mono-input" />
-        <FieldError :message="fieldErrors.externalRfqRef" />
-      </label>
+        <label class="auth-field" for="jo-port-create">
+          <span>Port</span>
+          <input id="jo-port-create" v-model="form.port" class="auth-input" placeholder="Enter port" />
+          <FieldError :message="fieldErrors.port" />
+        </label>
 
-      <div class="record-form__money-pair">
-        <label class="auth-field" for="jo-quoted-amount-minor">
-          <span>Quoted amount minor</span>
+        <label class="auth-field record-form__field--full" for="jo-scope-create">
+          <span>Scope summary</span>
+          <textarea
+            id="jo-scope-create"
+            v-model="form.scopeSummary"
+            class="auth-input record-form__textarea"
+            placeholder="Describe the required work"
+            required
+          />
+          <FieldError :message="fieldErrors.scopeSummary" />
+        </label>
+      </section>
+
+      <section class="record-form__section" aria-labelledby="job-order-references-heading">
+        <h2 id="job-order-references-heading" class="record-form__section-heading">
+          References <span class="record-form__section-optional">— optional</span>
+        </h2>
+
+        <label class="auth-field" for="jo-external-quote-create">
+          <span>External quote ref</span>
           <input
-            id="jo-quoted-amount-minor"
-            v-model="form.quotedAmountMinor"
+            id="jo-external-quote-create"
+            v-model="form.externalQuoteRef"
             class="auth-input mono-input"
-            inputmode="numeric"
+            placeholder="Quote reference"
+          />
+          <FieldError :message="fieldErrors.externalQuoteRef" />
+        </label>
+
+        <label class="auth-field" for="jo-external-rfq-create">
+          <span>External RFQ ref</span>
+          <input
+            id="jo-external-rfq-create"
+            v-model="form.externalRfqRef"
+            class="auth-input mono-input"
+            placeholder="RFQ reference"
+          />
+          <FieldError :message="fieldErrors.externalRfqRef" />
+        </label>
+      </section>
+
+      <section class="record-form__section" aria-labelledby="job-order-commercial-heading">
+        <h2 id="job-order-commercial-heading" class="record-form__section-heading">Commercial</h2>
+
+        <label class="auth-field" for="jo-quoted-amount">
+          <span>Quoted amount</span>
+          <input
+            id="jo-quoted-amount"
+            v-model="form.quotedAmount"
+            class="auth-input mono-input"
+            inputmode="decimal"
+            placeholder="0.00"
             required
           />
           <FieldError :message="fieldErrors.quotedAmountMinor" />
@@ -234,11 +300,7 @@ onMounted(async () => {
           <input id="jo-quoted-currency" v-model="form.quotedCurrency" class="auth-input mono-input" required />
           <FieldError :message="fieldErrors.quotedCurrency" />
         </label>
-      </div>
-
-      <p class="record-form__version">
-        Selected client <MonoText :value="form.clientId || null" /> · vessel <MonoText :value="form.vesselId || null" />
-      </p>
+      </section>
 
       <div class="record-form__actions">
         <Button label="Cancel" severity="secondary" @click="router.back()" />
