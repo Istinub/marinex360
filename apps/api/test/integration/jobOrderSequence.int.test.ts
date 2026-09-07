@@ -9,8 +9,8 @@ import { SYNC_SCHEMA_VERSION } from '../../src/routes/sync.js';
 
 const run = process.env.RUN_DB_TESTS ? describe : describe.skip;
 const SECRET = process.env.JWT_ACCESS_SECRET ?? 'test-secret';
-const bearer = (user: { id: string; roles: string[]; branch: string }) =>
-  `Bearer ${signAccessToken({ sub: user.id, roles: user.roles as any, branch: user.branch, mfaComplete: true }, SECRET)}`;
+const bearer = (user: { id: string; roles: string[]; branch: string }, deviceId?: string | null) =>
+  `Bearer ${signAccessToken({ sub: user.id, roles: user.roles as any, branch: user.branch, mfaComplete: true, deviceId }, SECRET)}`;
 
 run('Core Job Order sequence (integration)', () => {
   let prisma: PrismaClient;
@@ -136,8 +136,8 @@ run('Core Job Order sequence (integration)', () => {
     }
   });
 
-  it('SYSTEM_ADMIN, DIRECTOR, and OPS_SUPERVISOR can assign and schedule Job Orders', async () => {
-    for (const actor of [admin, director, sup]) {
+  it('SYSTEM_ADMIN and DIRECTOR can assign and schedule Job Orders', async () => {
+    for (const actor of [admin, director]) {
       const jo = await createViaApi(actor, `assign-${actor.roles[0]}`);
       const assigned = await app.inject({
         method: 'POST',
@@ -160,6 +160,20 @@ run('Core Job Order sequence (integration)', () => {
     }
   });
 
+  it('OPS_SUPERVISOR can create DRAFT Job Orders but cannot schedule them', async () => {
+    const jo = await createViaApi(sup, 'ops-draft-only');
+    expect(jo.state).toBe('DRAFT');
+
+    const scheduled = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${jo.id}/transition`,
+      headers: { authorization: bearer(sup) },
+      payload: { to: 'SCHEDULED', version: jo.version },
+    });
+    expect(scheduled.statusCode).toBe(403);
+    expect(scheduled.json().error.code).toBe('FORBIDDEN');
+  });
+
   it('technician sees all branch scheduled jobs with openability tags', async () => {
     const assigned = await createJobOrder('SCHEDULED', tech);
     const assignedToOtherTech = await createJobOrder('IN_PROGRESS', otherTech);
@@ -176,7 +190,7 @@ run('Core Job Order sequence (integration)', () => {
     expect(rows.find((row: any) => row.id === assigned.id)?.canStart).toBe(true);
     expect(rows.find((row: any) => row.id === assignedToOtherTech.id)?.canOpen).toBe(false);
     expect(rows.find((row: any) => row.id === unassigned.id)?.canOpen).toBe(true);
-    expect(rows.find((row: any) => row.id === unassigned.id)?.canStart).toBe(false);
+    expect(rows.find((row: any) => row.id === unassigned.id)?.canStart).toBe(true);
   });
 
   it('technician detail access allows unassigned and own jobs while masking other-owner and cross-branch jobs', async () => {
@@ -276,7 +290,7 @@ run('Core Job Order sequence (integration)', () => {
       headers: { authorization: bearer(tech) },
     });
     const unassignedRow = unassignedList.json().find((row: any) => row.id === unassignedScheduled.id);
-    expect(unassignedRow).toMatchObject({ canOpen: true, readOnly: false, canStart: false });
+    expect(unassignedRow).toMatchObject({ canOpen: true, readOnly: false, canStart: true });
 
     for (const state of ['SCHEDULED', 'ON_HOLD', 'PENDING_REVIEW', 'COMPLETED', 'INVOICED', 'CLOSED'] as const) {
       const detail = await app.inject({
@@ -328,6 +342,73 @@ run('Core Job Order sequence (integration)', () => {
     });
     expect(started.statusCode).toBe(200);
     expect(started.json().state).toBe('IN_PROGRESS');
+  });
+
+  it('technician start auto-claims an unassigned scheduled job and stale double-tap conflicts', async () => {
+    const jo = await createJobOrder('SCHEDULED');
+
+    const started = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${jo.id}/transition`,
+      headers: { authorization: bearer(tech) },
+      payload: { to: 'IN_PROGRESS', version: jo.version },
+    });
+    expect(started.statusCode).toBe(200);
+    expect(started.json()).toMatchObject({ state: 'IN_PROGRESS', executionOwnerId: tech.id });
+    expect(started.json().assignedTechnicianIds).toContain(tech.id);
+
+    const staleJo = await createJobOrder('SCHEDULED');
+    await prisma.jobOrder.update({ where: { id: staleJo.id }, data: { version: { increment: 1 } } });
+    const staleTap = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${staleJo.id}/transition`,
+      headers: { authorization: bearer(tech) },
+      payload: { to: 'IN_PROGRESS', version: staleJo.version },
+    });
+    expect(staleTap.statusCode).toBe(409);
+    expect(staleTap.json().error.code).toBe('VERSION_CONFLICT');
+  });
+
+  it('captures the acting device on transition history when the session includes one', async () => {
+    const device = await prisma.device.upsert({
+      where: { id: `jo-sequence-device-${tech.id}` },
+      update: { assignedUserId: tech.id, branch: tech.branch },
+      create: {
+        id: `jo-sequence-device-${tech.id}`,
+        name: 'JO Sequence Test Tablet',
+        pin: 'test-hash-not-used',
+        assignedUserId: tech.id,
+        branch: tech.branch,
+      },
+    });
+    const jo = await createJobOrder('SCHEDULED', tech);
+
+    const started = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${jo.id}/transition`,
+      headers: { authorization: bearer(tech, device.id) },
+      payload: { to: 'IN_PROGRESS', version: jo.version },
+    });
+    expect(started.statusCode).toBe(200);
+
+    const history = await prisma.jobStatusHistory.findFirstOrThrow({
+      where: { jobOrderId: jo.id, toState: 'IN_PROGRESS' },
+      orderBy: { at: 'desc' },
+    });
+    expect(history.deviceId).toBe(device.id);
+
+    const review = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${jo.id}/transition`,
+      headers: { authorization: bearer(tech) },
+      payload: { to: 'PENDING_REVIEW', version: started.json().version },
+    });
+    expect(review.statusCode).toBe(200);
+    const webHistory = await prisma.jobStatusHistory.findFirstOrThrow({
+      where: { jobOrderId: jo.id, toState: 'PENDING_REVIEW' },
+      orderBy: { at: 'desc' },
+    });
+    expect(webHistory.deviceId).toBeNull();
   });
 
   it('technician can pause their own IN_PROGRESS job with a reason while non-owners cannot', async () => {

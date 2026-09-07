@@ -159,7 +159,6 @@ function draw(event: PointerEvent): void {
   ctx.stroke();
   lastPoint = next;
   hasInk.value = true;
-  confirming.value = false;
 }
 
 function stopDraw(event: PointerEvent): void {

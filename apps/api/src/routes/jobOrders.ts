@@ -10,8 +10,11 @@ import { DEFAULT_LABOUR_RATE } from '../lib/money.js';
 import { assertTransition, isHeaderLocked, type JoState } from '../domain/josm.js';
 import { buildDraftInvoice } from '../domain/invoice.js';
 import { buildFinancialSummary } from '../domain/financialSummary.js';
+import { enqueueJobOrderReportGeneration } from '../services/jobOrderReportQueue.js';
+import { Storage } from '@marinex360/storage';
 
-const HEADER_FIELDS = ['scopeSummary', 'port', 'plannedStartDate', 'externalQuoteRef', 'externalRfqRef'];
+const HEADER_FIELDS = ['scopeSummary', 'port', 'plannedStartDate', 'deadline', 'externalQuoteRef', 'externalRfqRef'];
+const ALLOWED_CURRENCIES = new Set(['SGD', 'MYR', 'USD', 'IDR']);
 const isTech = (roles: string[]) => roles.includes('TECHNICIAN') && roles.length === 1;
 const isAdminOrDirector = (roles: string[]) => roles.includes('SYSTEM_ADMIN') || roles.includes('DIRECTOR');
 const isDirector = (roles: string[]) => roles.includes('DIRECTOR');
@@ -26,7 +29,7 @@ function technicianAccessFor(jo: { state: string; executionOwnerId?: string | nu
     case 'CANCELLED':
       return { visible: false, canOpen: false, readOnly: true, canStart: false, canResume: false };
     case 'SCHEDULED':
-      return { visible: true, canOpen: true, readOnly: false, canStart: isOwner, canResume: false };
+      return { visible: true, canOpen: true, readOnly: false, canStart: isOwner || jo.executionOwnerId == null, canResume: false };
     case 'IN_PROGRESS':
       return { visible: true, canOpen: isOwner, readOnly: false, canStart: false, canResume: false };
     case 'ON_HOLD':
@@ -76,6 +79,27 @@ async function assertJobOrderCreateScope(prisma: PrismaClient, branch: string, c
   if (vessel.clientId !== clientId) throw new AppError('VALIDATION_ERROR', 'vesselId must belong to clientId', { field: 'vesselId', reason: 'client_mismatch' });
 }
 
+function normalizeCurrency(input: unknown): string {
+  if (typeof input !== 'string') throw new AppError('VALIDATION_ERROR', 'currency required');
+  const currency = input.trim().toUpperCase();
+  if (!ALLOWED_CURRENCIES.has(currency)) throw new AppError('VALIDATION_ERROR', 'currency must be one of SGD, MYR, USD, IDR');
+  return currency;
+}
+
+async function vendorTagForBranch(
+  prisma: PrismaClient | Prisma.TransactionClient,
+  branch: string,
+  input: { isSubcontracted?: unknown; vendorId?: unknown },
+): Promise<{ isSubcontracted: boolean; vendorId: string | null }> {
+  const isSubcontracted = Boolean(input.isSubcontracted);
+  const vendorId = typeof input.vendorId === 'string' && input.vendorId.trim() ? input.vendorId.trim() : null;
+  if (!isSubcontracted) return { isSubcontracted: false, vendorId: null };
+  if (!vendorId) throw new AppError('VALIDATION_ERROR', 'vendorId required when job is subcontracted', { field: 'vendorId', reason: 'required' });
+  const vendor = await prisma.vendor.findFirst({ where: { id: vendorId, branch, deletedAt: null }, select: { id: true } });
+  if (!vendor) throw new AppError('NOT_FOUND', 'vendor not found');
+  return { isSubcontracted: true, vendorId };
+}
+
 async function assertAssignableTechnicians(prisma: PrismaClient | Prisma.TransactionClient, jobBranch: string, technicianIds: string[]): Promise<void> {
   const uniqueTechnicianIds = new Set(technicianIds);
   if (uniqueTechnicianIds.size !== technicianIds.length) {
@@ -92,6 +116,54 @@ async function assertAssignableTechnicians(prisma: PrismaClient | Prisma.Transac
   if (technicians.some((technician) => !technician.roles.includes('TECHNICIAN') || technician.branch !== jobBranch)) {
     throw new AppError('VALIDATION_ERROR', 'technicianIds must refer to active technicians in the job branch', { field: 'technicianIds', reason: 'invalid_technician' });
   }
+}
+
+function normalizeJobChecklistItems(input: unknown): { label: string; sortOrder: number }[] {
+  if (!Array.isArray(input)) return [];
+  return input.map((item: any, index) => {
+    const label = typeof item?.label === 'string' ? item.label.trim() : '';
+    if (!label) throw new AppError('VALIDATION_ERROR', 'checklist item label required');
+    return { label, sortOrder: typeof item.sortOrder === 'number' ? item.sortOrder : index };
+  });
+}
+
+async function snapshotChecklistForJob(
+  tx: Prisma.TransactionClient,
+  jobOrderId: string,
+  input: { checklistTemplateId?: string | null; checklistItems?: unknown; customChecklistItems?: unknown },
+): Promise<void> {
+  const existing = await tx.jobOrderChecklistItem.count({ where: { jobOrderId } });
+  if (existing > 0) return;
+
+  if (input.checklistTemplateId) {
+    const template = await tx.checklistTemplate.findFirst({
+      where: { id: input.checklistTemplateId, active: true },
+      include: { entries: { orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }] } },
+    });
+    if (!template) throw new AppError('NOT_FOUND', 'checklist template not found');
+    const entries = template.entries.map((entry, index) => ({ label: entry.label, sortOrder: entry.sortOrder ?? index }));
+    if (entries.length === 0 && Array.isArray(template.items)) {
+      for (const [index, item] of (template.items as any[]).entries()) {
+        if (typeof item?.label === 'string' && item.label.trim()) entries.push({ label: item.label.trim(), sortOrder: index });
+      }
+    }
+    if (entries.length > 0) await tx.jobOrderChecklistItem.createMany({ data: entries.map((entry) => ({ jobOrderId, ...entry })) });
+    return;
+  }
+
+  const customItems = normalizeJobChecklistItems(input.customChecklistItems ?? input.checklistItems);
+  if (customItems.length > 0) await tx.jobOrderChecklistItem.createMany({ data: customItems.map((item) => ({ jobOrderId, ...item })) });
+}
+
+async function findScopedVisibleJobOrder(tx: Prisma.TransactionClient, id: string, ctx: any): Promise<any> {
+  const jo = await tx.jobOrder.findFirst({ where: { id, deletedAt: null, archivedAt: null, purgedAt: null } });
+  if (!jo) throw new AppError('NOT_FOUND');
+  assertBranchAccess(ctx, jo.branch);
+  if (isTech(ctx.roles)) {
+    const access = technicianAccessFor(jo, ctx.userId);
+    if (!access.visible || !access.canOpen) throw new AppError('NOT_FOUND');
+  }
+  return jo;
 }
 
 export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void {
@@ -121,22 +193,28 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
     if (!b.clientId || !b.vesselId || !b.scopeSummary || b.quotedAmountMinor == null || !b.quotedCurrency) {
       throw new AppError('VALIDATION_ERROR', 'clientId, vesselId, scopeSummary, quotedAmount required');
     }
-    const branch = branchForCreate(req.ctx); // never from client (RBAC-SPOOF-1)
+    const branch = branchForCreate(req.ctx, b.branch);
+    const quotedCurrency = normalizeCurrency(b.quotedCurrency);
     await assertJobOrderCreateScope(prisma, branch, b.clientId, b.vesselId);
     const created = await prisma.$transaction(async (tx) => {
       const serviceCategories = await validateServiceCategories(tx, b.serviceCategories ?? []);
+      const vendorTag = await vendorTagForBranch(tx, branch, b);
       const joNumber = await nextJoNumber(tx, branch);
       const jo = await tx.jobOrder.create({
         data: {
           joNumber, branch, clientId: b.clientId, vesselId: b.vesselId,
+          vendorId: vendorTag.vendorId,
+          isSubcontracted: vendorTag.isSubcontracted,
           serviceCategories, port: b.port ?? null, scopeSummary: b.scopeSummary,
+          deadline: b.deadline ? new Date(b.deadline) : null,
           origin: 'MANUAL', externalQuoteRef: b.externalQuoteRef ?? null, externalRfqRef: b.externalRfqRef ?? null,
-          quotedAmountMinor: b.quotedAmountMinor, quotedCurrency: b.quotedCurrency,
+          quotedAmountMinor: b.quotedAmountMinor, quotedCurrency,
           labourRateAmountMinor: b.labourRateAmountMinor ?? DEFAULT_LABOUR_RATE.amountMinor,
           labourRateCurrency: b.labourRateCurrency ?? DEFAULT_LABOUR_RATE.currency,
           state: 'DRAFT', createdBy: req.ctx.userId,
         },
       });
+      await snapshotChecklistForJob(tx, jo.id, b);
       await appendAudit(tx, req.ctx, { entityType: 'JobOrder', entityId: jo.id, action: 'CREATE' });
       return jo;
     });
@@ -154,7 +232,15 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
     if (isTech(req.ctx.roles)) {
       where.state = { notIn: ['DRAFT', 'CANCELLED'] };
     }
-    const jos = await prisma.jobOrder.findMany({ where, orderBy: { createdAt: 'desc' } });
+    const jos = await prisma.jobOrder.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        client: { select: { id: true, name: true } },
+        vessel: { select: { id: true, name: true, imoNumber: true } },
+        vendor: { select: { id: true, name: true } },
+      },
+    });
     if (!isTech(req.ctx.roles)) return jos;
     return jos.map((jo) => withTechnicianAccess(jo, req.ctx.userId));
   });
@@ -186,7 +272,27 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
   // GET by id (cross-branch -> NOT_FOUND; technician IDOR -> NOT_FOUND, RBAC-IDOR-1)
   app.get('/api/v1/job-orders/:id', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('jobOrder:read')] }, async (req) => {
     const { id } = req.params as any;
-    const jo = await prisma.jobOrder.findFirst({ where: { id, deletedAt: null, archivedAt: null, purgedAt: null }, include: { variations: true } });
+    const jo = await prisma.jobOrder.findFirst({
+      where: { id, deletedAt: null, archivedAt: null, purgedAt: null },
+      include: {
+        variations: true,
+        client: { select: { id: true, name: true } },
+        vessel: { select: { id: true, name: true, imoNumber: true } },
+        vendor: { select: { id: true, name: true } },
+        checklistItems: { orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }] },
+        statusHistory: {
+          orderBy: { at: 'asc' },
+          include: {
+            actor: { select: { id: true, name: true, email: true } },
+            device: { select: { id: true, name: true } },
+          },
+        },
+        invoices: {
+          orderBy: { createdAt: 'desc' },
+          include: { payments: true },
+        },
+      },
+    });
     if (!jo) throw new AppError('NOT_FOUND');
     assertBranchAccess(req.ctx, jo.branch);                 // scope BEFORE anything else (CC-05)
     if (isTech(req.ctx.roles)) {
@@ -310,6 +416,9 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
       if (isHeaderLocked(jo.state as JoState)) throw new AppError('FORBIDDEN', 'header locked; scope changes require a Variation');
       const data: any = {};
       for (const f of HEADER_FIELDS) if (f in b) data[f] = b[f];
+      if ('isSubcontracted' in b || 'vendorId' in b) {
+        Object.assign(data, await vendorTagForBranch(tx, jo.branch, b));
+      }
       const res = await tx.jobOrder.updateMany({ where: { id, version: b.version }, data: { ...data, version: { increment: 1 } } });
       if (res.count === 0) throw new AppError('VERSION_CONFLICT');
       await appendAudit(tx, req.ctx, { entityType: 'JobOrder', entityId: id, action: 'UPDATE', diff: data });
@@ -358,32 +467,111 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
     });
   });
 
+  app.get('/api/v1/job-orders/:id/checklist-items', authed, async (req) => {
+    const { id } = req.params as any;
+    return prisma.$transaction(async (tx) => {
+      await findScopedVisibleJobOrder(tx, id, req.ctx);
+      return tx.jobOrderChecklistItem.findMany({ where: { jobOrderId: id }, orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }] });
+    });
+  });
+
+  app.post('/api/v1/job-orders/:id/checklist-items', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('jobOrder:updateHeader')] }, async (req, reply) => {
+    if (!isAdminOrDirector(req.ctx.roles)) throw new AppError('FORBIDDEN');
+    const { id } = req.params as any;
+    const b = (req.body ?? {}) as any;
+    const [item] = normalizeJobChecklistItems([b]);
+    const created = await prisma.$transaction(async (tx) => {
+      const jo = await tx.jobOrder.findFirst({
+        where: { id, deletedAt: null, archivedAt: null, purgedAt: null },
+        include: { invoices: { select: { id: true }, take: 1 } },
+      });
+      if (!jo) throw new AppError('NOT_FOUND');
+      assertBranchAccess(req.ctx, jo.branch);
+      if (jo.state === 'INVOICED' || jo.invoices.length > 0) throw new AppError('VALIDATION_ERROR', 'Cannot modify checklist after invoicing');
+      const row = await tx.jobOrderChecklistItem.create({ data: { jobOrderId: id, ...item } });
+      if (jo.state === 'COMPLETED') {
+        const reason = 'New checklist item added — requires re-verification';
+        const history = await tx.jobStatusHistory.findMany({ where: { jobOrderId: id }, orderBy: { at: 'asc' }, select: { fromState: true, toState: true } });
+        const { to: target } = assertTransition({
+          from: jo.state as JoState,
+          to: 'ON_HOLD',
+          actor: { userId: req.ctx.userId, roles: req.ctx.roles },
+          reason,
+          executionOwnerId: jo.executionOwnerId,
+          history,
+        });
+        await tx.jobOrder.update({ where: { id }, data: { state: target, version: { increment: 1 } } });
+        await tx.jobStatusHistory.create({ data: { jobOrderId: id, fromState: jo.state, toState: target, actorId: req.ctx.userId, deviceId: req.ctx.deviceId ?? null, reason } });
+        await appendAudit(tx, req.ctx, { entityType: 'JobOrder', entityId: id, action: 'STATE_TRANSITION', diff: { from: jo.state, to: target, reason } });
+      }
+      await appendAudit(tx, req.ctx, { entityType: 'JobOrderChecklistItem', entityId: row.id, action: 'CREATE', diff: { jobOrderId: id, label: row.label } });
+      return row;
+    });
+    return reply.status(201).send(created);
+  });
+
+  app.patch('/api/v1/job-orders/:id/checklist-items/:itemId', authed, async (req) => {
+    const { id, itemId } = req.params as any;
+    const b = (req.body ?? {}) as any;
+    if (typeof b.checked !== 'boolean') throw new AppError('VALIDATION_ERROR', 'checked must be boolean');
+    return prisma.$transaction(async (tx) => {
+      const jo = await findScopedVisibleJobOrder(tx, id, req.ctx);
+      if (isTech(req.ctx.roles) && technicianAccessFor(jo, req.ctx.userId).readOnly) throw new AppError('FORBIDDEN');
+      const existing = await tx.jobOrderChecklistItem.findFirst({ where: { id: itemId, jobOrderId: id } });
+      if (!existing) throw new AppError('NOT_FOUND');
+      const updated = await tx.jobOrderChecklistItem.update({ where: { id: itemId }, data: { checked: b.checked } });
+      await appendAudit(tx, req.ctx, { entityType: 'JobOrderChecklistItem', entityId: itemId, action: 'UPDATE', diff: { checked: b.checked } });
+      return updated;
+    });
+  });
+
   // TRANSITION (JOSM). Gating (role/exec-owner/reason) is enforced by assertTransition.
+  app.get('/api/v1/job-orders/:id/report', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('jobOrder:read')] }, async (req) => {
+    const { id } = req.params as any;
+    const jo = await prisma.jobOrder.findFirst({ where: { id, deletedAt: null, archivedAt: null, purgedAt: null } });
+    if (!jo) throw new AppError('NOT_FOUND');
+    assertBranchAccess(req.ctx, jo.branch);
+    if (req.ctx.roles.includes('CLIENT' as any) && (await clientIdForUser(prisma, req.ctx)) !== jo.clientId) throw new AppError('NOT_FOUND');
+    if (isTech(req.ctx.roles)) {
+      const access = technicianAccessFor(jo, req.ctx.userId);
+      if (!access.visible || !access.canOpen) throw new AppError('NOT_FOUND');
+    }
+    if (!['COMPLETED', 'INVOICED', 'CLOSED'].includes(jo.state)) {
+      throw new AppError('VALIDATION_ERROR', 'report is only available once the job order is completed');
+    }
+    if (!jo.reportObjectKey) return { status: 'PENDING' };
+    const url = await Storage.fromEnv().presignGet(jo.reportObjectKey, 900);
+    return { status: 'READY', url, objectKey: jo.reportObjectKey };
+  });
+
   app.post('/api/v1/job-orders/:id/transition', authed, async (req) => {
     const { id } = req.params as any;
     const { to, reason, version } = (req.body ?? {}) as any;
     if (!to || typeof version !== 'number') throw new AppError('VALIDATION_ERROR', 'to and version required');
-    return prisma.$transaction(async (tx) => {
+    const transitioned = await prisma.$transaction(async (tx) => {
       const jo = await tx.jobOrder.findFirst({ where: { id, deletedAt: null, archivedAt: null, purgedAt: null } });
       if (!jo) throw new AppError('NOT_FOUND');
       assertBranchAccess(req.ctx, jo.branch);               // scope before version (CC-05)
       const history = await tx.jobStatusHistory.findMany({ where: { jobOrderId: id }, orderBy: { at: 'asc' }, select: { fromState: true, toState: true } });
       const techResumeClaim = isTech(req.ctx.roles) && jo.state === 'ON_HOLD';
+      const techStartClaim = isTech(req.ctx.roles) && jo.state === 'SCHEDULED' && jo.executionOwnerId == null;
       const { to: target } = assertTransition({
         from: jo.state as JoState, to, actor: { userId: req.ctx.userId, roles: req.ctx.roles }, reason,
-        executionOwnerId: techResumeClaim ? req.ctx.userId : jo.executionOwnerId, history,
+        executionOwnerId: techResumeClaim || techStartClaim ? req.ctx.userId : jo.executionOwnerId, history,
       });
       const data: Prisma.JobOrderUpdateManyMutationInput = { state: target, version: { increment: 1 } };
-      if (techResumeClaim) {
+      if (techResumeClaim || techStartClaim) {
         const technicianIds = (jo.assignedTechnicianIds ?? []).includes(req.ctx.userId)
           ? jo.assignedTechnicianIds
           : [...(jo.assignedTechnicianIds ?? []), req.ctx.userId];
         data.executionOwnerId = req.ctx.userId;
         data.assignedTechnicianIds = technicianIds;
       }
-      const res = await tx.jobOrder.updateMany({ where: { id, version }, data });
+      const updateWhere = techStartClaim ? { id, version, executionOwnerId: null } : { id, version };
+      const res = await tx.jobOrder.updateMany({ where: updateWhere, data });
       if (res.count === 0) throw new AppError('VERSION_CONFLICT'); // CC-04 concurrent transition loser
-      await tx.jobStatusHistory.create({ data: { jobOrderId: id, fromState: jo.state, toState: target, actorId: req.ctx.userId, reason: reason ?? null } });
+      if (target === 'SCHEDULED') await snapshotChecklistForJob(tx, id, req.body as any);
+      await tx.jobStatusHistory.create({ data: { jobOrderId: id, fromState: jo.state, toState: target, actorId: req.ctx.userId, deviceId: req.ctx.deviceId ?? null, reason: reason ?? null } });
       // D-006 (closed): reason is now first-class on JobStatusHistory itself, not just the
       // audit diff. Kept in the audit diff too for redundancy — cheap, and audit stays the
       // fuller record of "what happened and why" independent of any one table.
@@ -410,6 +598,7 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
         ]);
         const draft = buildDraftInvoice({
           branch: jo.branch,
+          currency: jo.quotedCurrency,
           workLogs: workLogs.map((workLog) => ({
             startedAt: workLog.startedAt,
             endedAt: workLog.endedAt,
@@ -448,5 +637,21 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
       }
       return tx.jobOrder.findUnique({ where: { id } });
     });
+    if (transitioned?.state === 'COMPLETED') {
+      try {
+        await enqueueJobOrderReportGeneration(id);
+      } catch (err) {
+        await prisma.auditEntry.create({
+          data: {
+            entityType: 'JobOrder',
+            entityId: id,
+            action: 'REPORT_ENQUEUE_FAILED',
+            actorId: req.ctx.userId,
+            diff: { message: err instanceof Error ? err.message : String(err) },
+          },
+        });
+      }
+    }
+    return transitioned;
   });
 }

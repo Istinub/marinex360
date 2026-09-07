@@ -161,7 +161,6 @@ async function assignedJobContext(jobOrderId: string): Promise<{ vesselId: strin
   if (!cachedJob) throw new Error('Job order is not available offline.');
 
   return {
-    // NEEDS: Mobile jo_cache currently lacks vesselId, so vessel certificates need a live job detail or a cache schema addition.
     vesselId: cachedJob.vessel_id ?? cachedJob.vesselId ?? null,
     liveConfirmed: false,
   };

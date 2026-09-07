@@ -25,7 +25,7 @@ ALTER ROLE marinex_app WITH PASSWORD :app_password;
 
 -- 2. Connect + read the schema. CRITICAL: revoke CREATE on the schema so the app can
 --    never create (and therefore own) a table — an owner would bypass immutability.
-GRANT CONNECT ON DATABASE marinex360 TO marinex_app;
+SELECT format('GRANT CONNECT ON DATABASE %I TO marinex_app', current_database())\gexec
 GRANT USAGE ON SCHEMA public TO marinex_app;
 REVOKE CREATE ON SCHEMA public FROM marinex_app;
 

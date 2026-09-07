@@ -23,12 +23,13 @@ interface Rule { from: JoState; to: JoState; gate: Gate; requiresReason: boolean
 
 // Office/supervisor roles that drive scheduling and side-controls.
 const OFFICE: Role[] = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN', 'DIRECTOR'];
+const SCHEDULERS: Role[] = ['SYSTEM_ADMIN', 'DIRECTOR'];
 const CANCEL_ROLES: Role[] = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN', 'DIRECTOR']; // [INFERRED] who may cancel
 const FINANCE_FLOW: Role[] = ['FINANCE', 'SYSTEM_ADMIN', 'DIRECTOR'];
 
 export const RULES: Rule[] = [
   // Forward pipeline
-  { from: 'DRAFT',          to: 'SCHEDULED',      gate: { roles: OFFICE },            requiresReason: false, kind: 'FORWARD' },
+  { from: 'DRAFT',          to: 'SCHEDULED',      gate: { roles: SCHEDULERS },        requiresReason: false, kind: 'FORWARD' },
   { from: 'SCHEDULED',      to: 'IN_PROGRESS',    gate: { execOwner: true },          requiresReason: false, kind: 'FORWARD' }, // assignee-gated
   { from: 'IN_PROGRESS',    to: 'PENDING_REVIEW', gate: { execOwner: true },          requiresReason: false, kind: 'FORWARD' }, // assignee-gated
   { from: 'PENDING_REVIEW', to: 'COMPLETED',      gate: { roles: OFFICE },            requiresReason: false, kind: 'FORWARD' }, // supervisor verify (FR-30)
@@ -39,6 +40,7 @@ export const RULES: Rule[] = [
   // ON_HOLD (from SCHEDULED / IN_PROGRESS only)
   { from: 'SCHEDULED',      to: 'ON_HOLD',        gate: { roles: OFFICE, orExecOwner: true }, requiresReason: true,  kind: 'SIDE' },
   { from: 'IN_PROGRESS',    to: 'ON_HOLD',        gate: { roles: OFFICE, orExecOwner: true }, requiresReason: true,  kind: 'SIDE' },
+  { from: 'COMPLETED',      to: 'ON_HOLD',        gate: { roles: SCHEDULERS },        requiresReason: true,  kind: 'SIDE' },
   // CANCELLED (from DRAFT / SCHEDULED / IN_PROGRESS / PENDING_REVIEW — ADR-2). NOT from COMPLETED+.
   { from: 'DRAFT',          to: 'CANCELLED',      gate: { roles: CANCEL_ROLES },      requiresReason: true,  kind: 'SIDE' },
   { from: 'SCHEDULED',      to: 'CANCELLED',      gate: { roles: CANCEL_ROLES },      requiresReason: true,  kind: 'SIDE' },

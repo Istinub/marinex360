@@ -22,6 +22,7 @@ import ClientDashboardView from '@/views/client/ClientDashboardView.vue';
 import AnalyticsView from '@/views/analytics/AnalyticsView.vue';
 import JobRequestDetailView from '@/views/job-requests/JobRequestDetailView.vue';
 import JobRequestQueueView from '@/views/job-requests/JobRequestQueueView.vue';
+import InvoiceDetailView from '@/views/invoices/InvoiceDetailView.vue';
 import ReportsView from '@/views/reports/ReportsView.vue';
 import AccountManagementView from '@/views/settings/AccountManagementView.vue';
 import DeviceTroubleshootingView from '@/views/settings/DeviceTroubleshootingView.vue';
@@ -164,6 +165,12 @@ const routes = [
         meta: { requireAuth: true, requireMfaEnrolled: true },
       },
       {
+        path: 'invoices/:id',
+        name: 'invoice-detail',
+        component: InvoiceDetailView,
+        meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['FINANCE', 'SYSTEM_ADMIN', 'DIRECTOR'] },
+      },
+      {
         path: 'vessels',
         name: 'vessels',
         component: VesselListView,
@@ -206,7 +213,7 @@ const routes = [
         props: {
           eyebrow: 'Account Management',
           title: 'Register account — coming soon',
-          description: 'User creation is deferred to the account-management pass.',
+          description: 'Accounts are currently fixed: 3 technician devices plus Operations, Finance, Director, and Admin. Free account registration is a future addition.',
         },
         meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
       },

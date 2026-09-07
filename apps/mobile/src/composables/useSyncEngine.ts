@@ -236,19 +236,29 @@ async function applyPull(db: MobileSqlAdapter, changes: PullChange[], cursorValu
     const jo = change.row;
     await db.execute(
       `INSERT INTO jo_cache
-        (id,jo_number,branch,client_name,vessel_name,imo_number,port,scope_summary,service_categories,
-         state,execution_owner_id,assigned_technician_ids,planned_start_date,
-         labour_rate_amount_minor,labour_rate_currency,version,header_locked,pulled_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        (id,jo_number,branch,client_id,vessel_id,vendor_id,is_subcontracted,client_name,vessel_name,imo_number,port,scope_summary,service_categories,
+         state,execution_owner_id,assigned_technician_ids,planned_start_date,deadline,
+         quoted_currency,labour_rate_amount_minor,labour_rate_currency,version,header_locked,pulled_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(id) DO UPDATE SET state=excluded.state, version=excluded.version,
+         client_id=excluded.client_id,
+         vessel_id=excluded.vessel_id,
+         vendor_id=excluded.vendor_id,
+         is_subcontracted=excluded.is_subcontracted,
          assigned_technician_ids=excluded.assigned_technician_ids,
          execution_owner_id=excluded.execution_owner_id, header_locked=excluded.header_locked,
+         deadline=excluded.deadline,
+         quoted_currency=excluded.quoted_currency,
          labour_rate_amount_minor=excluded.labour_rate_amount_minor,
          labour_rate_currency=excluded.labour_rate_currency, pulled_at=excluded.pulled_at`,
       [
         jo.id,
         jo.joNumber,
         jo.branch,
+        typeof jo.clientId === 'string' ? jo.clientId : null,
+        typeof jo.vesselId === 'string' ? jo.vesselId : null,
+        typeof jo.vendorId === 'string' ? jo.vendorId : null,
+        jo.isSubcontracted === true ? 1 : 0,
         jo.clientName ?? null,
         jo.vesselName ?? null,
         jo.imoNumber ?? null,
@@ -259,6 +269,8 @@ async function applyPull(db: MobileSqlAdapter, changes: PullChange[], cursorValu
         jo.executionOwnerId ?? null,
         JSON.stringify(jo.assignedTechnicianIds ?? []),
         jo.plannedStartDate ?? null,
+        typeof jo.deadline === 'string' ? jo.deadline : null,
+        typeof jo.quotedCurrency === 'string' ? jo.quotedCurrency : null,
         jo.labourRateAmountMinor ?? 9000,
         jo.labourRateCurrency ?? 'SGD',
         jo.version,

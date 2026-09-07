@@ -20,17 +20,6 @@ async function assertContactAccessible(prisma: PrismaClient, ctx: { roles: strin
 export function crmRoutes(app: FastifyInstance, prisma: PrismaClient): void {
   const w = (a: string) => ({ preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction(a as any)] });
 
-  app.get('/api/v1/technicians', w('jobOrder:assign'), async (req) =>
-    prisma.user.findMany({
-      where: {
-        ...scopeWhere(req.ctx),
-        active: true,
-        roles: { has: 'TECHNICIAN' },
-      },
-      select: { id: true, name: true },
-      orderBy: { name: 'asc' },
-    }));
-
   // ---- Contacts (personal data, OD-03) ----
   app.post('/api/v1/contacts', w('contact:write'), async (req, reply) => {
     const b = (req.body ?? {}) as any;
@@ -163,5 +152,68 @@ export function crmRoutes(app: FastifyInstance, prisma: PrismaClient): void {
     assertBranchAccess(req.ctx, vessel.client.branch);
     if (req.ctx.roles.includes('CLIENT' as any) && (await clientIdForUser(prisma, req.ctx)) !== vessel.clientId) throw new AppError('NOT_FOUND');
     return prisma.jobOrder.findMany({ where: { vesselId: id, ...scopeWhere(req.ctx), deletedAt: null }, orderBy: { createdAt: 'desc' } });
+  });
+
+  // ---- Vendors (subcontractor lookup/tagging) ----
+  app.get('/api/v1/vendors', w('vendor:read'), async (req) => {
+    return prisma.vendor.findMany({ where: { ...scopeWhere(req.ctx), deletedAt: null }, orderBy: { name: 'asc' } });
+  });
+
+  app.post('/api/v1/vendors', w('vendor:write'), async (req, reply) => {
+    const b = (req.body ?? {}) as any;
+    if (!b.name) throw new AppError('VALIDATION_ERROR', 'name required');
+    const branch = branchForCreate(req.ctx, b.branch);
+    const vendor = await prisma.$transaction(async (tx) => {
+      const created = await tx.vendor.create({
+        data: {
+          branch,
+          name: b.name,
+          email: b.email ?? null,
+          phone: b.phone ?? null,
+          address: b.address ?? null,
+        },
+      });
+      await appendAudit(tx, req.ctx, { entityType: 'Vendor', entityId: created.id, action: 'CREATE' });
+      return created;
+    });
+    return reply.status(201).send(vendor);
+  });
+
+  app.get('/api/v1/vendors/:id', w('vendor:read'), async (req) => {
+    const { id } = req.params as any;
+    const vendor = await prisma.vendor.findFirst({ where: { id, deletedAt: null } });
+    if (!vendor) throw new AppError('NOT_FOUND');
+    assertBranchAccess(req.ctx, vendor.branch);
+    return vendor;
+  });
+
+  app.patch('/api/v1/vendors/:id', w('vendor:write'), async (req) => {
+    const { id } = req.params as any;
+    const b = (req.body ?? {}) as any;
+    if (typeof b.version !== 'number') throw new AppError('VALIDATION_ERROR', 'version required');
+    return prisma.$transaction(async (tx) => {
+      const vendor = await tx.vendor.findFirst({ where: { id, deletedAt: null } });
+      if (!vendor) throw new AppError('NOT_FOUND');
+      assertBranchAccess(req.ctx, vendor.branch);
+      const data: any = {};
+      for (const field of ['name', 'email', 'phone', 'address']) if (field in b) data[field] = b[field];
+      if ('branch' in b) data.branch = branchForCreate(req.ctx, b.branch);
+      const res = await tx.vendor.updateMany({ where: { id, version: b.version }, data: { ...data, version: { increment: 1 } } });
+      if (res.count === 0) throw new AppError('VERSION_CONFLICT');
+      await appendAudit(tx, req.ctx, { entityType: 'Vendor', entityId: id, action: 'UPDATE', diff: data });
+      return tx.vendor.findUnique({ where: { id } });
+    });
+  });
+
+  app.delete('/api/v1/vendors/:id', w('vendor:write'), async (req) => {
+    const { id } = req.params as any;
+    return prisma.$transaction(async (tx) => {
+      const vendor = await tx.vendor.findFirst({ where: { id, deletedAt: null } });
+      if (!vendor) throw new AppError('NOT_FOUND');
+      assertBranchAccess(req.ctx, vendor.branch);
+      await tx.vendor.update({ where: { id }, data: { deletedAt: new Date() } });
+      await appendAudit(tx, req.ctx, { entityType: 'Vendor', entityId: id, action: 'SOFT_DELETE' });
+      return { id, deleted: true };
+    });
   });
 }

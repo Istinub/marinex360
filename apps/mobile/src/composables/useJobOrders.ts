@@ -21,11 +21,17 @@ export interface MobileJobOrder {
   id: string;
   joNumber: string;
   branch?: string | null;
+  clientId?: string | null;
+  vesselId?: string | null;
+  vendorId?: string | null;
+  isSubcontracted?: boolean;
   state: JobState;
   scopeSummary: string;
   port?: string | null;
   serviceCategories?: string[];
   plannedStartDate?: string | null;
+  deadline?: string | null;
+  quotedCurrency?: string | null;
   labourRateAmountMinor?: number | null;
   labourRateCurrency?: string | null;
   assignedTechnicianIds?: string[];
@@ -41,12 +47,27 @@ export interface MobileJobOrder {
   imoNumber?: string | null;
   client?: NamedRelation | null;
   vessel?: NamedRelation | null;
+  checklistItems?: JobOrderChecklistItem[];
+}
+
+export interface JobOrderChecklistItem {
+  id: string;
+  jobOrderId: string;
+  label: string;
+  sortOrder: number;
+  checked: boolean;
+  createdAt?: string | null;
+  updatedAt?: string | null;
 }
 
 interface JoCacheRow {
   id: string;
   jo_number: string;
   branch: string | null;
+  client_id: string | null;
+  vessel_id: string | null;
+  vendor_id: string | null;
+  is_subcontracted: number | null;
   state: JobState;
   scope_summary: string | null;
   port: string | null;
@@ -54,6 +75,8 @@ interface JoCacheRow {
   execution_owner_id: string | null;
   assigned_technician_ids: string | null;
   planned_start_date: string | null;
+  deadline: string | null;
+  quoted_currency: string | null;
   labour_rate_amount_minor: number | null;
   labour_rate_currency: string | null;
   version: number;
@@ -121,6 +144,10 @@ export function fromCacheRow(row: JoCacheRow): MobileJobOrder {
     id: row.id,
     joNumber: row.jo_number,
     branch: row.branch,
+    clientId: row.client_id,
+    vesselId: row.vessel_id,
+    vendorId: row.vendor_id,
+    isSubcontracted: row.is_subcontracted === 1,
     state: row.state,
     scopeSummary: row.scope_summary ?? '',
     port: row.port,
@@ -128,6 +155,8 @@ export function fromCacheRow(row: JoCacheRow): MobileJobOrder {
     executionOwnerId: row.execution_owner_id,
     assignedTechnicianIds,
     plannedStartDate: row.planned_start_date,
+    deadline: row.deadline,
+    quotedCurrency: row.quoted_currency,
     labourRateAmountMinor: row.labour_rate_amount_minor,
     labourRateCurrency: row.labour_rate_currency,
     version: row.version,
@@ -143,9 +172,9 @@ export async function loadCachedJobOrders(): Promise<MobileJobOrder[]> {
   if (!adapter) return [];
 
   const rows = await adapter.select<JoCacheRow>(
-    `SELECT id, jo_number, branch, state, scope_summary, port, service_categories,
-            execution_owner_id, assigned_technician_ids, planned_start_date,
-            labour_rate_amount_minor, labour_rate_currency, version,
+    `SELECT id, jo_number, branch, client_id, vessel_id, vendor_id, is_subcontracted, state, scope_summary, port, service_categories,
+            execution_owner_id, assigned_technician_ids, planned_start_date, deadline,
+            quoted_currency, labour_rate_amount_minor, labour_rate_currency, version,
             client_name, vessel_name, imo_number
      FROM jo_cache
      ORDER BY planned_start_date IS NULL, planned_start_date ASC, jo_number ASC`,
@@ -158,9 +187,9 @@ export async function loadCachedJobOrder(id: string): Promise<MobileJobOrder | n
   if (!adapter) return null;
 
   const rows = await adapter.select<JoCacheRow>(
-    `SELECT id, jo_number, branch, state, scope_summary, port, service_categories,
-            execution_owner_id, assigned_technician_ids, planned_start_date,
-            labour_rate_amount_minor, labour_rate_currency, version,
+    `SELECT id, jo_number, branch, client_id, vessel_id, vendor_id, is_subcontracted, state, scope_summary, port, service_categories,
+            execution_owner_id, assigned_technician_ids, planned_start_date, deadline,
+            quoted_currency, labour_rate_amount_minor, labour_rate_currency, version,
             client_name, vessel_name, imo_number
      FROM jo_cache
      WHERE id=?`,
@@ -175,14 +204,18 @@ export async function cacheJobOrder(job: MobileJobOrder): Promise<void> {
 
   await adapter.execute(
     `INSERT INTO jo_cache
-      (id, jo_number, branch, client_name, vessel_name, imo_number, port, scope_summary,
+      (id, jo_number, branch, client_id, vessel_id, vendor_id, is_subcontracted, client_name, vessel_name, imo_number, port, scope_summary,
        service_categories, state, execution_owner_id, assigned_technician_ids,
-       planned_start_date, labour_rate_amount_minor, labour_rate_currency, version,
+       planned_start_date, deadline, quoted_currency, labour_rate_amount_minor, labour_rate_currency, version,
        header_locked, pulled_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        jo_number=excluded.jo_number,
        branch=excluded.branch,
+       client_id=excluded.client_id,
+       vessel_id=excluded.vessel_id,
+       vendor_id=excluded.vendor_id,
+       is_subcontracted=excluded.is_subcontracted,
        client_name=excluded.client_name,
        vessel_name=excluded.vessel_name,
        imo_number=excluded.imo_number,
@@ -193,6 +226,8 @@ export async function cacheJobOrder(job: MobileJobOrder): Promise<void> {
        execution_owner_id=excluded.execution_owner_id,
        assigned_technician_ids=excluded.assigned_technician_ids,
        planned_start_date=excluded.planned_start_date,
+       deadline=excluded.deadline,
+       quoted_currency=excluded.quoted_currency,
        labour_rate_amount_minor=excluded.labour_rate_amount_minor,
        labour_rate_currency=excluded.labour_rate_currency,
        version=excluded.version,
@@ -202,6 +237,10 @@ export async function cacheJobOrder(job: MobileJobOrder): Promise<void> {
       job.id,
       job.joNumber,
       jobBranch(job),
+      job.clientId ?? null,
+      job.vesselId ?? null,
+      job.vendorId ?? null,
+      job.isSubcontracted ? 1 : 0,
       relationName(job, 'client'),
       relationName(job, 'vessel'),
       job.imoNumber ?? job.vessel?.imoNumber ?? null,
@@ -212,6 +251,8 @@ export async function cacheJobOrder(job: MobileJobOrder): Promise<void> {
       job.executionOwnerId ?? null,
       JSON.stringify(job.assignedTechnicianIds ?? []),
       job.plannedStartDate ?? null,
+      job.deadline ?? null,
+      job.quotedCurrency ?? null,
       job.labourRateAmountMinor ?? 9000,
       job.labourRateCurrency ?? 'SGD',
       job.version,
@@ -219,6 +260,10 @@ export async function cacheJobOrder(job: MobileJobOrder): Promise<void> {
       nowIso(),
     ],
   );
+
+  if (Array.isArray(job.checklistItems)) {
+    await cacheJobOrderChecklistItems(job.id, job.checklistItems);
+  }
 }
 
 export async function cacheAssignedJobOrders(jobs: MobileJobOrder[]): Promise<void> {
@@ -265,4 +310,91 @@ export async function transitionJobOrder(job: MobileJobOrder, to: JobState, reas
   const updated = await jsonResponse<MobileJobOrder>(response);
   await cacheJobOrder(updated);
   return updated;
+}
+
+export async function loadJobOrderChecklistItems(jobOrderId: string): Promise<JobOrderChecklistItem[]> {
+  try {
+    const response = await authenticatedFetch(`${apiBase()}/job-orders/${jobOrderId}/checklist-items`, {
+      headers: { Accept: 'application/json' },
+    });
+    const items = await jsonResponse<JobOrderChecklistItem[]>(response);
+    await cacheJobOrderChecklistItems(jobOrderId, items);
+    return items;
+  } catch (error) {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return loadCachedJobOrderChecklistItems(jobOrderId);
+    throw error;
+  }
+}
+
+export async function updateJobOrderChecklistItem(jobOrderId: string, itemId: string, checked: boolean): Promise<JobOrderChecklistItem> {
+  const response = await authenticatedFetch(`${apiBase()}/job-orders/${jobOrderId}/checklist-items/${itemId}`, {
+    method: 'PATCH',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ checked }),
+  });
+  const updated = await jsonResponse<JobOrderChecklistItem>(response);
+  await cacheJobOrderChecklistItems(jobOrderId, [updated]);
+  return updated;
+}
+
+export async function cacheJobOrderChecklistItems(jobOrderId: string, items: JobOrderChecklistItem[]): Promise<void> {
+  const adapter = db();
+  if (!adapter) return;
+
+  const pulledAt = nowIso();
+  for (const item of items) {
+    await adapter.execute(
+      `INSERT INTO job_order_checklist_item_cache
+        (id, job_order_id, label, sort_order, checked, created_at, updated_at, pulled_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         job_order_id=excluded.job_order_id,
+         label=excluded.label,
+         sort_order=excluded.sort_order,
+         checked=excluded.checked,
+         created_at=excluded.created_at,
+         updated_at=excluded.updated_at,
+         pulled_at=excluded.pulled_at`,
+      [
+        item.id,
+        item.jobOrderId ?? jobOrderId,
+        item.label,
+        item.sortOrder,
+        item.checked ? 1 : 0,
+        item.createdAt ?? null,
+        item.updatedAt ?? null,
+        pulledAt,
+      ],
+    );
+  }
+}
+
+async function loadCachedJobOrderChecklistItems(jobOrderId: string): Promise<JobOrderChecklistItem[]> {
+  const adapter = db();
+  if (!adapter) return [];
+
+  const rows = await adapter.select<{
+    id: string;
+    job_order_id: string;
+    label: string;
+    sort_order: number;
+    checked: number;
+  }>(
+    `SELECT id, job_order_id, label, sort_order, checked
+     FROM job_order_checklist_item_cache
+     WHERE job_order_id=?
+     ORDER BY sort_order ASC, label ASC`,
+    [jobOrderId],
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    jobOrderId: row.job_order_id,
+    label: row.label,
+    sortOrder: Number(row.sort_order),
+    checked: row.checked === 1,
+  }));
 }

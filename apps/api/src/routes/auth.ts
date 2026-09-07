@@ -16,16 +16,16 @@ const hashCode = (c: string) => createHash('sha256').update(c.trim().toUpperCase
 
 export async function issueSession(
   prisma: PrismaClient, secret: string,
-  user: { id: string; roles: string[]; branch: string; mfaComplete: boolean },
+  user: { id: string; roles: string[]; branch: string; mfaComplete: boolean; deviceId?: string | null },
   longLived: boolean,
 ) {
   const family = newFamilyId();
   const raw = newRefreshSecret();
   const ttl = longLived ? REFRESH_TTL.mobile : REFRESH_TTL.web;
   await prisma.refreshToken.create({
-    data: { userId: user.id, tokenHash: hashRefresh(raw), family, longLived, expiresAt: new Date(Date.now() + ttl * 1000) },
+    data: { userId: user.id, deviceId: user.deviceId ?? null, tokenHash: hashRefresh(raw), family, longLived, expiresAt: new Date(Date.now() + ttl * 1000) },
   });
-  const access = signAccessToken({ sub: user.id, roles: user.roles as Role[], branch: user.branch, mfaComplete: user.mfaComplete }, secret);
+  const access = signAccessToken({ sub: user.id, roles: user.roles as Role[], branch: user.branch, mfaComplete: user.mfaComplete, deviceId: user.deviceId ?? null }, secret);
   return { access, refresh: raw };
 }
 
@@ -66,10 +66,10 @@ export function authRoutes(app: FastifyInstance, prisma: PrismaClient, accessSec
     const ttl = useLong ? REFRESH_TTL.mobile : REFRESH_TTL.web;
     await prisma.$transaction([
       prisma.refreshToken.update({ where: { tokenHash: presented }, data: { revokedAt: new Date() } }),
-      prisma.refreshToken.create({ data: { userId: user.id, tokenHash: hashRefresh(raw), family: row!.family, longLived: useLong, expiresAt: new Date(Date.now() + ttl * 1000) } }),
+      prisma.refreshToken.create({ data: { userId: user.id, deviceId: row!.deviceId ?? null, tokenHash: hashRefresh(raw), family: row!.family, longLived: useLong, expiresAt: new Date(Date.now() + ttl * 1000) } }),
     ]);
     const mfaComplete = !requiresMfaAtLogin(user.roles as Role[]) || user.mfaEnrolled;
-    const access = signAccessToken({ sub: user.id, roles: user.roles as Role[], branch: user.branch, mfaComplete }, accessSecret);
+    const access = signAccessToken({ sub: user.id, roles: user.roles as Role[], branch: user.branch, mfaComplete, deviceId: row!.deviceId ?? null }, accessSecret);
     return reply.send({ access, refresh: raw });
   });
 

@@ -11,6 +11,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@marinex360/storage": "^0.0.0",
     "@prisma/client": "^5.20.0",
     "bullmq": "^6.1.2",
     "fastify": "^5.0.0",

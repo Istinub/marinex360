@@ -128,18 +128,19 @@ onMounted(loadForEdit);
   <NotFoundState v-if="isNotFound" />
 
   <main v-else class="office-route crm-page" aria-labelledby="client-form-title">
-    <header class="crm-page__header">
-      <div>
-        <p class="crm-page__eyebrow">Client</p>
-        <h1 id="client-form-title" class="crm-page__title">
-          {{ isEdit ? 'Edit client' : 'New client' }}
-        </h1>
-      </div>
-    </header>
+    <div class="record-form-card">
+      <header class="crm-page__header">
+        <div>
+          <p class="crm-page__eyebrow">Client</p>
+          <h1 id="client-form-title" class="crm-page__title">
+            {{ isEdit ? 'Edit client' : 'New client' }}
+          </h1>
+        </div>
+      </header>
 
-    <p v-if="isLoading" class="crm-empty">Loading client...</p>
+      <p v-if="isLoading" class="crm-empty">Loading client...</p>
 
-    <form v-else class="record-form record-form--structured" @submit.prevent="saveClient(false)">
+      <form v-else class="record-form record-form--structured" @submit.prevent="saveClient(false)">
       <p v-if="formError" class="auth-message auth-message--error" role="alert">
         {{ formError }}
       </p>
@@ -200,7 +201,8 @@ onMounted(loadForEdit);
         <Button label="Cancel" severity="secondary" @click="router.back()" />
         <Button type="submit" label="Save" icon="pi pi-save" :loading="isSaving" />
       </div>
-    </form>
+      </form>
+    </div>
 
     <VersionConflictDialog
       v-if="showConflict"

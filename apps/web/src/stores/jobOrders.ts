@@ -1,11 +1,20 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { get, patch, post } from '@/lib/api/client';
-import type { JobOrder, JobState } from '@/lib/api/types';
+import type { ChecklistTemplate, JobOrder, JobState } from '@/lib/api/types';
+
+export type JobOrderReportResponse =
+  | { status: 'PENDING' }
+  | { status: 'READY'; url: string; objectKey: string };
 
 export interface JobOrderCreateInput {
-  clientId: string;
-  vesselId: string;
+  branch?: string;
+  clientId?: string;
+  vesselId?: string;
+  newClientName?: string;
+  newVesselName?: string;
+  vendorId?: string | null;
+  isSubcontracted?: boolean;
   serviceCategories?: string[];
   port?: string | null;
   scopeSummary: string;
@@ -16,6 +25,9 @@ export interface JobOrderCreateInput {
   labourRateAmountMinor?: number | null;
   labourRateCurrency?: string | null;
   plannedStartDate?: string | null;
+  deadline?: string | null;
+  checklistTemplateId?: string | null;
+  checklistItems?: { label: string; sortOrder?: number }[];
 }
 
 export interface JobOrderPatchInput {
@@ -23,8 +35,11 @@ export interface JobOrderPatchInput {
   scopeSummary?: string;
   port?: string | null;
   plannedStartDate?: string | null;
+  deadline?: string | null;
   externalQuoteRef?: string | null;
   externalRfqRef?: string | null;
+  vendorId?: string | null;
+  isSubcontracted?: boolean;
 }
 
 export interface JobOrderCategoriesInput {
@@ -36,17 +51,8 @@ export interface JobOrderTransitionInput {
   to: JobState;
   reason?: string;
   version: number;
-}
-
-export interface JobOrderAssignInput {
-  technicianIds: string[];
-  executionOwnerId: string;
-  version: number;
-}
-
-export interface TechnicianLookup {
-  id: string;
-  name: string;
+  checklistTemplateId?: string | null;
+  checklistItems?: { label: string; sortOrder?: number }[];
 }
 
 export const useJobOrdersStore = defineStore('jobOrders', () => {
@@ -79,6 +85,10 @@ export const useJobOrdersStore = defineStore('jobOrders', () => {
     return selectedJobOrder.value;
   }
 
+  function loadJobOrderReport(id: string): Promise<JobOrderReportResponse> {
+    return get<JobOrderReportResponse>(`/job-orders/${id}/report`);
+  }
+
   async function createJobOrder(input: JobOrderCreateInput): Promise<JobOrder> {
     const created = await post<JobOrder, JobOrderCreateInput>('/job-orders', input);
     jobOrders.value = [created, ...jobOrders.value.filter((jobOrder) => jobOrder.id !== created.id)];
@@ -101,13 +111,6 @@ export const useJobOrdersStore = defineStore('jobOrders', () => {
 
   async function transitionJobOrder(id: string, input: JobOrderTransitionInput): Promise<JobOrder> {
     const updated = await post<JobOrder, JobOrderTransitionInput>(`/job-orders/${id}/transition`, input);
-    jobOrders.value = jobOrders.value.map((jobOrder) => (jobOrder.id === updated.id ? updated : jobOrder));
-    if (selectedJobOrder.value?.id === updated.id) selectedJobOrder.value = updated;
-    return updated;
-  }
-
-  async function assignJobOrder(id: string, input: JobOrderAssignInput): Promise<JobOrder> {
-    const updated = await post<JobOrder, JobOrderAssignInput>(`/job-orders/${id}/assign`, input);
     jobOrders.value = jobOrders.value.map((jobOrder) => (jobOrder.id === updated.id ? updated : jobOrder));
     if (selectedJobOrder.value?.id === updated.id) selectedJobOrder.value = updated;
     return updated;
@@ -137,8 +140,13 @@ export const useJobOrdersStore = defineStore('jobOrders', () => {
     return post<{ purged: number }, Record<string, never>>('/job-orders/trash/empty', {});
   }
 
-  function loadTechnicians(): Promise<TechnicianLookup[]> {
-    return get<TechnicianLookup[]>('/technicians');
+  function loadChecklistTemplates(categoryId?: string | null): Promise<ChecklistTemplate[]> {
+    const suffix = categoryId ? `?categoryId=${encodeURIComponent(categoryId)}` : '';
+    return get<ChecklistTemplate[]>(`/checklist-templates${suffix}`);
+  }
+
+  function createChecklistTemplate(input: { name: string; categoryId?: string | null; entries: { label: string; sortOrder?: number }[] }): Promise<ChecklistTemplate> {
+    return post<ChecklistTemplate, typeof input>('/checklist-templates', input);
   }
 
   return {
@@ -150,15 +158,16 @@ export const useJobOrdersStore = defineStore('jobOrders', () => {
     loadTrashedJobOrders,
     loadArchivedJobOrders,
     loadJobOrder,
+    loadJobOrderReport,
     createJobOrder,
     updateJobOrder,
     updateJobOrderCategories,
     transitionJobOrder,
-    assignJobOrder,
     deleteJobOrder,
     archiveJobOrder,
     purgeJobOrder,
     emptyTrash,
-    loadTechnicians,
+    loadChecklistTemplates,
+    createChecklistTemplate,
   };
 });

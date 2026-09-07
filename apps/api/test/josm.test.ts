@@ -9,8 +9,9 @@ const fin: Actor = { userId: 'fin-1', roles: ['FINANCE'] };
 const dir: Actor = { userId: 'dir-1', roles: ['DIRECTOR'] };
 
 describe('JOSM legal path (JOSM-1)', () => {
-  it('DRAFT->SCHEDULED by supervisor', () => {
-    expect(assertTransition({ from: 'DRAFT', to: 'SCHEDULED', actor: sup }).to).toBe('SCHEDULED');
+  it('DRAFT->SCHEDULED by Director/Admin scheduler only', () => {
+    expect(assertTransition({ from: 'DRAFT', to: 'SCHEDULED', actor: dir }).to).toBe('SCHEDULED');
+    expect(() => assertTransition({ from: 'DRAFT', to: 'SCHEDULED', actor: sup })).toThrowError(/may not/);
   });
   it('SCHEDULED->IN_PROGRESS by execution owner only', () => {
     expect(assertTransition({ from: 'SCHEDULED', to: 'IN_PROGRESS', actor: owner, executionOwnerId: 'tech-1' }).to).toBe('IN_PROGRESS');

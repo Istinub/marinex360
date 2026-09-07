@@ -22,7 +22,7 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # Creates the shadow DB Prisma needs for `migrate dev` (see SHADOW_DATABASE_URL).
+      # Creates the shadow DB Prisma needs for `migrate dev` and the isolated test DB.
       - ./infra/postgres/init-shadow-db.sh:/docker-entrypoint-initdb.d/00-init-shadow-db.sh:ro
       - ./infra/postgres/provision-app-role.sh:/docker-entrypoint-initdb.d/10-provision-app-role.sh:ro
       - ./infra/postgres/provision-app-role.sql:/opt/marinex/provision-app-role.sql:ro

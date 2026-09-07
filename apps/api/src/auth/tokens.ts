@@ -10,10 +10,10 @@ import type { Role } from '../domain/rbac.js';
 const b64url = (b: Buffer) => b.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const b64urlJson = (o: unknown) => b64url(Buffer.from(JSON.stringify(o)));
 
-export interface AccessClaims { sub: string; roles: Role[]; branch: string; mfaComplete?: boolean; iat: number; exp: number; }
+export interface AccessClaims { sub: string; roles: Role[]; branch: string; mfaComplete?: boolean; deviceId?: string | null; iat: number; exp: number; }
 
 export function signAccessToken(
-  payload: { sub: string; roles: Role[]; branch: string; mfaComplete?: boolean },
+  payload: { sub: string; roles: Role[]; branch: string; mfaComplete?: boolean; deviceId?: string | null },
   secret: string,
   ttlSeconds = 15 * 60, // ~15 min (work order)
   now = Date.now(),

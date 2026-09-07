@@ -7,6 +7,8 @@ import { isCrossBranch } from '../domain/rbac.js';
 import type { RequestContext } from './context.js';
 import type { PrismaClient } from '@prisma/client';
 
+const ALLOWED_BRANCHES = new Set(['SG', 'MY', 'ID', 'BD']);
+
 /** For a direct-ID read/write of a row whose branch is `rowBranch`. */
 export function assertBranchAccess(ctx: RequestContext, rowBranch: string): void {
   if (rowBranch === ctx.branch) return;
@@ -19,8 +21,15 @@ export function scopeWhere(ctx: RequestContext): Record<string, unknown> {
   return isCrossBranch(ctx.roles) ? {} : { branch: ctx.branch };
 }
 
-/** The branch a newly created row MUST carry (never client-supplied). */
-export const branchForCreate = (ctx: RequestContext) => ctx.branch;
+/** The branch a newly created row MUST carry. Only cross-branch roles may explicitly choose. */
+export function branchForCreate(ctx: RequestContext, requestedBranch?: unknown): string {
+  if (!isCrossBranch(ctx.roles)) return ctx.branch;
+  if (requestedBranch == null || requestedBranch === '') return ctx.branch;
+  if (typeof requestedBranch !== 'string') throw new AppError('VALIDATION_ERROR', 'branch must be a string');
+  const branch = requestedBranch.trim().toUpperCase();
+  if (!ALLOWED_BRANCHES.has(branch)) throw new AppError('VALIDATION_ERROR', 'branch must be one of SG, MY, ID, BD');
+  return branch;
+}
 
 export async function clientIdForUser(prisma: PrismaClient, ctx: RequestContext): Promise<string | null> {
   if (!ctx.roles.includes('CLIENT' as any)) return null;

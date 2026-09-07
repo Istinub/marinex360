@@ -17,7 +17,7 @@ export function registerAuthn(app: FastifyInstance, opts: { accessSecret: string
     const h = req.headers.authorization;
     if (!h?.startsWith('Bearer ')) throw new AppError('UNAUTHORIZED', 'missing bearer token');
     const claims = verifyAccessToken(h.slice(7), opts.accessSecret);
-    req.ctx = { userId: claims.sub, roles: claims.roles as Role[], branch: claims.branch };
+    req.ctx = { userId: claims.sub, roles: claims.roles as Role[], branch: claims.branch, deviceId: claims.deviceId ?? null };
     // NFR-07: admin/finance may authenticate to ENROL but hold no full-access token until enrolled.
     (req as any)._mfaComplete = claims.mfaComplete ?? !requiresMfaAtLogin(claims.roles as Role[]);
   });

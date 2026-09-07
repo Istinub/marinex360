@@ -63,7 +63,7 @@ async function captureGeo(): Promise<{ lat: number | null; lng: number | null }>
 async function load(): Promise<void> {
   errorMessage.value = null;
   try {
-    const [job, draft] = await Promise.all([
+    const [job, , draft] = await Promise.all([
       loadLiveJobOrder(jobOrderId.value),
       loadSummary(),
       isReport.value ? Promise.resolve(null) : loadSignatureDraft(jobOrderId.value),
@@ -219,7 +219,7 @@ onMounted(() => {
         <p>Are you sure? This cannot be undone once submitted</p>
         <div class="execution-summary__dialog-actions">
           <Button label="No" severity="secondary" @click="showConfirm = false" />
-          <Button label="Yes" :loading="isSubmitting" @click="submitForReview" />
+          <Button label="Yes" :loading="isSubmitting" @click="confirmSubmission" />
         </div>
       </section>
     </div>

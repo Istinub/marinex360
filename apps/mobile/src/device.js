@@ -51,22 +51,28 @@ export class Device {
   // ---- PRE-FETCH: persist GET /sync/assigned payload into the read cache ----
   applyPull(changes, cursor) {
     const upJo = this.db.prepare(`INSERT INTO jo_cache
-      (id,jo_number,branch,client_name,vessel_name,imo_number,port,scope_summary,service_categories,
-       state,execution_owner_id,assigned_technician_ids,planned_start_date,
-       labour_rate_amount_minor,labour_rate_currency,version,header_locked,pulled_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      (id,jo_number,branch,client_id,vessel_id,vendor_id,is_subcontracted,client_name,vessel_name,imo_number,port,scope_summary,service_categories,
+       state,execution_owner_id,assigned_technician_ids,planned_start_date,deadline,
+       quoted_currency,labour_rate_amount_minor,labour_rate_currency,version,header_locked,pulled_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET state=excluded.state, version=excluded.version,
+        client_id=excluded.client_id,
+        vessel_id=excluded.vessel_id,
+        vendor_id=excluded.vendor_id,
+        is_subcontracted=excluded.is_subcontracted,
         assigned_technician_ids=excluded.assigned_technician_ids,
         execution_owner_id=excluded.execution_owner_id, header_locked=excluded.header_locked,
+        deadline=excluded.deadline,
+        quoted_currency=excluded.quoted_currency,
         labour_rate_amount_minor=excluded.labour_rate_amount_minor,
         labour_rate_currency=excluded.labour_rate_currency, pulled_at=excluded.pulled_at`);
     for (const c of changes) {
       if (c.entity === 'JobOrder') {
         const jo = c.row;
-        upJo.run(jo.id, jo.joNumber, jo.branch, jo.clientName ?? null, jo.vesselName ?? null, jo.imoNumber ?? null,
+        upJo.run(jo.id, jo.joNumber, jo.branch, jo.clientId ?? null, jo.vesselId ?? null, jo.vendorId ?? null, jo.isSubcontracted ? 1 : 0, jo.clientName ?? null, jo.vesselName ?? null, jo.imoNumber ?? null,
           jo.port ?? null, jo.scopeSummary ?? null, JSON.stringify(jo.serviceCategories ?? []),
           jo.state, jo.executionOwnerId ?? null, JSON.stringify(jo.assignedTechnicianIds ?? []),
-          jo.plannedStartDate ?? null, jo.labourRateAmountMinor ?? 9000, jo.labourRateCurrency ?? 'SGD',
+          jo.plannedStartDate ?? null, jo.deadline ?? null, jo.quotedCurrency ?? null, jo.labourRateAmountMinor ?? 9000, jo.labourRateCurrency ?? 'SGD',
           jo.version, jo.state === 'IN_PROGRESS' ? 1 : 0, nowIso());
       }
       // (worklog/photo/etc. server-side deltas would refresh those caches too; elided for the spike)

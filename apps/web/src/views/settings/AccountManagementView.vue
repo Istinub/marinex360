@@ -8,7 +8,7 @@ import { RouterLink } from 'vue-router';
       <div>
         <p class="crm-page__eyebrow">Settings</p>
         <h1 id="account-management-title" class="crm-page__title">Account Management</h1>
-        <p class="record-form__version">Registration shortcuts and deferred account administration areas.</p>
+        <p class="record-form__version">Accounts are currently fixed: 3 technician devices plus Operations, Finance, Director, and Admin. Free account registration is a future addition.</p>
       </div>
     </header>
 
@@ -17,7 +17,7 @@ import { RouterLink } from 'vue-router';
         <span class="pi pi-user-plus" aria-hidden="true" />
         <span>
           <strong>Register account</strong>
-          <small>Coming soon</small>
+          <small>Fixed-account model for now</small>
         </span>
       </RouterLink>
       <RouterLink class="settings-link-card" to="/clients/new">

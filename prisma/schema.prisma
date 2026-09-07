@@ -53,6 +53,7 @@ model User {
   refreshTokens     RefreshToken[]
   devices           Device[]
   client            Client?        @relation(fields: [clientId], references: [id])
+  statusHistory     JobStatusHistory[]
 
   @@index([branch])
   @@index([clientId])
@@ -62,6 +63,8 @@ model RefreshToken {
   id        String    @id @default(uuid())
   user      User      @relation(fields: [userId], references: [id])
   userId    String
+  device    Device?   @relation(fields: [deviceId], references: [id])
+  deviceId  String?
   tokenHash String    @unique
   family    String
   longLived Boolean   @default(false) // OD-04 mobile multi-day session
@@ -70,6 +73,7 @@ model RefreshToken {
   createdAt DateTime  @default(now())
 
   @@index([userId])
+  @@index([deviceId])
 }
 
 model Device {
@@ -80,6 +84,8 @@ model Device {
   assignedUserId String
   branch         String
   createdAt      DateTime @default(now())
+  refreshTokens  RefreshToken[]
+  statusHistory  JobStatusHistory[]
 
   @@index([branch])
   @@index([assignedUserId])
@@ -90,6 +96,7 @@ model ChecklistCategory {
   name      String
   sortOrder Int                     @default(0)
   items     ChecklistTemplateItem[]
+  templates ChecklistTemplate[]
 
   @@index([sortOrder])
 }
@@ -129,6 +136,7 @@ model Client {
   vessels          Vessel[]
   users            User[]
   jobRequests      JobRequest[]
+  jobOrders        JobOrder[]
 
   @@index([branch])
 }
@@ -166,8 +174,27 @@ model Vessel {
   classification String?
   deletedAt      DateTime?
   version        Int       @default(0)
+  jobOrders      JobOrder[]
 
   @@index([clientId])
+}
+
+model Vendor {
+  id        String    @id @default(uuid())
+  branch    String
+  name      String
+  email     String?
+  phone     String?
+  address   String?
+  deletedAt DateTime?
+  version   Int       @default(0)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  jobOrders JobOrder[]
+  variations Variation[]
+
+  @@index([branch])
+  @@index([name])
 }
 
 // ===================== JOB ORDER (OD-02/05, CC-1, CC-3) =====================
@@ -177,6 +204,11 @@ model JobOrder {
   branch                String
   clientId              String
   vesselId              String
+  vendorId              String?
+  client                Client              @relation(fields: [clientId], references: [id])
+  vessel                Vessel              @relation(fields: [vesselId], references: [id])
+  vendor                Vendor?             @relation(fields: [vendorId], references: [id])
+  isSubcontracted       Boolean             @default(false)
   serviceCategories     String[]
   port                  String?
   scopeSummary          String
@@ -191,6 +223,8 @@ model JobOrder {
   assignedTechnicianIds String[]
   executionOwnerId      String? // CC-1 RATIFIED — single owner of execution data (OD-05)
   plannedStartDate      DateTime?
+  deadline              DateTime?
+  reportObjectKey       String?
   deletedAt             DateTime?
   archivedAt            DateTime?
   purgedAt              DateTime?
@@ -206,12 +240,14 @@ model JobOrder {
   photos                Photo[]
   observations          Observation[]
   checklists            ChecklistInstance[]
+  checklistItems        JobOrderChecklistItem[]
   invoices              Invoice[]
   signature             ESignature?
 
   @@index([branch, state])
   @@index([clientId])
   @@index([vesselId])
+  @@index([vendorId])
   @@index([changeSeq])
 }
 
@@ -221,17 +257,25 @@ model JobStatusHistory {
   jobOrderId String
   fromState  String
   toState    String
+  actor      User     @relation(fields: [actorId], references: [id])
   actorId    String
+  device     Device?  @relation(fields: [deviceId], references: [id])
+  deviceId   String?
   reason     String?
   at         DateTime @default(now())
 
   @@index([jobOrderId])
+  @@index([actorId])
+  @@index([deviceId])
 }
 
 model Variation {
   id             String         @id @default(uuid())
   jobOrder       JobOrder       @relation(fields: [jobOrderId], references: [id])
   jobOrderId     String
+  vendor         Vendor?        @relation(fields: [vendorId], references: [id])
+  vendorId       String?
+  isSubcontracted Boolean       @default(false)
   reason         String
   amountMinor    Int
   amountCurrency String
@@ -240,6 +284,8 @@ model Variation {
   version        Int            @default(0)
   createdAt      DateTime       @default(now())
   lines          MaterialLine[]
+
+  @@index([vendorId])
 }
 
 // ===================== MATERIALS (OD-01) =====================
@@ -345,12 +391,42 @@ model Observation {
 model ChecklistTemplate {
   id              String              @id @default(uuid())
   name            String
+  category        ChecklistCategory?  @relation(fields: [categoryId], references: [id])
+  categoryId      String?
+  createdBy       String              @default("system")
+  createdAt       DateTime            @default(now())
   serviceCategory String?
   jobType         String?
   items           Json
   active          Boolean             @default(true)
   version         Int                 @default(0)
+  entries         ChecklistTemplateEntry[]
   instances       ChecklistInstance[]
+
+  @@index([categoryId])
+}
+
+model ChecklistTemplateEntry {
+  id         String            @id @default(uuid())
+  template   ChecklistTemplate @relation(fields: [templateId], references: [id])
+  templateId String
+  label      String
+  sortOrder  Int               @default(0)
+
+  @@index([templateId, sortOrder])
+}
+
+model JobOrderChecklistItem {
+  id         String   @id @default(uuid())
+  jobOrder   JobOrder @relation(fields: [jobOrderId], references: [id])
+  jobOrderId String
+  label      String
+  sortOrder  Int      @default(0)
+  checked    Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([jobOrderId, sortOrder])
 }
 
 model ChecklistInstance {

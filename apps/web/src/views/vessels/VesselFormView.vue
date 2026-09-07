@@ -99,14 +99,15 @@ onMounted(async () => {
 
 <template>
   <main class="office-route crm-page" aria-labelledby="vessel-form-title">
-    <header class="crm-page__header">
-      <div>
-        <p class="crm-page__eyebrow">Vessel</p>
-        <h1 id="vessel-form-title" class="crm-page__title">New vessel</h1>
-      </div>
-    </header>
+    <div class="record-form-card">
+      <header class="crm-page__header">
+        <div>
+          <p class="crm-page__eyebrow">Vessel</p>
+          <h1 id="vessel-form-title" class="crm-page__title">New vessel</h1>
+        </div>
+      </header>
 
-    <form class="record-form record-form--structured" @submit.prevent="saveVessel">
+      <form class="record-form record-form--structured" @submit.prevent="saveVessel">
       <p v-if="formError" class="auth-message auth-message--error" role="alert">
         {{ formError }}
       </p>
@@ -192,6 +193,7 @@ onMounted(async () => {
         <Button label="Cancel" severity="secondary" @click="router.back()" />
         <Button type="submit" label="Save" icon="pi pi-save" :loading="isSaving" />
       </div>
-    </form>
+      </form>
+    </div>
   </main>
 </template>

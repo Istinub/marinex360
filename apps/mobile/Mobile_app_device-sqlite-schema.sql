@@ -99,6 +99,10 @@ CREATE TABLE IF NOT EXISTS jo_cache (
   id                TEXT PRIMARY KEY,
   jo_number         TEXT NOT NULL,
   branch            TEXT NOT NULL,
+  client_id         TEXT,
+  vessel_id         TEXT,
+  vendor_id         TEXT,
+  is_subcontracted  INTEGER NOT NULL DEFAULT 0,
   client_name       TEXT,               -- denormalised display copy (read-only)
   vessel_name       TEXT,
   imo_number        TEXT,
@@ -109,6 +113,8 @@ CREATE TABLE IF NOT EXISTS jo_cache (
   execution_owner_id TEXT,              -- must equal this device's user (OD-05) — else not prefetched
   assigned_technician_ids TEXT,         -- JSON array (SYNC-13 detection: unassign = our id removed)
   planned_start_date TEXT,
+  deadline          TEXT,
+  quoted_currency   TEXT,
   -- D-004: per-job labourRate (default SGD 90/hr at JO creation, overridable office-side).
   labour_rate_amount_minor INTEGER,
   labour_rate_currency     TEXT,
@@ -116,6 +122,18 @@ CREATE TABLE IF NOT EXISTS jo_cache (
   header_locked     INTEGER NOT NULL DEFAULT 0,
   pulled_at         TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS job_order_checklist_item_cache (
+  id            TEXT PRIMARY KEY,
+  job_order_id  TEXT NOT NULL,
+  label         TEXT NOT NULL,
+  sort_order    INTEGER NOT NULL DEFAULT 0,
+  checked       INTEGER NOT NULL DEFAULT 0,
+  created_at    TEXT,
+  updated_at    TEXT,
+  pulled_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_job_order_checklist_item_cache_job ON job_order_checklist_item_cache (job_order_id, sort_order);
 
 CREATE TABLE IF NOT EXISTS checklist_template_cache (
   id                TEXT PRIMARY KEY,

@@ -3,7 +3,7 @@ import type { PrismaClient } from '@prisma/client';
 import { AppError } from '../lib/errors.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import { issueSession } from './auth.js';
-import { assertBranchAccess, branchForCreate, scopeWhere } from '../services/branchScope.js';
+import { assertBranchAccess, scopeWhere } from '../services/branchScope.js';
 import { createDeviceUnlockRateLimiter } from '../services/deviceUnlockRateLimit.js';
 
 const DEVICE_ROLES = ['SYSTEM_ADMIN', 'DIRECTOR'] as const;
@@ -19,23 +19,13 @@ function validatePin(pin: unknown): string {
   return pin;
 }
 
-async function assignableUser(prisma: PrismaClient, userId: unknown, branch: string) {
-  if (typeof userId !== 'string' || !userId) {
-    throw new AppError('VALIDATION_ERROR', 'assignedUserId required', { field: 'assignedUserId', reason: 'required' });
-  }
-  const user = await prisma.user.findFirst({ where: { id: userId, active: true } });
-  if (!user) throw new AppError('NOT_FOUND');
-  if (user.branch !== branch) throw new AppError('NOT_FOUND');
-  return user;
-}
-
 export function deviceRoutes(app: FastifyInstance, prisma: PrismaClient, accessSecret: string): void {
   const unlockRateLimiter = createDeviceUnlockRateLimiter();
   app.addHook('onClose', async () => {
     await unlockRateLimiter.close();
   });
 
-  async function sendDeviceSession(reply: FastifyReply, device: { assignedUser: { id: string; roles: string[]; branch: string } }) {
+  async function sendDeviceSession(reply: FastifyReply, device: { id: string; assignedUser: { id: string; roles: string[]; branch: string } }) {
     const session = await issueSession(
       prisma,
       accessSecret,
@@ -44,6 +34,7 @@ export function deviceRoutes(app: FastifyInstance, prisma: PrismaClient, accessS
         roles: device.assignedUser.roles,
         branch: device.assignedUser.branch,
         mfaComplete: true,
+        deviceId: device.id,
       },
       true,
     );
@@ -59,33 +50,6 @@ export function deviceRoutes(app: FastifyInstance, prisma: PrismaClient, accessS
     });
   });
 
-  app.get('/api/v1/devices/users', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('user:admin')] }, async (req) => {
-    assertDeviceManager(req.ctx.roles);
-    return prisma.user.findMany({
-      where: { ...scopeWhere(req.ctx), active: true },
-      orderBy: { name: 'asc' },
-      select: { id: true, name: true, email: true, roles: true, branch: true },
-    });
-  });
-
-  app.post('/api/v1/devices', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('user:admin')] }, async (req, reply) => {
-    assertDeviceManager(req.ctx.roles);
-    const body = (req.body ?? {}) as any;
-    const pin = validatePin(body.pin);
-    const branch = branchForCreate(req.ctx);
-    const user = await assignableUser(prisma, body.assignedUserId, branch);
-    const device = await prisma.device.create({
-      data: {
-        name: typeof body.name === 'string' && body.name.trim() ? body.name.trim() : null,
-        pin: await hashPassword(pin),
-        assignedUserId: user.id,
-        branch,
-      },
-      include: { assignedUser: { select: { id: true, name: true, email: true, roles: true, branch: true } } },
-    });
-    return reply.status(201).send(device);
-  });
-
   app.patch('/api/v1/devices/:id', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('user:admin')] }, async (req) => {
     assertDeviceManager(req.ctx.roles);
     const { id } = req.params as { id: string };
@@ -94,14 +58,9 @@ export function deviceRoutes(app: FastifyInstance, prisma: PrismaClient, accessS
     if (!device) throw new AppError('NOT_FOUND');
     assertBranchAccess(req.ctx, device.branch);
 
-    const data: { name?: string | null; pin?: string; assignedUserId?: string; branch?: string } = {};
+    const data: { name?: string | null; pin?: string } = {};
     if ('name' in body) data.name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : null;
     if ('pin' in body) data.pin = await hashPassword(validatePin(body.pin));
-    if ('assignedUserId' in body) {
-      const user = await assignableUser(prisma, body.assignedUserId, device.branch);
-      data.assignedUserId = user.id;
-      data.branch = user.branch;
-    }
 
     return prisma.device.update({
       where: { id },

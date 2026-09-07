@@ -7,34 +7,71 @@ import FieldError from '@/components/common/FieldError.vue';
 import { ApiResponseError } from '@/lib/api/errors';
 import { useChecklistCategoriesStore } from '@/stores/checklistCategories';
 import { useClientsStore } from '@/stores/clients';
+import { useAuthStore } from '@/stores/auth';
 import { useJobOrdersStore, type JobOrderCreateInput } from '@/stores/jobOrders';
+import { useVendorsStore } from '@/stores/vendors';
+import type { ChecklistTemplate } from '@/lib/api/types';
 
 type JobOrderField =
+  | 'branch'
   | 'clientId'
   | 'vesselId'
+  | 'vendorId'
   | 'serviceCategories'
   | 'port'
+  | 'deadline'
   | 'scopeSummary'
   | 'externalQuoteRef'
   | 'externalRfqRef'
   | 'quotedAmountMinor'
-  | 'quotedCurrency';
+  | 'quotedCurrency'
+  | 'checklistTemplateId'
+  | 'checklistItems';
 
 const router = useRouter();
+const auth = useAuthStore();
 const clientsStore = useClientsStore();
 const checklistCategoriesStore = useChecklistCategoriesStore();
 const jobOrdersStore = useJobOrdersStore();
+const vendorsStore = useVendorsStore();
+
+const branchOptions = ['SG', 'MY', 'ID', 'BD'];
+const currencyOptions = ['SGD', 'MYR', 'USD', 'IDR'];
 
 const isLoadingClients = ref(true);
 const isLoadingVessels = ref(false);
 const isSaving = ref(false);
+const isLoadingTemplates = ref(false);
 const formError = ref<string | null>(null);
 const fieldErrors = reactive<Partial<Record<JobOrderField, string>>>({});
+const checklistTemplates = ref<ChecklistTemplate[]>([]);
+const checklistMode = ref<'template' | 'custom'>('template');
+const selectedChecklistCategoryId = ref('');
+const selectedChecklistTemplateId = ref('');
+const customChecklistItems = ref<string[]>(['']);
+const saveCustomAsTemplate = ref(false);
+const newTemplateName = ref('');
+const clientSearch = ref('');
+const vesselSearch = ref('');
+const vendorSearch = ref('');
+const debouncedClientSearch = ref('');
+const debouncedVesselSearch = ref('');
+const debouncedVendorSearch = ref('');
+const clientSuggestionsOpen = ref(false);
+const vesselSuggestionsOpen = ref(false);
+const vendorSuggestionsOpen = ref(false);
+let clientSearchTimer: ReturnType<typeof setTimeout> | null = null;
+let vesselSearchTimer: ReturnType<typeof setTimeout> | null = null;
+let vendorSearchTimer: ReturnType<typeof setTimeout> | null = null;
 const form = reactive({
+  branch: auth.identity?.branch ?? 'SG',
   clientId: '',
   vesselId: '',
+  vendorId: '',
+  isSubcontracted: false,
   serviceCategories: [] as string[],
   port: '',
+  deadline: '',
   scopeSummary: '',
   externalQuoteRef: '',
   externalRfqRef: '',
@@ -44,11 +81,56 @@ const form = reactive({
 
 const vesselOptions = computed(() => clientsStore.selectedClient?.vessels ?? []);
 const categoryOptions = computed(() => checklistCategoriesStore.options);
-const selectedClientName = computed(() =>
-  clientsStore.sortedClients.find((client) => client.id === form.clientId)?.name ?? '');
-const selectedVesselName = computed(() =>
-  vesselOptions.value.find((vessel) => vessel.id === form.vesselId)?.name ?? '');
+const selectedChecklistTemplate = computed(() => checklistTemplates.value.find((template) => template.id === selectedChecklistTemplateId.value) ?? null);
+const previewChecklistItems = computed(() => {
+  if (checklistMode.value === 'template') return selectedChecklistTemplate.value?.entries.map((entry) => entry.label) ?? [];
+  return customChecklistItems.value.map((item) => item.trim()).filter(Boolean);
+});
+const selectedClient = computed(() => clientsStore.sortedClients.find((client) => client.id === form.clientId) ?? null);
+const selectedVessel = computed(() => vesselOptions.value.find((vessel) => vessel.id === form.vesselId) ?? null);
+const selectedClientName = computed(() => selectedClient.value?.name ?? clientSearch.value.trim());
+const selectedVesselName = computed(() => selectedVessel.value?.name ?? vesselSearch.value.trim());
 const hasAssignmentPreview = computed(() => Boolean(selectedClientName.value && selectedVesselName.value));
+const canScheduleOnCreate = computed(() => auth.identity?.roles.some((role) => ['SYSTEM_ADMIN', 'DIRECTOR'].includes(role)) ?? false);
+const canChooseBranch = computed(() => auth.identity?.roles.some((role) => ['SYSTEM_ADMIN', 'DIRECTOR'].includes(role)) ?? false);
+const clientSuggestions = computed(() => {
+  const query = debouncedClientSearch.value.trim().toLowerCase();
+  if (!query) return clientsStore.sortedClients.slice(0, 8);
+  return clientsStore.sortedClients.filter((client) => client.name.toLowerCase().includes(query)).slice(0, 8);
+});
+const vendorSuggestions = computed(() => {
+  const query = debouncedVendorSearch.value.trim().toLowerCase();
+  const branch = form.branch;
+  const vendors = vendorsStore.sortedVendors.filter((vendor) => canChooseBranch.value || vendor.branch === branch);
+  if (!query) return vendors.slice(0, 8);
+  return vendors.filter((vendor) => vendor.name.toLowerCase().includes(query)).slice(0, 8);
+});
+const vesselSuggestions = computed(() => {
+  if (!form.clientId) return [];
+  const query = debouncedVesselSearch.value.trim().toLowerCase();
+  const vessels = vesselOptions.value;
+  if (!query) return vessels.slice(0, 8);
+  return vessels.filter((vessel) => {
+    const haystack = `${vessel.name} ${vessel.imoNumber ?? ''}`.toLowerCase();
+    return haystack.includes(query);
+  }).slice(0, 8);
+});
+const exactClientMatch = computed(() => {
+  const query = clientSearch.value.trim().toLowerCase();
+  if (!query) return null;
+  return clientsStore.sortedClients.find((client) => client.name.trim().toLowerCase() === query) ?? null;
+});
+const exactVesselMatch = computed(() => {
+  const query = vesselSearch.value.trim().toLowerCase();
+  if (!query) return null;
+  return vesselOptions.value.find((vessel) => vessel.name.trim().toLowerCase() === query) ?? null;
+});
+const selectedVendor = computed(() => vendorsStore.sortedVendors.find((vendor) => vendor.id === form.vendorId) ?? null);
+const exactVendorMatch = computed(() => {
+  const query = vendorSearch.value.trim().toLowerCase();
+  if (!query) return null;
+  return vendorsStore.sortedVendors.find((vendor) => vendor.name.trim().toLowerCase() === query && vendor.branch === form.branch) ?? null;
+});
 
 function decimalToMinorUnits(value: string): number | null {
   const match = value.trim().match(/^(-?)(\d+)(?:\.(\d{1,2}))?$/);
@@ -62,6 +144,12 @@ function decimalToMinorUnits(value: string): number | null {
 
 function clearFieldErrors(): void {
   for (const key of Object.keys(fieldErrors) as JobOrderField[]) delete fieldErrors[key];
+}
+
+function normalizedCustomChecklistItems(): { label: string; sortOrder: number }[] {
+  return customChecklistItems.value
+    .map((label, index) => ({ label: label.trim(), sortOrder: index }))
+    .filter((item) => item.label.length > 0);
 }
 
 function setValidationFromBackend(error: ApiResponseError): boolean {
@@ -82,33 +170,66 @@ function validateForm(): boolean {
   clearFieldErrors();
   formError.value = null;
 
-  if (!form.clientId) fieldErrors.clientId = 'Client is required.';
-  if (!form.vesselId) fieldErrors.vesselId = 'Vessel is required.';
+  if (!clientSearch.value.trim()) fieldErrors.clientId = 'Client is required.';
+  if (!vesselSearch.value.trim()) fieldErrors.vesselId = 'Vessel is required.';
+  if (!form.branch) fieldErrors.branch = 'Branch is required.';
+  if (form.isSubcontracted && !vendorSearch.value.trim()) fieldErrors.vendorId = 'Vendor is required for subcontracted jobs.';
   if (!form.scopeSummary.trim()) fieldErrors.scopeSummary = 'Scope summary is required.';
   if (decimalToMinorUnits(form.quotedAmount) == null) {
     fieldErrors.quotedAmountMinor = 'Enter a valid quoted amount with up to two decimal places.';
   }
   if (!form.quotedCurrency.trim()) fieldErrors.quotedCurrency = 'Currency is required.';
+  if (checklistMode.value === 'template' && selectedChecklistTemplateId.value && !selectedChecklistTemplate.value) {
+    fieldErrors.checklistTemplateId = 'Select a valid checklist template.';
+  }
+  if (saveCustomAsTemplate.value && !newTemplateName.value.trim()) {
+    fieldErrors.checklistItems = 'Template name is required when saving a custom checklist.';
+  }
 
   return Object.keys(fieldErrors).length === 0;
 }
 
-function payload(): JobOrderCreateInput {
+async function payload(): Promise<JobOrderCreateInput> {
+  const client = selectedClient.value ?? exactClientMatch.value;
+  const vessel = selectedVessel.value ?? exactVesselMatch.value;
+  let vendor = selectedVendor.value ?? exactVendorMatch.value;
+  if (form.isSubcontracted && !vendor && vendorSearch.value.trim()) {
+    vendor = await vendorsStore.createVendor({ name: vendorSearch.value.trim(), branch: form.branch });
+  }
+  let checklistTemplateId = checklistMode.value === 'template' ? selectedChecklistTemplateId.value || null : null;
+  let checklistItems = checklistMode.value === 'custom' ? normalizedCustomChecklistItems() : [];
+  if (checklistMode.value === 'custom' && saveCustomAsTemplate.value && checklistItems.length > 0) {
+    const template = await jobOrdersStore.createChecklistTemplate({
+      name: newTemplateName.value.trim(),
+      categoryId: selectedChecklistCategoryId.value || null,
+      entries: checklistItems,
+    });
+    checklistTemplateId = template.id;
+    checklistItems = [];
+  }
   return {
-    clientId: form.clientId,
-    vesselId: form.vesselId,
+    branch: form.branch,
+    ...(client ? { clientId: client.id } : { newClientName: clientSearch.value.trim() }),
+    ...(vessel ? { vesselId: vessel.id } : { newVesselName: vesselSearch.value.trim() }),
+    isSubcontracted: form.isSubcontracted,
+    vendorId: form.isSubcontracted ? vendor?.id ?? null : null,
     serviceCategories: [...form.serviceCategories],
     port: form.port.trim() || null,
+    deadline: form.deadline ? new Date(form.deadline).toISOString() : null,
     scopeSummary: form.scopeSummary.trim(),
     externalQuoteRef: form.externalQuoteRef.trim() || null,
     externalRfqRef: form.externalRfqRef.trim() || null,
     quotedAmountMinor: decimalToMinorUnits(form.quotedAmount)!,
     quotedCurrency: form.quotedCurrency.trim().toUpperCase(),
+    checklistTemplateId,
+    checklistItems,
   };
 }
 
 async function loadVesselsForClient(clientId: string): Promise<void> {
   form.vesselId = '';
+  vesselSearch.value = '';
+  debouncedVesselSearch.value = '';
   if (!clientId) return;
 
   isLoadingVessels.value = true;
@@ -121,12 +242,64 @@ async function loadVesselsForClient(clientId: string): Promise<void> {
   }
 }
 
-async function saveJobOrder(): Promise<void> {
+function selectClient(client: { id: string; name: string }): void {
+  form.clientId = client.id;
+  clientSearch.value = client.name;
+  debouncedClientSearch.value = client.name;
+  clientSuggestionsOpen.value = false;
+}
+
+function selectVessel(vessel: { id: string; name: string; imoNumber?: string | null }): void {
+  form.vesselId = vessel.id;
+  vesselSearch.value = vessel.name;
+  debouncedVesselSearch.value = vessel.name;
+  vesselSuggestionsOpen.value = false;
+}
+
+function selectVendor(vendor: { id: string; name: string }): void {
+  form.vendorId = vendor.id;
+  vendorSearch.value = vendor.name;
+  debouncedVendorSearch.value = vendor.name;
+  vendorSuggestionsOpen.value = false;
+}
+
+async function loadChecklistTemplates(): Promise<void> {
+  isLoadingTemplates.value = true;
+  try {
+    checklistTemplates.value = await jobOrdersStore.loadChecklistTemplates(selectedChecklistCategoryId.value || null);
+    if (selectedChecklistTemplateId.value && !checklistTemplates.value.some((template) => template.id === selectedChecklistTemplateId.value)) {
+      selectedChecklistTemplateId.value = '';
+    }
+  } catch (error) {
+    formError.value = error instanceof ApiResponseError ? error.message : 'Unable to load checklist templates.';
+  } finally {
+    isLoadingTemplates.value = false;
+  }
+}
+
+function addCustomChecklistItem(): void {
+  customChecklistItems.value = [...customChecklistItems.value, ''];
+}
+
+function removeCustomChecklistItem(index: number): void {
+  customChecklistItems.value = customChecklistItems.value.filter((_, itemIndex) => itemIndex !== index);
+  if (customChecklistItems.value.length === 0) customChecklistItems.value = [''];
+}
+
+async function saveJobOrder(scheduleNow = false): Promise<void> {
   if (!validateForm()) return;
   isSaving.value = true;
 
   try {
-    const created = await jobOrdersStore.createJobOrder(payload());
+    const created = await jobOrdersStore.createJobOrder(await payload());
+    if (scheduleNow) {
+      const scheduled = await jobOrdersStore.transitionJobOrder(created.id, {
+        to: 'SCHEDULED',
+        version: created.version,
+      });
+      await router.replace(`/job-orders/${scheduled.id}`);
+      return;
+    }
     await router.replace(`/job-orders/${created.id}`);
   } catch (error) {
     if (error instanceof ApiResponseError) {
@@ -144,9 +317,59 @@ watch(() => form.clientId, (clientId) => {
   void loadVesselsForClient(clientId);
 });
 
+watch(clientSearch, (value) => {
+  if (selectedClient.value?.name !== value) {
+    form.clientId = '';
+    form.vesselId = '';
+    vesselSearch.value = '';
+  }
+  if (clientSearchTimer) clearTimeout(clientSearchTimer);
+  clientSearchTimer = setTimeout(() => {
+    debouncedClientSearch.value = value;
+  }, 250);
+});
+
+watch(vesselSearch, (value) => {
+  if (selectedVessel.value?.name !== value) form.vesselId = '';
+  if (vesselSearchTimer) clearTimeout(vesselSearchTimer);
+  vesselSearchTimer = setTimeout(() => {
+    debouncedVesselSearch.value = value;
+  }, 250);
+});
+
+watch(vendorSearch, (value) => {
+  if (selectedVendor.value?.name !== value) form.vendorId = '';
+  if (vendorSearchTimer) clearTimeout(vendorSearchTimer);
+  vendorSearchTimer = setTimeout(() => {
+    debouncedVendorSearch.value = value;
+  }, 250);
+});
+
+watch(() => form.isSubcontracted, (enabled) => {
+  if (!enabled) {
+    form.vendorId = '';
+    vendorSearch.value = '';
+    debouncedVendorSearch.value = '';
+  }
+});
+
+watch(() => form.branch, () => {
+  if (!canChooseBranch.value) form.branch = auth.identity?.branch ?? form.branch;
+  form.vendorId = '';
+  vendorSearch.value = '';
+  debouncedVendorSearch.value = '';
+});
+
+watch(selectedChecklistCategoryId, () => {
+  void loadChecklistTemplates();
+});
+
 onMounted(async () => {
   try {
-    await Promise.all([clientsStore.loadClients(), checklistCategoriesStore.load()]);
+    if (!canChooseBranch.value) form.branch = auth.identity?.branch ?? form.branch;
+    await Promise.all([clientsStore.loadClients(), checklistCategoriesStore.load(), vendorsStore.loadVendors()]);
+    selectedChecklistCategoryId.value = categoryOptions.value[0]?.value ?? '';
+    await loadChecklistTemplates();
   } catch (error) {
     formError.value = error instanceof ApiResponseError ? error.message : 'Unable to load form data.';
   } finally {
@@ -157,14 +380,15 @@ onMounted(async () => {
 
 <template>
   <main class="office-route crm-page" aria-labelledby="job-order-form-title">
-    <header class="crm-page__header">
-      <div>
-        <p class="crm-page__eyebrow">Job order</p>
-        <h1 id="job-order-form-title" class="crm-page__title">New job order</h1>
-      </div>
-    </header>
+    <div class="record-form-card">
+      <header class="crm-page__header">
+        <div>
+          <p class="crm-page__eyebrow">Job order</p>
+          <h1 id="job-order-form-title" class="crm-page__title">New job order</h1>
+        </div>
+      </header>
 
-    <form class="record-form record-form--structured" @submit.prevent="saveJobOrder">
+      <form class="record-form record-form--structured" @submit.prevent="saveJobOrder(false)">
       <p v-if="formError" class="auth-message auth-message--error" role="alert">
         {{ formError }}
       </p>
@@ -172,39 +396,91 @@ onMounted(async () => {
       <section class="record-form__section" aria-labelledby="job-order-assignment-heading">
         <h2 id="job-order-assignment-heading" class="record-form__section-heading">Assignment</h2>
 
-        <label class="auth-field" for="jo-client-id">
-          <span>Client</span>
+        <label class="auth-field" for="jo-branch-create">
+          <span>Branch</span>
           <select
-            id="jo-client-id"
-            v-model="form.clientId"
+            v-if="canChooseBranch"
+            id="jo-branch-create"
+            v-model="form.branch"
             class="auth-input"
-            :class="{ 'record-form__control--placeholder': !form.clientId }"
-            :disabled="isLoadingClients"
             required
           >
-            <option value="">{{ isLoadingClients ? 'Loading clients...' : 'Select client' }}</option>
-            <option v-for="client in clientsStore.sortedClients" :key="client.id" :value="client.id">
-              {{ client.name }}
-            </option>
+            <option v-for="branch in branchOptions" :key="branch" :value="branch">{{ branch }}</option>
           </select>
+          <input v-else id="jo-branch-create" :value="form.branch" class="auth-input mono-input" readonly />
+          <FieldError :message="fieldErrors.branch" />
+        </label>
+
+        <label class="auth-field" for="jo-client-id">
+          <span>Client</span>
+          <div class="record-form__combobox">
+          <input
+            id="jo-client-id"
+            v-model="clientSearch"
+            class="auth-input"
+            autocomplete="off"
+            :disabled="isLoadingClients"
+            :placeholder="isLoadingClients ? 'Loading clients...' : 'Search or type a client name'"
+            required
+            @focus="clientSuggestionsOpen = true"
+            @blur="clientSuggestionsOpen = false"
+            @keydown.escape="clientSuggestionsOpen = false"
+            @input="clientSuggestionsOpen = true"
+          />
+          <ul
+            v-if="clientSuggestionsOpen && clientSuggestions.length"
+            class="record-form__suggestions"
+            role="listbox"
+          >
+            <li v-for="client in clientSuggestions" :key="client.id">
+              <button
+                type="button"
+                class="record-form__suggestion"
+                role="option"
+                @mousedown.prevent="selectClient(client)"
+              >
+                {{ client.name }}
+              </button>
+            </li>
+          </ul>
+          </div>
           <FieldError :message="fieldErrors.clientId" />
         </label>
 
         <label class="auth-field" for="jo-vessel-id">
           <span>Vessel</span>
-          <select
+          <div class="record-form__combobox">
+          <input
             id="jo-vessel-id"
-            v-model="form.vesselId"
+            v-model="vesselSearch"
             class="auth-input"
-            :class="{ 'record-form__control--placeholder': !form.vesselId }"
-            :disabled="!form.clientId || isLoadingVessels"
+            autocomplete="off"
+            :disabled="isLoadingVessels"
+            :placeholder="form.clientId ? (isLoadingVessels ? 'Loading vessels...' : 'Search or type a vessel name') : 'Type a vessel name'"
             required
+            @focus="vesselSuggestionsOpen = true"
+            @blur="vesselSuggestionsOpen = false"
+            @keydown.escape="vesselSuggestionsOpen = false"
+            @input="vesselSuggestionsOpen = true"
+          />
+          <ul
+            v-if="vesselSuggestionsOpen && vesselSuggestions.length"
+            class="record-form__suggestions"
+            role="listbox"
           >
-            <option value="">{{ isLoadingVessels ? 'Loading vessels...' : 'Select vessel' }}</option>
-            <option v-for="vessel in vesselOptions" :key="vessel.id" :value="vessel.id">
-              {{ vessel.name }} · {{ vessel.imoNumber }}
-            </option>
-          </select>
+            <li v-for="vessel in vesselSuggestions" :key="vessel.id">
+              <button
+                type="button"
+                class="record-form__suggestion"
+                role="option"
+                @mousedown.prevent="selectVessel(vessel)"
+              >
+                <span>{{ vessel.name }}</span>
+                <span v-if="vessel.imoNumber" class="record-form__suggestion-meta">{{ vessel.imoNumber }}</span>
+              </button>
+            </li>
+          </ul>
+          </div>
           <FieldError :message="fieldErrors.vesselId" />
         </label>
 
@@ -232,10 +508,107 @@ onMounted(async () => {
           <FieldError :message="fieldErrors.serviceCategories" />
         </label>
 
+        <label v-if="canScheduleOnCreate" class="auth-field" for="jo-checklist-category">
+          <span>Checklist category</span>
+          <select
+            id="jo-checklist-category"
+            v-model="selectedChecklistCategoryId"
+            class="auth-input"
+            :class="{ 'record-form__control--placeholder': !selectedChecklistCategoryId }"
+          >
+            <option value="">Independent templates</option>
+            <option v-for="category in categoryOptions" :key="category.value" :value="category.value">
+              {{ category.label }}
+            </option>
+          </select>
+        </label>
+
+        <div v-if="canScheduleOnCreate" class="record-form__field--full checklist-setup">
+          <div class="checklist-setup__mode" role="group" aria-label="Checklist setup mode">
+            <Button
+              type="button"
+              label="Use template"
+              :severity="checklistMode === 'template' ? undefined : 'secondary'"
+              :outlined="checklistMode !== 'template'"
+              @click="checklistMode = 'template'"
+            />
+            <Button
+              type="button"
+              label="Custom list"
+              :severity="checklistMode === 'custom' ? undefined : 'secondary'"
+              :outlined="checklistMode !== 'custom'"
+              @click="checklistMode = 'custom'"
+            />
+          </div>
+
+          <label v-if="checklistMode === 'template'" class="auth-field" for="jo-checklist-template">
+            <span>Checklist template</span>
+            <select
+              id="jo-checklist-template"
+              v-model="selectedChecklistTemplateId"
+              class="auth-input"
+              :disabled="isLoadingTemplates"
+            >
+              <option value="">{{ isLoadingTemplates ? 'Loading templates...' : 'No template selected' }}</option>
+              <option v-for="template in checklistTemplates" :key="template.id" :value="template.id">
+                {{ template.name }}
+              </option>
+            </select>
+            <FieldError :message="fieldErrors.checklistTemplateId" />
+          </label>
+
+          <div v-else class="checklist-setup__custom">
+            <label
+              v-for="(_, index) in customChecklistItems"
+              :key="index"
+              class="auth-field checklist-setup__item"
+            >
+              <span>Checklist item {{ index + 1 }}</span>
+              <input v-model="customChecklistItems[index]" class="auth-input" placeholder="Enter checklist item" />
+              <Button
+                type="button"
+                icon="pi pi-times"
+                severity="secondary"
+                outlined
+                aria-label="Remove checklist item"
+                @click="removeCustomChecklistItem(index)"
+              />
+            </label>
+            <Button type="button" label="Add item" icon="pi pi-plus" severity="secondary" outlined @click="addCustomChecklistItem" />
+
+            <label class="auth-field checklist-setup__save-template">
+              <span>Save custom checklist</span>
+              <span class="checklist-setup__checkbox-row">
+                <input v-model="saveCustomAsTemplate" type="checkbox" />
+                Save as new template
+              </span>
+            </label>
+
+            <label v-if="saveCustomAsTemplate" class="auth-field" for="jo-new-template-name">
+              <span>Template name</span>
+              <input id="jo-new-template-name" v-model="newTemplateName" class="auth-input" placeholder="Reusable template name" />
+              <FieldError :message="fieldErrors.checklistItems" />
+            </label>
+          </div>
+
+          <div v-if="previewChecklistItems.length" class="checklist-setup__preview">
+            <span>Checklist preview</span>
+            <ol>
+              <li v-for="item in previewChecklistItems" :key="item">{{ item }}</li>
+            </ol>
+          </div>
+        </div>
+
         <label class="auth-field" for="jo-port-create">
           <span>Port</span>
           <input id="jo-port-create" v-model="form.port" class="auth-input" placeholder="Enter port" />
           <FieldError :message="fieldErrors.port" />
+        </label>
+
+        <label class="auth-field" for="jo-deadline-create">
+          <span>Deadline</span>
+          <input id="jo-deadline-create" v-model="form.deadline" class="auth-input" type="date" />
+          <FieldError :message="fieldErrors.deadline" />
         </label>
 
         <label class="auth-field record-form__field--full" for="jo-scope-create">
@@ -297,15 +670,160 @@ onMounted(async () => {
 
         <label class="auth-field" for="jo-quoted-currency">
           <span>Currency</span>
-          <input id="jo-quoted-currency" v-model="form.quotedCurrency" class="auth-input mono-input" required />
+          <select id="jo-quoted-currency" v-model="form.quotedCurrency" class="auth-input mono-input" required>
+            <option v-for="currency in currencyOptions" :key="currency" :value="currency">{{ currency }}</option>
+          </select>
           <FieldError :message="fieldErrors.quotedCurrency" />
+        </label>
+
+        <label class="auth-field record-form__field--full subcontractor-toggle" for="jo-is-subcontracted">
+          <span>Subcontractor</span>
+          <span class="checklist-setup__checkbox-row">
+            <input id="jo-is-subcontracted" v-model="form.isSubcontracted" type="checkbox" />
+            This job is subcontracted
+          </span>
+        </label>
+
+        <label v-if="form.isSubcontracted" class="auth-field record-form__field--full" for="jo-vendor-id">
+          <span>Vendor</span>
+          <div class="record-form__combobox">
+            <input
+              id="jo-vendor-id"
+              v-model="vendorSearch"
+              class="auth-input"
+              autocomplete="off"
+              placeholder="Search or type a vendor name"
+              required
+              @focus="vendorSuggestionsOpen = true"
+              @blur="vendorSuggestionsOpen = false"
+              @keydown.escape="vendorSuggestionsOpen = false"
+              @input="vendorSuggestionsOpen = true"
+            />
+            <ul
+              v-if="vendorSuggestionsOpen && vendorSuggestions.length"
+              class="record-form__suggestions"
+              role="listbox"
+            >
+              <li v-for="vendor in vendorSuggestions" :key="vendor.id">
+                <button
+                  type="button"
+                  class="record-form__suggestion"
+                  role="option"
+                  @mousedown.prevent="selectVendor(vendor)"
+                >
+                  <span>{{ vendor.name }}</span>
+                  <span class="record-form__suggestion-meta">{{ vendor.branch }}</span>
+                </button>
+              </li>
+            </ul>
+          </div>
+          <FieldError :message="fieldErrors.vendorId" />
         </label>
       </section>
 
       <div class="record-form__actions">
         <Button label="Cancel" severity="secondary" @click="router.back()" />
-        <Button type="submit" label="Create job order" icon="pi pi-save" :loading="isSaving" />
+        <Button type="submit" label="Save as draft" icon="pi pi-save" :loading="isSaving" />
+        <Button
+          v-if="canScheduleOnCreate"
+          type="button"
+          label="Schedule now"
+          icon="pi pi-calendar"
+          :loading="isSaving"
+          @click="saveJobOrder(true)"
+        />
       </div>
-    </form>
+      </form>
+    </div>
   </main>
 </template>
+
+<style scoped>
+.checklist-setup,
+.checklist-setup__custom {
+  display: grid;
+  gap: 12px;
+}
+
+.checklist-setup__mode,
+.checklist-setup__checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.checklist-setup__item {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+.checklist-setup__item > span {
+  grid-column: 1 / -1;
+}
+
+.checklist-setup__preview {
+  padding: 12px;
+  border: 0.5px solid #D3DCE3;
+  border-radius: 8px;
+  background: #F4F7FA;
+  color: #34495C;
+  font-size: 13px;
+}
+
+.checklist-setup__preview span {
+  font-weight: 600;
+}
+
+.checklist-setup__preview ol {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.record-form__combobox {
+  position: relative;
+}
+
+.record-form__suggestions {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  right: 0;
+  left: 0;
+  max-height: 220px;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  list-style: none;
+  background: #fff;
+  border: 0.5px solid #D3DCE3;
+  border-radius: 8px;
+  box-shadow: 0 12px 24px rgba(7, 34, 61, 0.12);
+}
+
+.record-form__suggestion {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #11202E;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.record-form__suggestion:hover {
+  background: #F4F7FA;
+}
+
+.record-form__suggestion-meta {
+  flex: 0 0 auto;
+  color: #5C7081;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 12px;
+}
+</style>

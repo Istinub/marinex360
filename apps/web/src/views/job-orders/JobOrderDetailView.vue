@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import Button from 'primevue/button';
 import MultiSelect from 'primevue/multiselect';
-import Select from 'primevue/select';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import BackLink from '@/components/common/BackLink.vue';
@@ -12,15 +11,15 @@ import NotFoundState from '@/components/common/NotFoundState.vue';
 import VersionConflictDialog from '@/components/common/VersionConflictDialog.vue';
 import { post } from '@/lib/api/client';
 import { ApiResponseError } from '@/lib/api/errors';
-import type { JobOrder, JobState, Variation } from '@/lib/api/types';
+import type { Invoice, JobOrder, JobState, JobStatusHistoryEntry, Variation } from '@/lib/api/types';
 import { formatMoney } from '@/lib/money';
+import { jobOrderStateMeta } from '@/composables/useJobOrderStateMeta';
 import { useAuthStore } from '@/stores/auth';
 import { useChecklistCategoriesStore } from '@/stores/checklistCategories';
-import { useJobOrdersStore, type JobOrderAssignInput, type JobOrderCategoriesInput, type JobOrderPatchInput, type TechnicianLookup } from '@/stores/jobOrders';
+import { useJobOrdersStore, type JobOrderCategoriesInput, type JobOrderPatchInput } from '@/stores/jobOrders';
 
-type HeaderField = 'scopeSummary' | 'port' | 'plannedStartDate' | 'externalQuoteRef' | 'externalRfqRef';
-type AssignmentField = 'technicianIds' | 'executionOwnerId';
-type ConflictMode = 'header' | 'assignment' | 'categories' | 'transition';
+type HeaderField = 'scopeSummary' | 'port' | 'plannedStartDate' | 'deadline' | 'externalQuoteRef' | 'externalRfqRef';
+type ConflictMode = 'header' | 'categories' | 'transition';
 type TransitionKind = 'forward' | 'side' | 'resume' | 'reject';
 type VariationDecision = 'approve' | 'reject';
 type RoleGate = { type: 'roles'; roles: string[] };
@@ -87,31 +86,23 @@ const form = reactive<Record<HeaderField, string>>({
   scopeSummary: '',
   port: '',
   plannedStartDate: '',
+  deadline: '',
   externalQuoteRef: '',
   externalRfqRef: '',
 });
 const categoryForm = reactive({
   serviceCategories: [] as string[],
 });
-const assignmentForm = reactive<{
-  technicianIds: string[];
-  executionOwnerId: string;
-}>({
-  technicianIds: [],
-  executionOwnerId: '',
-});
-const assignmentFieldErrors = reactive<Partial<Record<AssignmentField, string>>>({});
-const assignmentError = ref<string | null>(null);
-const assignmentSuccess = ref<string | null>(null);
 const categoryError = ref<string | null>(null);
 const categorySuccess = ref<string | null>(null);
 const lifecycleError = ref<string | null>(null);
-const technicians = ref<TechnicianLookup[]>([]);
-const techniciansError = ref<string | null>(null);
-const techniciansLoading = ref(false);
+const reportError = ref<string | null>(null);
+const reportUrl = ref<string | null>(null);
+const isReportLoading = ref(false);
 const categoryOptions = computed(() => checklistCategoriesStore.options);
 
 const officeRoles = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN', 'DIRECTOR'];
+const schedulerRoles = ['SYSTEM_ADMIN', 'DIRECTOR'];
 const financeRoles = ['FINANCE', 'SYSTEM_ADMIN', 'DIRECTOR'];
 const cancelRoles = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN', 'DIRECTOR'];
 const variationCreateRoles = ['SYSTEM_ADMIN', 'OPS_SUPERVISOR'];
@@ -119,7 +110,7 @@ const variationApproveRoles = ['DIRECTOR', 'SYSTEM_ADMIN'];
 const variationRejectRoles = ['DIRECTOR', 'SYSTEM_ADMIN'];
 const lifecycleRoles = ['DIRECTOR', 'SYSTEM_ADMIN'];
 const josmRules: JosmRule[] = [
-  { from: 'DRAFT', to: 'SCHEDULED', gate: { type: 'roles', roles: officeRoles }, requiresReason: false, kind: 'forward' },
+  { from: 'DRAFT', to: 'SCHEDULED', gate: { type: 'roles', roles: schedulerRoles }, requiresReason: false, kind: 'forward' },
   { from: 'SCHEDULED', to: 'IN_PROGRESS', gate: { type: 'execOwner' }, requiresReason: false, kind: 'forward' },
   { from: 'IN_PROGRESS', to: 'PENDING_REVIEW', gate: { type: 'execOwner' }, requiresReason: false, kind: 'forward' },
   { from: 'PENDING_REVIEW', to: 'COMPLETED', gate: { type: 'roles', roles: officeRoles }, requiresReason: false, kind: 'forward' },
@@ -137,15 +128,6 @@ const josmRules: JosmRule[] = [
 ];
 
 const roles = computed(() => auth.identity?.roles ?? []);
-const canAssignJobOrder = computed(() =>
-  Boolean(jobOrder.value)
-  && roles.value.some((role) => officeRoles.includes(role))
-  && !['IN_PROGRESS', 'PENDING_REVIEW', 'COMPLETED', 'INVOICED', 'CLOSED'].includes(jobOrder.value?.state ?? ''),
-);
-const selectedTechnicians = computed(() => {
-  const selectedIds = new Set(assignmentForm.technicianIds);
-  return technicians.value.filter((technician) => selectedIds.has(technician.id));
-});
 const canCreateVariation = computed(() => roles.value.some((role) => variationCreateRoles.includes(role)));
 const canApproveVariation = computed(() => roles.value.some((role) => variationApproveRoles.includes(role)));
 const canRejectVariation = computed(() => roles.value.some((role) => variationRejectRoles.includes(role)));
@@ -170,6 +152,42 @@ const variationDraftAmountMinor = computed(() =>
     return total + Math.round(quantity * unitCost);
   }, 0),
 );
+const stateMeta = computed(() => jobOrder.value ? jobOrderStateMeta(jobOrder.value.state) : null);
+const sortedHistory = computed(() => [...(jobOrder.value?.statusHistory ?? [])].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime()));
+const scheduledHistory = computed(() => firstHistoryTo('SCHEDULED'));
+const startedHistory = computed(() => firstHistoryTo('IN_PROGRESS'));
+const submittedHistory = computed(() => firstHistoryTo('PENDING_REVIEW'));
+const completedHistory = computed(() => firstHistoryTo('COMPLETED'));
+const cancelledHistory = computed(() => lastHistoryTo('CANCELLED'));
+const pausedHistory = computed(() => lastHistoryTo('ON_HOLD'));
+const lastWorkerBeforePause = computed(() => {
+  const pauseAt = pausedHistory.value ? new Date(pausedHistory.value.at).getTime() : Number.POSITIVE_INFINITY;
+  return [...sortedHistory.value]
+    .reverse()
+    .find((entry) => entry.toState === 'IN_PROGRESS' && new Date(entry.at).getTime() <= pauseAt) ?? null;
+});
+const latestInvoice = computed(() => jobOrder.value?.invoices?.[0] ?? null);
+const earnedAmount = computed(() => {
+  const invoice = latestInvoice.value;
+  if (!invoice) return null;
+  const paidMinor = (invoice.payments ?? []).reduce((total, payment) => total + payment.amountMinor, 0);
+  return { amountMinor: paidMinor || invoice.totalAmountMinor, currency: invoice.totalCurrency };
+});
+const jobClientName = computed(() => jobOrder.value?.client?.name ?? jobOrder.value?.clientId ?? '—');
+const jobVesselName = computed(() => jobOrder.value?.vessel?.name ?? jobOrder.value?.vesselId ?? '—');
+const canGenerateCompletionOutput = computed(() => jobOrder.value?.state === 'COMPLETED');
+const canViewClosedOutput = computed(() => jobOrder.value?.state === 'CLOSED');
+const canUseCompletionReport = computed(() => jobOrder.value ? ['COMPLETED', 'INVOICED', 'CLOSED'].includes(jobOrder.value.state) : false);
+const canOpenInvoiceDraft = computed(() => latestInvoice.value?.status === 'DRAFT');
+const showRenewAction = computed(() => jobOrder.value?.state === 'CANCELLED');
+
+function firstHistoryTo(state: JobState): JobStatusHistoryEntry | null {
+  return sortedHistory.value.find((entry) => entry.toState === state) ?? null;
+}
+
+function lastHistoryTo(state: JobState): JobStatusHistoryEntry | null {
+  return [...sortedHistory.value].reverse().find((entry) => entry.toState === state) ?? null;
+}
 
 function isRoleGatedRule(rule: JosmRule): rule is JosmRule & { gate: RoleGate } {
   return rule.gate.type === 'roles';
@@ -212,28 +230,27 @@ function transitionLabel(rule: JosmRule): string {
   return rule.to;
 }
 
-function stateClass(state: JobState): string {
-  const tokenName: Record<JobState, string> = {
-    DRAFT: 'draft',
-    SCHEDULED: 'scheduled',
-    IN_PROGRESS: 'inprogress',
-    PENDING_REVIEW: 'review',
-    COMPLETED: 'completed',
-    INVOICED: 'invoiced',
-    CLOSED: 'closed',
-    ON_HOLD: 'onhold',
-    CANCELLED: 'cancelled',
-  };
-  return `mx-jo-${tokenName[state]}`;
-}
-
 function formatDate(value?: string | null): string {
   if (!value) return '—';
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(value));
 }
 
+function formatDateTime(value?: string | null): string {
+  if (!value) return '—';
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
+}
+
 function moneyLabel(amountMinor: number, currency?: string | null): string {
   return formatMoney({ amountMinor, currency: currency || jobOrder.value?.quotedCurrency || 'SGD' });
+}
+
+function invoiceMoneyLabel(invoice: Invoice | null): string {
+  if (!invoice) return '—';
+  return moneyLabel(invoice.totalAmountMinor, invoice.totalCurrency);
+}
+
+function earnedMoneyLabel(): string {
+  return earnedAmount.value ? moneyLabel(earnedAmount.value.amountMinor, earnedAmount.value.currency) : '—';
 }
 
 function dateInputValue(value?: string | null): string {
@@ -241,29 +258,32 @@ function dateInputValue(value?: string | null): string {
   return new Date(value).toISOString().slice(0, 10);
 }
 
-function technicianName(id: string): string {
-  return technicians.value.find((technician) => technician.id === id)?.name ?? id;
-}
-
 function assignedTechnicianNames(jobOrder: JobOrder): string {
   return jobOrder.assignedTechnicianIds.length
-    ? jobOrder.assignedTechnicianIds.map(technicianName).join(', ')
+    ? jobOrder.assignedTechnicianIds.join(', ')
     : '—';
 }
 
 function executionOwnerName(jobOrder: JobOrder): string {
-  return jobOrder.executionOwnerId ? technicianName(jobOrder.executionOwnerId) : '—';
+  return jobOrder.executionOwnerId ?? '—';
+}
+
+function historyActor(entry?: JobStatusHistoryEntry | null): string {
+  return entry?.actor?.name ?? entry?.actor?.email ?? entry?.actorId ?? '—';
+}
+
+function historyDevice(entry?: JobStatusHistoryEntry | null): string {
+  return entry?.device?.name ?? entry?.deviceId ?? '—';
 }
 
 function applyJobOrder(nextJobOrder: JobOrder, overwriteForm: boolean): void {
   jobOrder.value = nextJobOrder;
   if (!overwriteForm) return;
-  assignmentForm.technicianIds = [...nextJobOrder.assignedTechnicianIds];
-  assignmentForm.executionOwnerId = nextJobOrder.executionOwnerId ?? '';
   categoryForm.serviceCategories = [...nextJobOrder.serviceCategories];
   form.scopeSummary = nextJobOrder.scopeSummary;
   form.port = nextJobOrder.port ?? '';
   form.plannedStartDate = dateInputValue(nextJobOrder.plannedStartDate);
+  form.deadline = dateInputValue(nextJobOrder.deadline);
   form.externalQuoteRef = nextJobOrder.externalQuoteRef ?? '';
   form.externalRfqRef = nextJobOrder.externalRfqRef ?? '';
 }
@@ -275,6 +295,7 @@ function headerPayload(): JobOrderPatchInput {
     scopeSummary: form.scopeSummary.trim(),
     port: form.port.trim() || null,
     plannedStartDate: form.plannedStartDate ? new Date(form.plannedStartDate).toISOString() : null,
+    deadline: form.deadline ? new Date(form.deadline).toISOString() : null,
     externalQuoteRef: form.externalQuoteRef.trim() || null,
     externalRfqRef: form.externalRfqRef.trim() || null,
   };
@@ -290,81 +311,6 @@ function categoryPayload(): JobOrderCategoriesInput {
 
 function clearFieldErrors(): void {
   for (const key of Object.keys(fieldErrors) as HeaderField[]) delete fieldErrors[key];
-}
-
-function clearAssignmentErrors(): void {
-  for (const key of Object.keys(assignmentFieldErrors) as AssignmentField[]) delete assignmentFieldErrors[key];
-}
-
-function syncExecutionOwnerSelection(): void {
-  if (assignmentForm.executionOwnerId && !assignmentForm.technicianIds.includes(assignmentForm.executionOwnerId)) {
-    assignmentForm.executionOwnerId = '';
-  }
-}
-
-function assignmentPayload(): JobOrderAssignInput | null {
-  if (!jobOrder.value) return null;
-  clearAssignmentErrors();
-  assignmentError.value = null;
-  assignmentSuccess.value = null;
-
-  const technicianIds = [...assignmentForm.technicianIds];
-  const executionOwnerId = assignmentForm.executionOwnerId;
-  if (technicianIds.length === 0) assignmentFieldErrors.technicianIds = 'Enter at least one technician ID.';
-  if (!executionOwnerId) assignmentFieldErrors.executionOwnerId = 'Execution owner is required.';
-  if (executionOwnerId && !technicianIds.includes(executionOwnerId)) {
-    assignmentFieldErrors.executionOwnerId = 'Execution owner must be included in technician IDs.';
-  }
-
-  if (Object.keys(assignmentFieldErrors).length > 0) return null;
-  return { technicianIds, executionOwnerId, version: jobOrder.value.version };
-}
-
-async function loadTechnicianLookup(): Promise<void> {
-  if (!roles.value.some((role) => officeRoles.includes(role))) return;
-  techniciansLoading.value = true;
-  techniciansError.value = null;
-  try {
-    technicians.value = await jobOrdersStore.loadTechnicians();
-  } catch (error) {
-    techniciansError.value = error instanceof ApiResponseError ? error.message : 'Unable to load technicians.';
-  } finally {
-    techniciansLoading.value = false;
-  }
-}
-
-async function saveAssignment(): Promise<void> {
-  const payload = assignmentPayload();
-  if (!jobOrder.value || !payload) return;
-
-  isSaving.value = true;
-  try {
-    const updated = await jobOrdersStore.assignJobOrder(jobOrderId.value, payload);
-    applyJobOrder(updated, true);
-    assignmentSuccess.value = 'Assignment saved.';
-  } catch (error) {
-    if (error instanceof ApiResponseError) {
-      if (error.code === 'VERSION_CONFLICT') {
-        conflictMode.value = 'assignment';
-        await loadJobOrder(false);
-        showConflict.value = true;
-        return;
-      }
-      if (error.code === 'NOT_FOUND') {
-        isNotFound.value = true;
-        return;
-      }
-      if (error.code === 'VALIDATION_ERROR' && error.message.includes('technicianIds')) {
-        assignmentFieldErrors.technicianIds = error.message;
-        return;
-      }
-      assignmentError.value = error.message;
-      return;
-    }
-    assignmentError.value = 'Unable to assign job order.';
-  } finally {
-    isSaving.value = false;
-  }
 }
 
 async function saveCategories(): Promise<void> {
@@ -410,6 +356,34 @@ async function loadJobOrder(overwriteForm = true): Promise<void> {
   const loaded = await jobOrdersStore.loadJobOrder(jobOrderId.value);
   applyJobOrder(loaded, overwriteForm);
   variations.value = loaded.variations ?? [];
+  reportUrl.value = null;
+  reportError.value = null;
+  if (['COMPLETED', 'INVOICED', 'CLOSED'].includes(loaded.state) && loaded.reportObjectKey) {
+    void refreshReportUrl();
+  }
+}
+
+async function refreshReportUrl(): Promise<void> {
+  if (!jobOrder.value) return;
+  reportError.value = null;
+  isReportLoading.value = true;
+  try {
+    const report = await jobOrdersStore.loadJobOrderReport(jobOrder.value.id);
+    reportUrl.value = report.status === 'READY' ? report.url : null;
+  } catch (error) {
+    reportError.value = error instanceof ApiResponseError ? error.message : 'Unable to load completion report.';
+  } finally {
+    isReportLoading.value = false;
+  }
+}
+
+async function openReport(): Promise<void> {
+  if (!reportUrl.value) await refreshReportUrl();
+  if (reportUrl.value) window.open(reportUrl.value, '_blank', 'noopener');
+}
+
+function openInvoiceDraft(): void {
+  if (latestInvoice.value) void router.push(`/invoices/${latestInvoice.value.id}`);
 }
 
 async function saveHeader(isConflictConfirm = false): Promise<void> {
@@ -526,7 +500,6 @@ function confirmConflict(): void {
     return;
   }
   if (conflictMode.value === 'transition') void runTransition(true);
-  else if (conflictMode.value === 'assignment') void saveAssignment();
   else if (conflictMode.value === 'categories') void saveCategories();
   else void saveHeader(true);
 }
@@ -630,7 +603,7 @@ async function decideVariation(variation: Variation, decision: VariationDecision
 onMounted(async () => {
   isLoading.value = true;
   try {
-    await Promise.all([loadTechnicianLookup(), checklistCategoriesStore.load()]);
+    await checklistCategoriesStore.load();
     await loadJobOrder();
   } catch (error) {
     if (error instanceof ApiResponseError && error.code === 'NOT_FOUND') {
@@ -659,8 +632,6 @@ watch(jobOrderId, async () => {
     isLoading.value = false;
   }
 });
-
-watch(() => assignmentForm.technicianIds, syncExecutionOwnerSelection);
 </script>
 
 <template>
@@ -680,14 +651,146 @@ watch(() => assignmentForm.technicianIds, syncExecutionOwnerSelection);
             <MonoText :value="jobOrder.joNumber" />
           </h1>
           <p class="record-form__version">
-            ID <MonoText :value="jobOrder.id" /> · Version <MonoText :value="jobOrder.version" />
+            Version <MonoText :value="jobOrder.version" />
           </p>
         </div>
 
-        <span class="jo-chip" :class="stateClass(jobOrder.state)">
-          {{ jobOrder.state }}
+        <span v-if="stateMeta" class="jo-chip" :class="stateMeta.className">
+          {{ stateMeta.label }}
         </span>
       </header>
+
+      <section class="crm-section jo-state-summary" aria-labelledby="job-order-state-summary-title">
+        <h2 id="job-order-state-summary-title" class="crm-section__title">Timeline</h2>
+        <dl class="detail-grid">
+          <div>
+            <dt>Requested date</dt>
+            <dd>{{ formatDate(jobOrder.createdAt) }}</dd>
+          </div>
+          <div>
+            <dt>Scheduled date</dt>
+            <dd>{{ formatDateTime(scheduledHistory?.at ?? jobOrder.plannedStartDate) }}</dd>
+          </div>
+          <div>
+            <dt>Deadline</dt>
+            <dd>{{ formatDate(jobOrder.deadline) }}</dd>
+          </div>
+          <div v-if="jobOrder.state === 'IN_PROGRESS'">
+            <dt>Started</dt>
+            <dd>{{ formatDateTime(startedHistory?.at) }}</dd>
+          </div>
+          <div v-if="jobOrder.state === 'ON_HOLD'">
+            <dt>Paused</dt>
+            <dd>{{ formatDateTime(pausedHistory?.at) }}</dd>
+          </div>
+          <div v-if="['PENDING_REVIEW', 'COMPLETED'].includes(jobOrder.state)">
+            <dt>Submitted</dt>
+            <dd>{{ formatDateTime(submittedHistory?.at) }}</dd>
+          </div>
+          <div v-if="jobOrder.state === 'COMPLETED'">
+            <dt>Completed</dt>
+            <dd>{{ formatDateTime(completedHistory?.at) }}</dd>
+          </div>
+          <div v-if="jobOrder.state === 'CANCELLED'">
+            <dt>Cancelled</dt>
+            <dd>{{ formatDateTime(cancelledHistory?.at) }}</dd>
+          </div>
+        </dl>
+
+        <h2 class="crm-section__title">People &amp; Device</h2>
+        <dl class="detail-grid">
+          <div>
+            <dt>Assigned technicians</dt>
+            <dd>{{ assignedTechnicianNames(jobOrder) }}</dd>
+          </div>
+          <div>
+            <dt>Execution owner</dt>
+            <dd>{{ executionOwnerName(jobOrder) }}</dd>
+          </div>
+          <div v-if="jobOrder.state === 'IN_PROGRESS'">
+            <dt>Device</dt>
+            <dd>{{ historyDevice(startedHistory) }}</dd>
+          </div>
+          <div v-if="jobOrder.state === 'ON_HOLD'">
+            <dt>Person working</dt>
+            <dd>{{ historyActor(lastWorkerBeforePause) }}</dd>
+          </div>
+          <div v-if="jobOrder.state === 'ON_HOLD'">
+            <dt>Device</dt>
+            <dd>{{ historyDevice(lastWorkerBeforePause) }}</dd>
+          </div>
+          <div v-if="['PENDING_REVIEW', 'COMPLETED'].includes(jobOrder.state)">
+            <dt>Submitted by</dt>
+            <dd>{{ historyActor(submittedHistory) }}</dd>
+          </div>
+          <div v-if="['PENDING_REVIEW', 'COMPLETED'].includes(jobOrder.state)">
+            <dt>Completion device</dt>
+            <dd>{{ historyDevice(submittedHistory) }}</dd>
+          </div>
+        </dl>
+
+        <h2 class="crm-section__title">Client &amp; Vessel</h2>
+        <dl class="detail-grid">
+          <div>
+            <dt>Client</dt>
+            <dd>{{ jobClientName }}</dd>
+          </div>
+          <div>
+            <dt>Vessel</dt>
+            <dd>{{ jobVesselName }}</dd>
+          </div>
+          <div v-if="jobOrder.state === 'ON_HOLD' || jobOrder.state === 'CANCELLED'">
+            <dt>{{ jobOrder.state === 'ON_HOLD' ? 'Pause reason' : 'Cancellation reason' }}</dt>
+            <dd>{{ (jobOrder.state === 'ON_HOLD' ? pausedHistory?.reason : cancelledHistory?.reason) ?? '—' }}</dd>
+          </div>
+        </dl>
+
+        <h2 class="crm-section__title">Financials</h2>
+        <dl class="detail-grid">
+          <div v-if="jobOrder.state !== 'CANCELLED'">
+            <dt>Quoted amount</dt>
+            <dd><span class="mx-money">{{ formatMoney({ amountMinor: jobOrder.quotedAmountMinor, currency: jobOrder.quotedCurrency }) }}</span></dd>
+          </div>
+          <div v-if="jobOrder.state === 'CLOSED'">
+            <dt>Amount earned</dt>
+            <dd><span class="mx-money">{{ earnedMoneyLabel() }}</span></dd>
+          </div>
+          <div v-if="latestInvoice">
+            <dt>Invoice</dt>
+            <dd><MonoText :value="latestInvoice.invoiceNumber" /> · <span class="mx-money">{{ invoiceMoneyLabel(latestInvoice) }}</span></dd>
+          </div>
+        </dl>
+
+        <div
+          v-if="canGenerateCompletionOutput || canViewClosedOutput || showRenewAction || canUseCompletionReport"
+          class="record-form__actions record-form__actions--left"
+        >
+          <Button
+            v-if="canUseCompletionReport"
+            :label="reportUrl || jobOrder.reportObjectKey ? 'Preview report' : 'Generating...'"
+            icon="pi pi-file-pdf"
+            severity="secondary"
+            :loading="isReportLoading"
+            :disabled="!jobOrder.reportObjectKey"
+            @click="openReport"
+          />
+          <Button
+            v-if="canUseCompletionReport && jobOrder.reportObjectKey"
+            label="Download report"
+            icon="pi pi-download"
+            severity="secondary"
+            :loading="isReportLoading"
+            @click="openReport"
+          />
+          <Button v-if="canOpenInvoiceDraft" label="Create Invoice" icon="pi pi-receipt" severity="secondary" @click="openInvoiceDraft" />
+          <Button v-else-if="canGenerateCompletionOutput && latestInvoice" label="Go to invoice" icon="pi pi-receipt" severity="secondary" @click="openInvoiceDraft" />
+          <Button v-if="canViewClosedOutput" label="View invoice" icon="pi pi-receipt" severity="secondary" @click="openInvoiceDraft" />
+          <Button v-if="showRenewAction" label="Renew" icon="pi pi-refresh" severity="secondary" @click="router.push('/job-orders/new')" />
+        </div>
+        <p v-if="reportError" class="auth-message auth-message--error" role="alert">
+          {{ reportError }}
+        </p>
+      </section>
 
       <section class="crm-section" aria-labelledby="job-order-actions-title">
         <h2 id="job-order-actions-title" class="crm-section__title">Actions</h2>
@@ -731,78 +834,6 @@ watch(() => assignmentForm.technicianIds, syncExecutionOwnerSelection);
             <MonoText :value="`${rule.from} -> ${rule.to}`" />
           </span>
         </p>
-      </section>
-
-      <section class="crm-section" aria-labelledby="job-order-dispatch-title">
-        <div class="crm-page__header">
-          <h2 id="job-order-dispatch-title" class="crm-section__title">Dispatch</h2>
-          <p v-if="!canAssignJobOrder" class="record-form__version">
-            Assignment is read-only once execution has begun.
-          </p>
-        </div>
-
-        <p v-if="assignmentError" class="auth-message auth-message--error" role="alert">
-          {{ assignmentError }}
-        </p>
-        <p v-if="assignmentSuccess" class="crm-empty" role="status">
-          {{ assignmentSuccess }}
-        </p>
-        <p v-if="techniciansError" class="auth-message auth-message--error" role="alert">
-          {{ techniciansError }}
-        </p>
-
-        <form v-if="canAssignJobOrder" class="record-form" @submit.prevent="saveAssignment">
-          <label class="auth-field" for="jo-assigned-technicians">
-            <span>Technicians</span>
-            <MultiSelect
-              id="jo-assigned-technicians"
-              v-model="assignmentForm.technicianIds"
-              class="record-form__select"
-              :options="technicians"
-              option-label="name"
-              option-value="id"
-              display="chip"
-              placeholder="Select technicians"
-              :loading="techniciansLoading"
-              :disabled="techniciansLoading || technicians.length === 0"
-            />
-            <FieldError :message="assignmentFieldErrors.technicianIds" />
-          </label>
-
-          <label class="auth-field" for="jo-execution-owner">
-            <span>Execution owner</span>
-            <Select
-              id="jo-execution-owner"
-              v-model="assignmentForm.executionOwnerId"
-              class="record-form__select"
-              :options="selectedTechnicians"
-              option-label="name"
-              option-value="id"
-              placeholder="Select owner"
-              :disabled="selectedTechnicians.length === 0"
-            />
-            <FieldError :message="assignmentFieldErrors.executionOwnerId" />
-          </label>
-
-          <p class="record-form__version">
-            Save dispatch before scheduling or while the job is still scheduled.
-          </p>
-
-          <div class="record-form__actions">
-            <Button type="submit" label="Save assignment" icon="pi pi-users" :loading="isSaving" />
-          </div>
-        </form>
-
-        <dl v-else class="detail-grid">
-          <div>
-            <dt>Assigned technicians</dt>
-            <dd>{{ assignedTechnicianNames(jobOrder) }}</dd>
-          </div>
-          <div>
-            <dt>Execution owner</dt>
-            <dd>{{ executionOwnerName(jobOrder) }}</dd>
-          </div>
-        </dl>
       </section>
 
       <section class="crm-section" aria-labelledby="job-order-variation-summary-title">
@@ -962,6 +993,12 @@ watch(() => assignmentForm.technicianIds, syncExecutionOwnerSelection);
             <input id="jo-planned-start" v-model="form.plannedStartDate" class="auth-input" type="date" />
           </label>
 
+          <label class="auth-field" for="jo-deadline">
+            <span>Deadline</span>
+            <input id="jo-deadline" v-model="form.deadline" class="auth-input" type="date" />
+            <FieldError :message="fieldErrors.deadline" />
+          </label>
+
           <label class="auth-field" for="jo-external-quote">
             <span>External quote ref</span>
             <input id="jo-external-quote" v-model="form.externalQuoteRef" class="auth-input mono-input" />
@@ -991,6 +1028,10 @@ watch(() => assignmentForm.technicianIds, syncExecutionOwnerSelection);
             <dd>{{ formatDate(jobOrder.plannedStartDate) }}</dd>
           </div>
           <div>
+            <dt>Deadline</dt>
+            <dd>{{ formatDate(jobOrder.deadline) }}</dd>
+          </div>
+          <div>
             <dt>External quote ref</dt>
             <dd><MonoText :value="jobOrder.externalQuoteRef" /></dd>
           </div>
@@ -1006,11 +1047,11 @@ watch(() => assignmentForm.technicianIds, syncExecutionOwnerSelection);
         <dl class="detail-grid">
           <div>
             <dt>Client</dt>
-            <dd><MonoText :value="jobOrder.clientId" /></dd>
+            <dd>{{ jobClientName }}</dd>
           </div>
           <div>
             <dt>Vessel</dt>
-            <dd><MonoText :value="jobOrder.vesselId" /></dd>
+            <dd>{{ jobVesselName }}</dd>
           </div>
           <div>
             <dt>Quoted amount</dt>
@@ -1038,7 +1079,6 @@ watch(() => assignmentForm.technicianIds, syncExecutionOwnerSelection);
         </dl>
       </section>
 
-      <!-- No JobStatusHistory list endpoint is exposed in apps/api/src/routes/jobOrders.ts. -->
     </template>
 
     <div v-if="showTransitionDialog && pendingTransition" class="version-dialog" role="presentation">
@@ -1047,7 +1087,7 @@ watch(() => assignmentForm.technicianIds, syncExecutionOwnerSelection);
           <p class="version-dialog__eyebrow">State transition</p>
           <h2 id="transition-title" class="version-dialog__title">{{ pendingTransition.label }}</h2>
           <p class="version-dialog__copy">
-            Send <MonoText :value="jobOrder?.joNumber" /> to <span class="jo-chip" :class="stateClass(pendingTransition.to)">{{ pendingTransition.to }}</span>
+            Send <MonoText :value="jobOrder?.joNumber" /> to <span class="jo-chip" :class="jobOrderStateMeta(pendingTransition.to).className">{{ jobOrderStateMeta(pendingTransition.to).label }}</span>
           </p>
         </div>
 

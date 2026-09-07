@@ -8,3 +8,7 @@ set -e
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
   -v app_password="'${APP_DB_PASSWORD}'" \
   -f /opt/marinex/provision-app-role.sql
+
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "marinex360_test" \
+  -v app_password="'${APP_DB_PASSWORD}'" \
+  -f /opt/marinex/provision-app-role.sql

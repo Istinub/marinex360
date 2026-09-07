@@ -26,9 +26,22 @@ run('Invoice generation (integration)', () => {
     sup = await prisma.user.findUniqueOrThrow({ where: { email: 'ops@tkmr.local' } });
     tech = await prisma.user.findUniqueOrThrow({ where: { email: 'tech@tkmr.local' } });
     director = await prisma.user.findUniqueOrThrow({ where: { email: 'director@tkmr.local' } });
-    clientSG = await prisma.client.findFirstOrThrow({ where: { branch: 'SG', deletedAt: null } });
-    vesselSG = await prisma.vessel.findFirstOrThrow({ where: { clientId: clientSG.id, deletedAt: null } });
     uniq = Date.now().toString().slice(-9);
+    clientSG = await prisma.client.create({
+      data: {
+        branch: 'SG',
+        name: `Invoice Generation Client ${uniq}`,
+        address: '100 Test Quay, Singapore',
+        creditTerms: 'NET30',
+      },
+    });
+    vesselSG = await prisma.vessel.create({
+      data: {
+        clientId: clientSG.id,
+        imoNumber: `INVGEN-${uniq}-${randomUUID().slice(0, 8)}`,
+        name: `MV Invoice Generation ${uniq}`,
+      },
+    });
   });
 
   afterAll(async () => {
@@ -69,7 +82,7 @@ run('Invoice generation (integration)', () => {
     const schedule = await app.inject({
       method: 'POST',
       url: `/api/v1/job-orders/${jobOrderId}/transition`,
-      headers: { authorization: bearer(sup) },
+      headers: { authorization: bearer(director) },
       payload: { to: 'SCHEDULED', version: jo.version },
     });
     expect(schedule.statusCode).toBe(200);
@@ -217,7 +230,7 @@ run('Invoice generation (integration)', () => {
     const sched = await app.inject({
       method: 'POST',
       url: `/api/v1/job-orders/${jo.id}/transition`,
-      headers: { authorization: bearer(sup) },
+      headers: { authorization: bearer(director) },
       payload: { to: 'SCHEDULED', version: v },
     });
     expect(sched.statusCode).toBe(200);
@@ -289,7 +302,7 @@ run('Invoice generation (integration)', () => {
     const sched = await app.inject({
       method: 'POST',
       url: `/api/v1/job-orders/${jo.id}/transition`,
-      headers: { authorization: bearer(sup) },
+      headers: { authorization: bearer(director) },
       payload: { to: 'SCHEDULED', version: v },
     });
     expect(sched.statusCode).toBe(200);

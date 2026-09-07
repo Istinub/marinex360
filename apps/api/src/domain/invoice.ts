@@ -30,6 +30,7 @@ export interface VariationInput { reason: string; status: string; amountMinor: n
 
 export interface BuildDraftInvoiceInput {
   branch: string;
+  currency?: string;
   workLogs: WorkLogInput[];
   materialLines: MaterialLineInput[];
   variations: VariationInput[];
@@ -59,8 +60,8 @@ export function buildDraftInvoice(input: BuildDraftInvoiceInput): DraftInvoice {
 }
 
 export function computeActualCostLines(input: BuildDraftInvoiceInput): ActualCostLines {
-  const currency = BRANCH_CURRENCY[input.branch];
-  if (!currency) fail(`branch "${input.branch}" not yet supported for auto-invoicing (D-031: SG-only for MVP)`);
+  const currency = input.currency ?? BRANCH_CURRENCY[input.branch];
+  if (!currency) fail(`branch "${input.branch}" has no invoice currency configured and no job currency was provided`);
 
   const lines: DraftInvoiceLine[] = [];
 

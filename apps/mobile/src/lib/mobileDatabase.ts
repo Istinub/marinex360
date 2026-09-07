@@ -7,7 +7,7 @@ import type { MobileSqlAdapter } from '../composables/useOfflineExecution';
 import deviceSchema from '../../Mobile_app_device-sqlite-schema.sql?raw';
 
 const DATABASE_NAME = 'marinex360-mobile';
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 3;
 
 interface MobileRuntime {
   marinex360?: {
@@ -64,6 +64,47 @@ function createMobileSqlAdapter(
   };
 }
 
+async function migrateLocalSchema(connection: SQLiteDBConnection): Promise<void> {
+  const result = await connection.query('PRAGMA table_info(jo_cache)');
+  const columns = new Set((result.values ?? [])
+    .map((row) => row.name)
+    .filter((name): name is string => typeof name === 'string'));
+
+  if (!columns.has('deadline')) {
+    await connection.execute('ALTER TABLE jo_cache ADD COLUMN deadline TEXT', false);
+  }
+  if (!columns.has('client_id')) {
+    await connection.execute('ALTER TABLE jo_cache ADD COLUMN client_id TEXT', false);
+  }
+  if (!columns.has('vessel_id')) {
+    await connection.execute('ALTER TABLE jo_cache ADD COLUMN vessel_id TEXT', false);
+  }
+  if (!columns.has('vendor_id')) {
+    await connection.execute('ALTER TABLE jo_cache ADD COLUMN vendor_id TEXT', false);
+  }
+  if (!columns.has('is_subcontracted')) {
+    await connection.execute('ALTER TABLE jo_cache ADD COLUMN is_subcontracted INTEGER NOT NULL DEFAULT 0', false);
+  }
+  if (!columns.has('quoted_currency')) {
+    await connection.execute('ALTER TABLE jo_cache ADD COLUMN quoted_currency TEXT', false);
+  }
+  await connection.execute(
+    `CREATE TABLE IF NOT EXISTS job_order_checklist_item_cache (
+      id            TEXT PRIMARY KEY,
+      job_order_id  TEXT NOT NULL,
+      label         TEXT NOT NULL,
+      sort_order    INTEGER NOT NULL DEFAULT 0,
+      checked       INTEGER NOT NULL DEFAULT 0,
+      created_at    TEXT,
+      updated_at    TEXT,
+      pulled_at     TEXT NOT NULL
+    )`,
+    false,
+  );
+  await connection.execute('CREATE INDEX IF NOT EXISTS idx_job_order_checklist_item_cache_job ON job_order_checklist_item_cache (job_order_id, sort_order)', false);
+  await connection.execute(`PRAGMA user_version = ${DATABASE_VERSION}`, false);
+}
+
 export async function initializeWebDatabase(): Promise<void> {
   const sqlite = new SQLiteConnection(CapacitorSQLite);
 
@@ -78,6 +119,7 @@ export async function initializeWebDatabase(): Promise<void> {
   );
   await connection.open();
   await connection.execute(deviceSchema, false);
+  await migrateLocalSchema(connection);
   await sqlite.saveToStore(DATABASE_NAME);
 
   const runtime = mobileRuntime();

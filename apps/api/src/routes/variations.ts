@@ -7,6 +7,20 @@ import { AppError } from '../lib/errors.js';
 import { assertBranchAccess } from '../services/branchScope.js';
 import { appendAudit } from '../services/audit.js';
 
+async function vendorTagForBranch(
+  prisma: PrismaClient,
+  branch: string,
+  input: { isSubcontracted?: unknown; vendorId?: unknown },
+): Promise<{ isSubcontracted: boolean; vendorId: string | null }> {
+  const isSubcontracted = Boolean(input.isSubcontracted);
+  const vendorId = typeof input.vendorId === 'string' && input.vendorId.trim() ? input.vendorId.trim() : null;
+  if (!isSubcontracted) return { isSubcontracted: false, vendorId: null };
+  if (!vendorId) throw new AppError('VALIDATION_ERROR', 'vendorId required when variation is subcontracted', { field: 'vendorId', reason: 'required' });
+  const vendor = await prisma.vendor.findFirst({ where: { id: vendorId, branch, deletedAt: null }, select: { id: true } });
+  if (!vendor) throw new AppError('NOT_FOUND', 'vendor not found');
+  return { isSubcontracted: true, vendorId };
+}
+
 export function variationRoutes(app: FastifyInstance, prisma: PrismaClient): void {
   app.post('/api/v1/job-orders/:id/variations', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('variation:create')] }, async (req, reply) => {
     const { id } = req.params as any;
@@ -17,8 +31,9 @@ export function variationRoutes(app: FastifyInstance, prisma: PrismaClient): voi
       const jo = await tx.jobOrder.findFirst({ where: { id, deletedAt: null } });
       if (!jo) throw new AppError('NOT_FOUND');
       assertBranchAccess(req.ctx, jo.branch);
-      const variation = await tx.variation.create({ data: { jobOrderId: id, reason, amountMinor, amountCurrency, status: 'PROPOSED' } });
-      await appendAudit(tx, req.ctx, { entityType: 'Variation', entityId: variation.id, action: 'CREATE', diff: { jobOrderId: id, amountMinor, amountCurrency } });
+      const vendorTag = await vendorTagForBranch(tx as any, jo.branch, req.body as any);
+      const variation = await tx.variation.create({ data: { jobOrderId: id, reason, amountMinor, amountCurrency, status: 'PROPOSED', ...vendorTag } });
+      await appendAudit(tx, req.ctx, { entityType: 'Variation', entityId: variation.id, action: 'CREATE', diff: { jobOrderId: id, amountMinor, amountCurrency, ...vendorTag } });
       return variation;
     });
     return reply.status(201).send(v);

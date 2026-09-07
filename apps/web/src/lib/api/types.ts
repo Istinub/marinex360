@@ -35,6 +35,32 @@ export interface Device {
   assignedUser?: DeviceUserLookup;
 }
 
+export interface Vendor {
+  id: string;
+  branch: string;
+  name: string;
+  email?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  deletedAt?: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface JobStatusHistoryEntry {
+  id: string;
+  jobOrderId: string;
+  fromState: JobState;
+  toState: JobState;
+  actorId: string;
+  deviceId?: string | null;
+  reason?: string | null;
+  at: string;
+  actor?: Pick<User, 'id' | 'name' | 'email'>;
+  device?: Pick<Device, 'id' | 'name'> | null;
+}
+
 export interface ChecklistTemplateItem {
   id: string;
   categoryId: string;
@@ -47,6 +73,32 @@ export interface ChecklistCategory {
   name: string;
   sortOrder: number;
   items: ChecklistTemplateItem[];
+}
+
+export interface ChecklistTemplateEntry {
+  id: string;
+  templateId: string;
+  label: string;
+  sortOrder: number;
+}
+
+export interface ChecklistTemplate {
+  id: string;
+  name: string;
+  categoryId?: string | null;
+  createdBy: string;
+  createdAt: string;
+  active: boolean;
+  version: number;
+  entries: ChecklistTemplateEntry[];
+}
+
+export interface JobOrderChecklistItem {
+  id: string;
+  jobOrderId: string;
+  label: string;
+  sortOrder: number;
+  checked: boolean;
 }
 
 export interface Client {
@@ -110,6 +162,8 @@ export interface JobOrder {
   branch: string;
   clientId: string;
   vesselId: string;
+  vendorId?: string | null;
+  isSubcontracted: boolean;
   serviceCategories: string[];
   port?: string | null;
   scopeSummary: string;
@@ -124,11 +178,21 @@ export interface JobOrder {
   assignedTechnicianIds: string[];
   executionOwnerId?: string | null;
   plannedStartDate?: string | null;
+  deadline?: string | null;
+  reportObjectKey?: string | null;
   deletedAt?: string | null;
   archivedAt?: string | null;
   purgedAt?: string | null;
   version: number;
+  createdAt: string;
+  updatedAt: string;
   variations: Variation[];
+  client?: Pick<Client, 'id' | 'name'> | null;
+  vessel?: Pick<Vessel, 'id' | 'name' | 'imoNumber'> | null;
+  vendor?: Pick<Vendor, 'id' | 'name'> | null;
+  statusHistory?: JobStatusHistoryEntry[];
+  invoices?: Invoice[];
+  checklistItems?: JobOrderChecklistItem[];
 }
 
 export type VariationStatus = 'PROPOSED' | 'APPROVED' | 'REJECTED';
@@ -139,8 +203,53 @@ export interface Variation {
   reason: string;
   amountMinor: number;
   amountCurrency: string;
+  vendorId?: string | null;
+  isSubcontracted: boolean;
   status: VariationStatus;
   approverId?: string | null;
   version: number;
   createdAt: string;
+}
+
+export interface Invoice {
+  id: string;
+  invoiceNumber: string;
+  jobOrderId: string;
+  branch: string;
+  status: string;
+  billToName?: string;
+  billToAddress?: string | null;
+  billToEmail?: string | null;
+  gstAmountMinor?: number | null;
+  gstCurrency?: string | null;
+  totalAmountMinor: number;
+  totalCurrency: string;
+  issuedAt?: string | null;
+  dueAt?: string | null;
+  pdfObjectKey?: string | null;
+  version?: number;
+  createdAt?: string;
+  lines?: InvoiceLine[];
+  payments?: Payment[];
+}
+
+export interface InvoiceLine {
+  id: string;
+  invoiceId: string;
+  kind: string;
+  description: string;
+  quantity: number | string;
+  unit?: string | null;
+  unitPriceAmountMinor: number;
+  unitPriceCurrency: string;
+  lineTotalAmountMinor: number;
+  lineTotalCurrency: string;
+}
+
+export interface Payment {
+  id: string;
+  invoiceId: string;
+  amountMinor: number;
+  currency: string;
+  paidAt: string;
 }

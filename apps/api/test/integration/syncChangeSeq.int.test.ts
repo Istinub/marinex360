@@ -23,9 +23,13 @@ run('Sync assigned changeSeq cursor (integration)', () => {
 
     tech = await prisma.user.findUniqueOrThrow({ where: { email: 'tech@tkmr.local' } });
     const supervisor = await prisma.user.findUniqueOrThrow({ where: { email: 'ops@tkmr.local' } });
-    const client = await prisma.client.findFirstOrThrow({ where: { branch: tech.branch, deletedAt: null } });
-    const vessel = await prisma.vessel.findFirstOrThrow({ where: { clientId: client.id, deletedAt: null } });
     const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const client = await prisma.client.create({
+      data: { branch: tech.branch, name: `Sync ChangeSeq Client ${unique}` },
+    });
+    const vessel = await prisma.vessel.create({
+      data: { clientId: client.id, imoNumber: `SYNCSEQ-${unique}`, name: `MV Sync ChangeSeq ${unique}` },
+    });
     jobOrder = await prisma.jobOrder.create({
       data: {
         joNumber: `SG-SYNCSEQ-${unique}`,

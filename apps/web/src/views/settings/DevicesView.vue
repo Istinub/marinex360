@@ -5,21 +5,18 @@ import DataTable from 'primevue/datatable';
 import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
 import Password from 'primevue/password';
-import Select from 'primevue/select';
 import { computed, onMounted, reactive, ref } from 'vue';
-import { get, patch, post } from '@/lib/api/client';
+import { get, patch } from '@/lib/api/client';
 import { ApiResponseError } from '@/lib/api/errors';
-import type { Device, DeviceUserLookup } from '@/lib/api/types';
+import type { Device } from '@/lib/api/types';
 
 interface DeviceForm {
   id: string | null;
   name: string;
   pin: string;
-  assignedUserId: string;
 }
 
 const devices = ref<Device[]>([]);
-const users = ref<DeviceUserLookup[]>([]);
 const isLoading = ref(false);
 const isSaving = ref(false);
 const errorMessage = ref<string | null>(null);
@@ -29,25 +26,15 @@ const form = reactive<DeviceForm>({
   id: null,
   name: '',
   pin: '',
-  assignedUserId: '',
 });
 
-const dialogTitle = computed(() => (form.id ? 'Edit device' : 'Register device'));
-const userOptions = computed(() => users.value.map((user) => ({
-  label: `${user.name} (${user.roles.join(', ')})`,
-  value: user.id,
-})));
+const dialogTitle = computed(() => (form.id ? 'Edit device' : 'Device'));
 
 async function load(): Promise<void> {
   isLoading.value = true;
   errorMessage.value = null;
   try {
-    const [deviceRows, userRows] = await Promise.all([
-      get<Device[]>('/devices'),
-      get<DeviceUserLookup[]>('/devices/users'),
-    ]);
-    devices.value = deviceRows;
-    users.value = userRows;
+    devices.value = await get<Device[]>('/devices');
   } catch (error) {
     errorMessage.value = error instanceof ApiResponseError ? error.message : 'Unable to load devices.';
   } finally {
@@ -55,23 +42,10 @@ async function load(): Promise<void> {
   }
 }
 
-function resetForm(): void {
-  form.id = null;
-  form.name = '';
-  form.pin = '';
-  form.assignedUserId = userOptions.value[0]?.value ?? '';
-}
-
-function openCreate(): void {
-  resetForm();
-  showDialog.value = true;
-}
-
 function openEdit(device: Device): void {
   form.id = device.id;
   form.name = device.name ?? '';
   form.pin = '';
-  form.assignedUserId = device.assignedUserId;
   showDialog.value = true;
 }
 
@@ -86,25 +60,16 @@ async function save(): Promise<void> {
     errorMessage.value = 'PIN must be four digits.';
     return;
   }
-  if (!form.assignedUserId) {
-    errorMessage.value = 'Assigned user is required.';
-    return;
-  }
 
   isSaving.value = true;
   try {
     const body = {
       name: form.name.trim() || null,
-      assignedUserId: form.assignedUserId,
       ...(form.pin ? { pin: form.pin } : {}),
     };
-    if (form.id) {
-      await patch<Device, typeof body>(`/devices/${encodeURIComponent(form.id)}`, body);
-      successMessage.value = 'Device updated.';
-    } else {
-      await post<Device, typeof body>('/devices', body);
-      successMessage.value = 'Device registered.';
-    }
+    if (!form.id) return;
+    await patch<Device, typeof body>(`/devices/${encodeURIComponent(form.id)}`, body);
+    successMessage.value = 'Device updated.';
     showDialog.value = false;
     await load();
   } catch (error) {
@@ -123,9 +88,8 @@ onMounted(load);
       <div>
         <p class="crm-page__eyebrow">Settings</p>
         <h1 id="devices-title" class="crm-page__title">Devices</h1>
-        <p class="record-form__version">Register tablets and assign the user unlocked by each PIN.</p>
+        <p class="record-form__version">Fixed technician and leadership devices for PIN troubleshooting.</p>
       </div>
-      <Button label="Register device" icon="pi pi-plus" @click="openCreate" />
     </header>
 
     <p v-if="errorMessage" class="auth-message auth-message--error">{{ errorMessage }}</p>
@@ -165,19 +129,6 @@ onMounted(load);
             maxlength="4"
             pattern="[0-9]*"
             toggle-mask
-          />
-        </label>
-
-        <label class="auth-field" for="device-user">
-          Assigned user
-          <Select
-            id="device-user"
-            v-model="form.assignedUserId"
-            class="auth-input"
-            :options="userOptions"
-            option-label="label"
-            option-value="value"
-            placeholder="Select a user"
           />
         </label>
 

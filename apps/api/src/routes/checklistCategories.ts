@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { AppError } from '../lib/errors.js';
 import { appendAudit } from '../services/audit.js';
+import { assertBranchAccess } from '../services/branchScope.js';
+import { assertTransition, type JoState } from '../domain/josm.js';
 
 type ChecklistCategoryWithItems = Prisma.ChecklistCategoryGetPayload<{ include: { items: true } }>;
 
@@ -30,6 +32,8 @@ function mirrorItems(category: ChecklistCategoryWithItems): Prisma.InputJsonValu
     .map((item) => ({ id: item.id, label: item.label })) as Prisma.InputJsonValue;
 }
 
+const COMPLETED_CHECKLIST_REOPEN_REASON = 'New checklist item added — requires re-verification';
+
 async function categoryOrNotFound(prisma: PrismaClient | Prisma.TransactionClient, id: string): Promise<ChecklistCategoryWithItems> {
   const category = await prisma.checklistCategory.findUnique({
     where: { id },
@@ -45,6 +49,7 @@ async function refreshTemplateMirror(tx: Prisma.TransactionClient, categoryId: s
     where: { id: mirrorTemplateId(category.id) },
     update: {
       name: `${category.name} checklist`,
+      categoryId: category.id,
       serviceCategory: category.id,
       items: mirrorItems(category),
       active: true,
@@ -53,6 +58,7 @@ async function refreshTemplateMirror(tx: Prisma.TransactionClient, categoryId: s
     create: {
       id: mirrorTemplateId(category.id),
       name: `${category.name} checklist`,
+      categoryId: category.id,
       serviceCategory: category.id,
       items: mirrorItems(category),
       active: true,
@@ -130,9 +136,55 @@ export function checklistCategoryRoutes(app: FastifyInstance, prisma: PrismaClie
     const label = cleanName(body.label, 'label');
     const sortOrder = cleanSortOrder(body.sortOrder);
     const category = await prisma.$transaction(async (tx) => {
+      const jobOrderId = typeof body.jobOrderId === 'string' && body.jobOrderId.trim() ? body.jobOrderId.trim() : null;
+      const jobOrder = jobOrderId
+        ? await tx.jobOrder.findFirst({ where: { id: jobOrderId, deletedAt: null, archivedAt: null, purgedAt: null } })
+        : null;
+      if (jobOrderId && !jobOrder) throw new AppError('NOT_FOUND');
+      if (jobOrder) {
+        assertBranchAccess(req.ctx, jobOrder.branch);
+        if (!jobOrder.serviceCategories.includes(id)) {
+          throw new AppError('VALIDATION_ERROR', 'job order does not use this checklist category', { field: 'jobOrderId', reason: 'category_mismatch' });
+        }
+        if (jobOrder.state === 'INVOICED' || await tx.invoice.count({ where: { jobOrderId: jobOrder.id } })) {
+          throw new AppError('VALIDATION_ERROR', 'Cannot modify checklist after invoicing', { field: 'jobOrderId', reason: 'invoiced' });
+        }
+      }
       const item = await tx.checklistTemplateItem.create({ data: { categoryId: id, label, sortOrder } });
       await refreshTemplateMirror(tx, id);
       await appendAudit(tx, req.ctx, { entityType: 'ChecklistTemplateItem', entityId: item.id, action: 'CREATE', diff: { categoryId: id, label, sortOrder } });
+      if (jobOrder?.state === 'COMPLETED') {
+        const history = await tx.jobStatusHistory.findMany({
+          where: { jobOrderId: jobOrder.id },
+          orderBy: { at: 'asc' },
+          select: { fromState: true, toState: true },
+        });
+        const { to } = assertTransition({
+          from: jobOrder.state as JoState,
+          to: 'ON_HOLD',
+          actor: { userId: req.ctx.userId, roles: req.ctx.roles },
+          reason: COMPLETED_CHECKLIST_REOPEN_REASON,
+          executionOwnerId: jobOrder.executionOwnerId,
+          history,
+        });
+        await tx.jobOrder.update({ where: { id: jobOrder.id }, data: { state: to, version: { increment: 1 } } });
+        await tx.jobStatusHistory.create({
+          data: {
+            jobOrderId: jobOrder.id,
+            fromState: jobOrder.state,
+            toState: to,
+            actorId: req.ctx.userId,
+            deviceId: req.ctx.deviceId ?? null,
+            reason: COMPLETED_CHECKLIST_REOPEN_REASON,
+          },
+        });
+        await appendAudit(tx, req.ctx, {
+          entityType: 'JobOrder',
+          entityId: jobOrder.id,
+          action: 'STATE_TRANSITION',
+          diff: { from: jobOrder.state, to, reason: COMPLETED_CHECKLIST_REOPEN_REASON, checklistTemplateItemId: item.id },
+        });
+      }
       return categoryOrNotFound(tx, id);
     });
     return reply.status(201).send(category);

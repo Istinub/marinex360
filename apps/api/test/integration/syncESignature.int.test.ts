@@ -34,8 +34,11 @@ run('Sync ESignature D-059/CC-18 (integration)', () => {
       update: { roles: ['TECHNICIAN'], branch: 'SG' },
       create: { email: 'sync-esig-non-owner@tkmr.local', name: 'Sync ESignature Non Owner', passwordHash: 'x', roles: ['TECHNICIAN'], branch: 'SG' },
     });
-    client = await prisma.client.findFirstOrThrow({ where: { branch: 'SG', deletedAt: null } });
-    vessel = await prisma.vessel.findFirstOrThrow({ where: { clientId: client.id, deletedAt: null } });
+    const suffix = Date.now().toString().slice(-9);
+    client = await prisma.client.create({ data: { branch: 'SG', name: `Sync ESignature Client ${suffix}` } });
+    vessel = await prisma.vessel.create({
+      data: { clientId: client.id, imoNumber: `SYNCESIG-${suffix}`, name: `MV Sync ESignature ${suffix}` },
+    });
   });
 
   afterAll(async () => {

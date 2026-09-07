@@ -55,7 +55,13 @@ const categoryText = computed(() => {
   return categories.length > 0 ? categories.join(', ') : 'No category on record';
 });
 const scopeSummary = computed(() => jobOrder.value?.scopeSummary?.trim() || 'No description on record');
+const deadlineText = computed(() => formatDate(jobOrder.value?.deadline));
 const stateMeta = computed(() => jobOrder.value ? jobOrderStateMeta(jobOrder.value.state) : null);
+
+function formatDate(value?: string | null): string {
+  if (!value) return 'No deadline on record';
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(value));
+}
 
 function isEmptyField(value: string): boolean {
   return value.startsWith('No ') && value.endsWith(' on record');
@@ -267,9 +273,14 @@ onMounted(() => {
           <dd :class="{ 'job-detail__empty-value': isEmptyField(categoryText) }">{{ categoryText }}</dd>
         </div>
         <div>
+          <dt>Deadline</dt>
+          <dd :class="{ 'job-detail__empty-value': isEmptyField(deadlineText) }">{{ deadlineText }}</dd>
+        </div>
+        <div>
           <dt>Description</dt>
           <dd :class="{ 'job-detail__empty-value': isEmptyField(scopeSummary) }">{{ scopeSummary }}</dd>
         </div>
+        <!-- TODO(ux): Director-controlled per-field visibility is future scope; this pass only restores missing technician-safe detail fields. -->
       </dl>
 
       <RouterLink v-if="!jobOrder.readOnly" class="job-detail__documents-link" :to="documentsPath">

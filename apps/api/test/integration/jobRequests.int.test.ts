@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { Redis } from 'ioredis';
 import { buildApp } from '../../src/app.js';
@@ -27,9 +28,18 @@ run('Job requests (integration)', () => {
     director = await prisma.user.findUniqueOrThrow({ where: { email: 'director@tkmr.local' } });
     admin = await prisma.user.findUniqueOrThrow({ where: { email: 'admin@tkmr.local' } });
     tech = await prisma.user.findUniqueOrThrow({ where: { email: 'tech@tkmr.local' } });
-    clientSg = await prisma.client.findFirstOrThrow({ where: { branch: 'SG', deletedAt: null } });
+    const unique = Date.now().toString().slice(-9);
+    clientSg = await prisma.client.create({
+      data: { branch: 'SG', name: `Job Request SG Fixture ${unique}`, address: '20 Intake Rd, Singapore' },
+    });
     clientMy = await prisma.client.upsert({ where: { id: 'client-inttest-my' }, update: { branch: 'MY', deletedAt: null }, create: { id: 'client-inttest-my', branch: 'MY', name: 'MY Fixture' } });
-    vesselSg = await prisma.vessel.findFirstOrThrow({ where: { clientId: clientSg.id, deletedAt: null } });
+    vesselSg = await prisma.vessel.create({
+      data: {
+        clientId: clientSg.id,
+        imoNumber: `JRSG-${unique}-${randomUUID().slice(0, 8)}`,
+        name: `MV Job Request Fixture ${unique}`,
+      },
+    });
     vesselMy = await prisma.vessel.upsert({ where: { id: 'vessel-inttest-my' }, update: { clientId: clientMy.id, deletedAt: null }, create: { id: 'vessel-inttest-my', clientId: clientMy.id, imoNumber: 'MY-INTTEST-1', name: 'MY Vessel' } });
     clientUser = await prisma.user.upsert({ where: { email: 'client-inttest@tkmr.local' }, update: { clientId: clientSg.id, roles: ['CLIENT'], branch: 'SG', active: true }, create: { email: 'client-inttest@tkmr.local', name: 'Client Fixture', passwordHash: 'x', roles: ['CLIENT'], branch: 'SG', clientId: clientSg.id } });
   });

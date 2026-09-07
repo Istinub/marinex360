@@ -114,7 +114,7 @@ run('Job Orders (integration)', () => {
     const a = await app.inject({ method: 'POST', url: `/api/v1/job-orders/${jo.id}/assign`, headers: { authorization: bearer(sup) }, payload: { technicianIds: [tech.id], executionOwnerId: tech.id, version: jo.version } });
     expect(a.statusCode).toBe(200);
     const assigned = await prisma.jobOrder.findUniqueOrThrow({ where: { id: jo.id } });
-    const s = await app.inject({ method: 'POST', url: `/api/v1/job-orders/${jo.id}/transition`, headers: { authorization: bearer(sup) }, payload: { to: 'SCHEDULED', version: assigned.version } });
+    const s = await app.inject({ method: 'POST', url: `/api/v1/job-orders/${jo.id}/transition`, headers: { authorization: bearer(director) }, payload: { to: 'SCHEDULED', version: assigned.version } });
     expect(s.statusCode).toBe(200);
     const sched = await prisma.jobOrder.findUniqueOrThrow({ where: { id: jo.id } });
     const res = await app.inject({ method: 'POST', url: `/api/v1/job-orders/${jo.id}/transition`, headers: { authorization: bearer(otherTech) }, payload: { to: 'IN_PROGRESS', version: sched.version } });
