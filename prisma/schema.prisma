@@ -111,6 +111,13 @@ model ChecklistTemplateItem {
   @@index([categoryId, sortOrder])
 }
 
+model BrandingSettings {
+  id           String   @id
+  logoFilename String   @default("TKMR_Logo.png")
+  updatedBy    String?
+  updatedAt    DateTime @updatedAt
+}
+
 // ===================== CRM (OD-03) =====================
 model Contact {
   id         String   @id @default(uuid())
@@ -236,6 +243,7 @@ model JobOrder {
   statusHistory         JobStatusHistory[]
   materials             MaterialLine[]
   variations            Variation[]
+  workers               JobOrderWorker[]
   worklogs              WorkLog[]
   photos                Photo[]
   observations          Observation[]
@@ -249,6 +257,18 @@ model JobOrder {
   @@index([vesselId])
   @@index([vendorId])
   @@index([changeSeq])
+}
+
+model JobOrderWorker {
+  id         String   @id @default(uuid())
+  jobOrder   JobOrder @relation(fields: [jobOrderId], references: [id])
+  jobOrderId String
+  name       String
+  addedAt    DateTime @default(now())
+
+  @@index([jobOrderId])
+  @@index([name])
+  @@index([addedAt])
 }
 
 model JobStatusHistory {

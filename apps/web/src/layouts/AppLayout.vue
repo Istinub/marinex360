@@ -75,6 +75,7 @@ const navGroups: NavGroup[] = [
     items: [
       { label: 'Account Management', to: '/settings/account-management', icon: 'pi pi-users', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
       { label: 'Job Execution Settings', to: '/settings/job-execution', icon: 'pi pi-sliders-h', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
+      { label: 'Branding', to: '/settings/branding', icon: 'pi pi-image', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
       { label: 'Devices', to: '/settings/devices', icon: 'pi pi-tablet', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
     ],
   },

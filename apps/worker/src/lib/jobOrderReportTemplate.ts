@@ -1,3 +1,5 @@
+import type { BrandingLogo } from './branding.js';
+
 type Money = { amountMinor: number; currency: string };
 
 type ReportJobOrder = {
@@ -47,7 +49,7 @@ function table(headers: string[], rows: string[][]): string {
     .join('')}</tbody></table>`;
 }
 
-export function renderJobOrderReportHtml(jobOrder: ReportJobOrder): string {
+export function renderJobOrderReportHtml(jobOrder: ReportJobOrder, brandingLogo?: BrandingLogo): string {
   const completed = [...jobOrder.statusHistory].reverse().find((entry) => entry.toState === 'COMPLETED');
   const submitted = [...jobOrder.statusHistory].reverse().find((entry) => entry.toState === 'PENDING_REVIEW');
   const technician = submitted?.actor?.name ?? submitted?.actor?.email ?? jobOrder.signature?.signerName ?? '-';
@@ -61,6 +63,8 @@ export function renderJobOrderReportHtml(jobOrder: ReportJobOrder): string {
   <style>
     body { margin: 32px; color: #11202E; font-family: "IBM Plex Sans", Arial, sans-serif; font-size: 12px; }
     header { border-bottom: 2px solid #0B2A4A; margin-bottom: 20px; padding-bottom: 14px; }
+    .brand-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .brand-row img { max-width: 148px; max-height: 56px; object-fit: contain; }
     h1 { margin: 0 0 6px; color: #0B2A4A; font-size: 24px; }
     h2 { margin: 22px 0 8px; color: #0B2A4A; font-size: 14px; }
     .muted { color: #5C7081; }
@@ -74,8 +78,13 @@ export function renderJobOrderReportHtml(jobOrder: ReportJobOrder): string {
 </head>
 <body>
   <header>
-    <h1>Job Completion Report</h1>
-    <p class="muted">${escapeHtml(jobOrder.joNumber)} · ${escapeHtml(jobOrder.state)}</p>
+    <div class="brand-row">
+      <div>
+        <h1>Job Completion Report</h1>
+        <p class="muted">${escapeHtml(jobOrder.joNumber)} · ${escapeHtml(jobOrder.state)}</p>
+      </div>
+      ${brandingLogo ? `<img src="${brandingLogo.dataUri}" alt="${escapeHtml(brandingLogo.filename)}" />` : ''}
+    </div>
   </header>
   ${section('Job details', `<div class="grid">
     <div><div class="label">Client</div><p class="value">${escapeHtml(jobOrder.client.name)}</p></div>

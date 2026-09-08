@@ -7,6 +7,8 @@
 # downloads a second browser. ("Chrome deps baked into the image" — SRS §9.)
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 COPY package*.json ./
 COPY apps/worker/package.json apps/worker/
 COPY packages/storage/package.json packages/storage/
@@ -34,5 +36,6 @@ COPY --from=build --chown=app:app /app/packages/storage ./packages/storage
 COPY --from=build --chown=app:app /app/apps/worker/dist ./apps/worker/dist
 COPY --from=build --chown=app:app /app/apps/worker/scripts ./apps/worker/scripts
 COPY --from=build --chown=app:app /app/prisma ./prisma
+COPY --chown=app:app assets ./assets
 USER app
 CMD ["node", "apps/worker/dist/worker.js"]

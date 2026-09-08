@@ -2,6 +2,7 @@
 // and D-035 payment recording).
 import type { FastifyInstance } from 'fastify';
 import type { PrismaClient } from '@prisma/client';
+import { Storage } from '@marinex360/storage';
 import { AppError } from '../lib/errors.js';
 import { scopeWhere, assertBranchAccess, clientIdForUser } from '../services/branchScope.js';
 import { appendAudit } from '../services/audit.js';
@@ -31,6 +32,20 @@ export function invoiceRoutes(app: FastifyInstance, prisma: PrismaClient): void 
       if (!clientId || (invoice.jobOrderId && (await prisma.jobOrder.findFirst({ where: { id: invoice.jobOrderId, clientId } })) == null)) throw new AppError('NOT_FOUND');
     }
     return invoice;
+  });
+
+  app.get('/api/v1/invoices/:id/pdf', w('invoice:read'), async (req) => {
+    const { id } = req.params as any;
+    const invoice = await prisma.invoice.findFirst({ where: { id }, include: { jobOrder: true } });
+    if (!invoice) throw new AppError('NOT_FOUND');
+    assertBranchAccess(req.ctx, invoice.branch);
+    if (req.ctx.roles.includes('CLIENT' as any)) {
+      const clientId = await clientIdForUser(prisma, req.ctx);
+      if (!clientId || invoice.jobOrder.clientId !== clientId) throw new AppError('NOT_FOUND');
+    }
+    if (!invoice.pdfObjectKey) return { status: 'PENDING' };
+    const url = await Storage.fromEnv().presignGet(invoice.pdfObjectKey, 900);
+    return { status: 'READY', url, objectKey: invoice.pdfObjectKey };
   });
 
   // D-034: DRAFT -> SENT. Computes dueAt from the Client's creditTerms. Freezes the invoice

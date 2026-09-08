@@ -149,6 +149,31 @@ run('Invoices (integration)', () => {
     expect(body.payments[0].amountMinor).toBe(25000);
   });
 
+  it('returns pending and ready states for invoice PDF access', async () => {
+    const invoice = await createInvoiceFixture('PDF');
+
+    const pending = await app.inject({
+      method: 'GET',
+      url: `/api/v1/invoices/${invoice.id}/pdf`,
+      headers: { authorization: bearer(finance) },
+    });
+    expect(pending.statusCode).toBe(200);
+    expect(pending.json()).toEqual({ status: 'PENDING' });
+
+    const objectKey = `invoices/${invoice.id}/${invoice.invoiceNumber}.pdf`;
+    await prisma.invoice.update({ where: { id: invoice.id }, data: { pdfObjectKey: objectKey } });
+
+    const ready = await app.inject({
+      method: 'GET',
+      url: `/api/v1/invoices/${invoice.id}/pdf`,
+      headers: { authorization: bearer(finance) },
+    });
+    expect(ready.statusCode).toBe(200);
+    expect(ready.json().status).toBe('READY');
+    expect(ready.json().objectKey).toBe(objectKey);
+    expect(ready.json().url).toContain(encodeURIComponent(objectKey).replaceAll('%2F', '/'));
+  });
+
   it('WEB P3-5: cross-branch direct invoice detail reads are masked as NOT_FOUND', async () => {
     const clientMY = await prisma.client.create({ data: { branch: 'MY', name: `Invoice MY Client ${uniq}` } });
     const vesselMY = await prisma.vessel.create({ data: { clientId: clientMY.id, imoNumber: `6${uniq}44`.slice(0, 12), name: 'MV Invoice MY' } });

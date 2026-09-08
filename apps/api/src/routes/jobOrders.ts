@@ -269,6 +269,64 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
     return { purged: result.count };
   });
 
+  app.get('/api/v1/job-orders/workers/suggest', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('jobOrder:read')] }, async (req) => {
+    const { q } = req.query as { q?: string };
+    const query = q?.trim();
+    if (!query) return [];
+
+    const rows = await prisma.jobOrderWorker.findMany({
+      where: {
+        name: { contains: query, mode: 'insensitive' },
+        jobOrder: { ...scopeWhere(req.ctx), purgedAt: null },
+      },
+      orderBy: { addedAt: 'desc' },
+      select: { name: true },
+      take: 100,
+    });
+    const seen = new Set<string>();
+    const suggestions: string[] = [];
+    for (const row of rows) {
+      const key = row.name.trim().toLocaleLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      suggestions.push(row.name);
+      if (suggestions.length >= 10) break;
+    }
+    return suggestions;
+  });
+
+  app.get('/api/v1/job-orders/:id/workers', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('jobOrder:read')] }, async (req) => {
+    const { id } = req.params as any;
+    const jo = await prisma.jobOrder.findFirst({ where: { id, deletedAt: null, archivedAt: null, purgedAt: null } });
+    if (!jo) throw new AppError('NOT_FOUND');
+    assertBranchAccess(req.ctx, jo.branch);
+    if (req.ctx.roles.includes('CLIENT' as any) && (await clientIdForUser(prisma, req.ctx)) !== jo.clientId) throw new AppError('NOT_FOUND');
+    if (isTech(req.ctx.roles)) {
+      const access = technicianAccessFor(jo, req.ctx.userId);
+      if (!access.visible || !access.canOpen) throw new AppError('NOT_FOUND');
+    }
+    return prisma.jobOrderWorker.findMany({ where: { jobOrderId: id }, orderBy: { addedAt: 'desc' } });
+  });
+
+  app.post('/api/v1/job-orders/:id/workers', authed, async (req, reply) => {
+    const { id } = req.params as any;
+    const { name } = (req.body ?? {}) as any;
+    const cleanName = typeof name === 'string' ? name.trim() : '';
+    if (!cleanName) throw new AppError('VALIDATION_ERROR', 'name required');
+
+    const created = await prisma.$transaction(async (tx) => {
+      const jo = await tx.jobOrder.findFirst({ where: { id, deletedAt: null, archivedAt: null, purgedAt: null } });
+      if (!jo) throw new AppError('NOT_FOUND');
+      assertBranchAccess(req.ctx, jo.branch);
+      if (jo.state !== 'IN_PROGRESS') throw new AppError('VALIDATION_ERROR', 'workers can only be added while the job order is in progress');
+      if (jo.executionOwnerId !== req.ctx.userId) throw new AppError('FORBIDDEN', 'only the execution owner can add workers');
+      const row = await tx.jobOrderWorker.create({ data: { jobOrderId: id, name: cleanName } });
+      await appendAudit(tx, req.ctx, { entityType: 'JobOrderWorker', entityId: row.id, action: 'CREATE', diff: { jobOrderId: id, name: cleanName } });
+      return row;
+    });
+    return reply.status(201).send(created);
+  });
+
   // GET by id (cross-branch -> NOT_FOUND; technician IDOR -> NOT_FOUND, RBAC-IDOR-1)
   app.get('/api/v1/job-orders/:id', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('jobOrder:read')] }, async (req) => {
     const { id } = req.params as any;
@@ -280,6 +338,7 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
         vessel: { select: { id: true, name: true, imoNumber: true } },
         vendor: { select: { id: true, name: true } },
         checklistItems: { orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }] },
+        workers: { orderBy: { addedAt: 'desc' } },
         statusHistory: {
           orderBy: { at: 'asc' },
           include: {

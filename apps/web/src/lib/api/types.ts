@@ -48,6 +48,15 @@ export interface Vendor {
   updatedAt: string;
 }
 
+export interface BrandingSettings {
+  id: string;
+  logoFilename: string;
+  updatedBy?: string | null;
+  updatedAt: string;
+  availableLogoFilenames: string[];
+}
+
+
 export interface JobStatusHistoryEntry {
   id: string;
   jobOrderId: string;
@@ -99,6 +108,13 @@ export interface JobOrderChecklistItem {
   label: string;
   sortOrder: number;
   checked: boolean;
+}
+
+export interface JobOrderWorker {
+  id: string;
+  jobOrderId: string;
+  name: string;
+  addedAt: string;
 }
 
 export interface Client {
@@ -193,6 +209,7 @@ export interface JobOrder {
   statusHistory?: JobStatusHistoryEntry[];
   invoices?: Invoice[];
   checklistItems?: JobOrderChecklistItem[];
+  workers?: JobOrderWorker[];
 }
 
 export type VariationStatus = 'PROPOSED' | 'APPROVED' | 'REJECTED';

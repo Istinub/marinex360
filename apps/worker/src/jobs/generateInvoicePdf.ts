@@ -5,13 +5,15 @@ import { PrismaClient } from '@prisma/client';
 import puppeteer from 'puppeteer-core';
 import { Storage } from '@marinex360/storage';
 import { renderInvoiceHtml } from '../lib/invoiceTemplate.js';
+import { loadBrandingLogo } from '../lib/branding.js';
 
 const prisma = new PrismaClient();
 const storage = Storage.fromEnv();
 
 export async function generateInvoicePdf(invoiceId: string): Promise<{ pdfObjectKey: string }> {
   const invoice = await prisma.invoice.findUniqueOrThrow({ where: { id: invoiceId }, include: { lines: true } });
-  const html = renderInvoiceHtml(invoice);
+  const brandingLogo = await loadBrandingLogo(prisma);
+  const html = renderInvoiceHtml(invoice, brandingLogo);
 
   const execPath = process.env.PUPPETEER_EXECUTABLE_PATH ?? '/usr/bin/chromium';
   const browser = await puppeteer.launch({

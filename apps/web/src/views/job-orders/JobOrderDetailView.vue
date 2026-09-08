@@ -11,7 +11,7 @@ import NotFoundState from '@/components/common/NotFoundState.vue';
 import VersionConflictDialog from '@/components/common/VersionConflictDialog.vue';
 import { post } from '@/lib/api/client';
 import { ApiResponseError } from '@/lib/api/errors';
-import type { Invoice, JobOrder, JobState, JobStatusHistoryEntry, Variation } from '@/lib/api/types';
+import type { Invoice, JobOrder, JobState, JobStatusHistoryEntry, Variation, VariationStatus } from '@/lib/api/types';
 import { formatMoney } from '@/lib/money';
 import { jobOrderStateMeta } from '@/composables/useJobOrderStateMeta';
 import { useAuthStore } from '@/stores/auth';
@@ -66,6 +66,7 @@ const isSaving = ref(false);
 const isNotFound = ref(false);
 const formError = ref<string | null>(null);
 const fieldErrors = reactive<Partial<Record<HeaderField, string>>>({});
+const isEditing = ref(false);
 const showConflict = ref(false);
 const conflictMode = ref<ConflictMode>('header');
 const pendingTransition = ref<TransitionAction | null>(null);
@@ -99,6 +100,9 @@ const lifecycleError = ref<string | null>(null);
 const reportError = ref<string | null>(null);
 const reportUrl = ref<string | null>(null);
 const isReportLoading = ref(false);
+const invoicePdfError = ref<string | null>(null);
+const invoicePdfUrl = ref<string | null>(null);
+const isInvoicePdfLoading = ref(false);
 const categoryOptions = computed(() => checklistCategoriesStore.options);
 
 const officeRoles = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN', 'DIRECTOR'];
@@ -175,9 +179,16 @@ const earnedAmount = computed(() => {
 });
 const jobClientName = computed(() => jobOrder.value?.client?.name ?? jobOrder.value?.clientId ?? '—');
 const jobVesselName = computed(() => jobOrder.value?.vessel?.name ?? jobOrder.value?.vesselId ?? '—');
+const categoryLabels = computed(() =>
+  (jobOrder.value?.serviceCategories ?? []).map((category) =>
+    categoryOptions.value.find((option) => option.value === category)?.label ?? category,
+  ),
+);
+const recentHistory = computed(() => [...sortedHistory.value].reverse());
 const canGenerateCompletionOutput = computed(() => jobOrder.value?.state === 'COMPLETED');
 const canViewClosedOutput = computed(() => jobOrder.value?.state === 'CLOSED');
 const canUseCompletionReport = computed(() => jobOrder.value ? ['COMPLETED', 'INVOICED', 'CLOSED'].includes(jobOrder.value.state) : false);
+const canUseInvoicePdf = computed(() => Boolean(latestInvoice.value) && Boolean(jobOrder.value && ['COMPLETED', 'INVOICED', 'CLOSED'].includes(jobOrder.value.state)));
 const canOpenInvoiceDraft = computed(() => latestInvoice.value?.status === 'DRAFT');
 const showRenewAction = computed(() => jobOrder.value?.state === 'CANCELLED');
 
@@ -240,6 +251,17 @@ function formatDateTime(value?: string | null): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 }
 
+function formatRelativeTime(value?: string | null): string {
+  if (!value) return '—';
+  const diffMs = new Date(value).getTime() - Date.now();
+  const abs = Math.abs(diffMs);
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+  if (abs < 60_000) return formatter.format(Math.round(diffMs / 1000), 'second');
+  if (abs < 3_600_000) return formatter.format(Math.round(diffMs / 60_000), 'minute');
+  if (abs < 86_400_000) return formatter.format(Math.round(diffMs / 3_600_000), 'hour');
+  return formatter.format(Math.round(diffMs / 86_400_000), 'day');
+}
+
 function moneyLabel(amountMinor: number, currency?: string | null): string {
   return formatMoney({ amountMinor, currency: currency || jobOrder.value?.quotedCurrency || 'SGD' });
 }
@@ -274,6 +296,33 @@ function historyActor(entry?: JobStatusHistoryEntry | null): string {
 
 function historyDevice(entry?: JobStatusHistoryEntry | null): string {
   return entry?.device?.name ?? entry?.deviceId ?? '—';
+}
+
+function historyDeviceSuffix(entry?: JobStatusHistoryEntry | null): string {
+  const device = historyDevice(entry);
+  return device === '—' ? '' : ` (${device})`;
+}
+
+function startEditing(): void {
+  if (jobOrder.value) applyJobOrder(jobOrder.value, true);
+  isEditing.value = true;
+}
+
+function cancelEditing(): void {
+  if (jobOrder.value) applyJobOrder(jobOrder.value, true);
+  isEditing.value = false;
+}
+
+function variationStatusLabel(status: VariationStatus): string {
+  if (status === 'APPROVED') return 'Approved';
+  if (status === 'REJECTED') return 'Rejected';
+  return 'Proposed';
+}
+
+function variationStatusClass(status: VariationStatus): string {
+  if (status === 'APPROVED') return 'mx-status-synced';
+  if (status === 'REJECTED') return 'mx-status-error';
+  return 'mx-status-pending';
 }
 
 function applyJobOrder(nextJobOrder: JobOrder, overwriteForm: boolean): void {
@@ -358,8 +407,14 @@ async function loadJobOrder(overwriteForm = true): Promise<void> {
   variations.value = loaded.variations ?? [];
   reportUrl.value = null;
   reportError.value = null;
+  invoicePdfUrl.value = null;
+  invoicePdfError.value = null;
   if (['COMPLETED', 'INVOICED', 'CLOSED'].includes(loaded.state) && loaded.reportObjectKey) {
     void refreshReportUrl();
+  }
+  const invoice = loaded.invoices?.[0] ?? null;
+  if (invoice?.pdfObjectKey) {
+    void refreshInvoicePdfUrl();
   }
 }
 
@@ -380,6 +435,47 @@ async function refreshReportUrl(): Promise<void> {
 async function openReport(): Promise<void> {
   if (!reportUrl.value) await refreshReportUrl();
   if (reportUrl.value) window.open(reportUrl.value, '_blank', 'noopener');
+}
+
+async function downloadReport(): Promise<void> {
+  if (!reportUrl.value) await refreshReportUrl();
+  if (reportUrl.value) triggerDownload(reportUrl.value, `${jobOrder.value?.joNumber ?? 'job-order'}-report.pdf`);
+}
+
+async function refreshInvoicePdfUrl(): Promise<void> {
+  const invoice = latestInvoice.value;
+  if (!invoice) return;
+  invoicePdfError.value = null;
+  isInvoicePdfLoading.value = true;
+  try {
+    const pdf = await jobOrdersStore.loadInvoicePdf(invoice.id);
+    invoicePdfUrl.value = pdf.status === 'READY' ? pdf.url : null;
+  } catch (error) {
+    invoicePdfError.value = error instanceof ApiResponseError ? error.message : 'Unable to load invoice PDF.';
+  } finally {
+    isInvoicePdfLoading.value = false;
+  }
+}
+
+async function openInvoicePdf(): Promise<void> {
+  if (!invoicePdfUrl.value) await refreshInvoicePdfUrl();
+  if (invoicePdfUrl.value) window.open(invoicePdfUrl.value, '_blank', 'noopener');
+}
+
+async function downloadInvoicePdf(): Promise<void> {
+  if (!invoicePdfUrl.value) await refreshInvoicePdfUrl();
+  if (invoicePdfUrl.value) triggerDownload(invoicePdfUrl.value, `${latestInvoice.value?.invoiceNumber ?? 'invoice'}.pdf`);
+}
+
+function triggerDownload(url: string, filename: string): void {
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.rel = 'noopener';
+  anchor.target = '_blank';
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
 }
 
 function openInvoiceDraft(): void {
@@ -644,309 +740,401 @@ watch(jobOrderId, async () => {
     </p>
 
     <template v-else-if="jobOrder">
-      <header class="crm-page__header">
+      <header class="crm-page__header jo-detail-hero">
         <div>
           <BackLink to="/job-orders" label="Job orders" />
-          <h1 id="job-order-title" class="crm-page__title">
+          <p class="record-form__version">Job order</p>
+          <h1 id="job-order-title" class="crm-page__title jo-detail-hero__title">
             <MonoText :value="jobOrder.joNumber" />
           </h1>
-          <p class="record-form__version">
-            Version <MonoText :value="jobOrder.version" />
+          <p class="jo-detail-hero__subtitle">
+            {{ jobVesselName }} · {{ jobClientName }}
+            <span class="jo-version-badge">
+              <!-- OD-05 optimistic-lock version, kept visible for debugging. -->
+              v{{ jobOrder.version }}
+            </span>
           </p>
         </div>
 
-        <span v-if="stateMeta" class="jo-chip" :class="stateMeta.className">
-          {{ stateMeta.label }}
-        </span>
+        <div class="jo-detail-hero__actions">
+          <span v-if="stateMeta" class="jo-chip" :class="stateMeta.className">
+            {{ stateMeta.label }}
+          </span>
+          <Button label="Edit" icon="pi pi-pencil" severity="secondary" outlined @click="startEditing" />
+        </div>
       </header>
 
-      <section class="crm-section jo-state-summary" aria-labelledby="job-order-state-summary-title">
-        <h2 id="job-order-state-summary-title" class="crm-section__title">Timeline</h2>
-        <dl class="detail-grid">
-          <div>
-            <dt>Requested date</dt>
-            <dd>{{ formatDate(jobOrder.createdAt) }}</dd>
-          </div>
-          <div>
-            <dt>Scheduled date</dt>
-            <dd>{{ formatDateTime(scheduledHistory?.at ?? jobOrder.plannedStartDate) }}</dd>
-          </div>
-          <div>
-            <dt>Deadline</dt>
-            <dd>{{ formatDate(jobOrder.deadline) }}</dd>
-          </div>
-          <div v-if="jobOrder.state === 'IN_PROGRESS'">
-            <dt>Started</dt>
-            <dd>{{ formatDateTime(startedHistory?.at) }}</dd>
-          </div>
-          <div v-if="jobOrder.state === 'ON_HOLD'">
-            <dt>Paused</dt>
-            <dd>{{ formatDateTime(pausedHistory?.at) }}</dd>
-          </div>
-          <div v-if="['PENDING_REVIEW', 'COMPLETED'].includes(jobOrder.state)">
-            <dt>Submitted</dt>
-            <dd>{{ formatDateTime(submittedHistory?.at) }}</dd>
-          </div>
-          <div v-if="jobOrder.state === 'COMPLETED'">
-            <dt>Completed</dt>
-            <dd>{{ formatDateTime(completedHistory?.at) }}</dd>
-          </div>
-          <div v-if="jobOrder.state === 'CANCELLED'">
-            <dt>Cancelled</dt>
-            <dd>{{ formatDateTime(cancelledHistory?.at) }}</dd>
-          </div>
-        </dl>
-
-        <h2 class="crm-section__title">People &amp; Device</h2>
-        <dl class="detail-grid">
-          <div>
-            <dt>Assigned technicians</dt>
-            <dd>{{ assignedTechnicianNames(jobOrder) }}</dd>
-          </div>
-          <div>
-            <dt>Execution owner</dt>
-            <dd>{{ executionOwnerName(jobOrder) }}</dd>
-          </div>
-          <div v-if="jobOrder.state === 'IN_PROGRESS'">
-            <dt>Device</dt>
-            <dd>{{ historyDevice(startedHistory) }}</dd>
-          </div>
-          <div v-if="jobOrder.state === 'ON_HOLD'">
-            <dt>Person working</dt>
-            <dd>{{ historyActor(lastWorkerBeforePause) }}</dd>
-          </div>
-          <div v-if="jobOrder.state === 'ON_HOLD'">
-            <dt>Device</dt>
-            <dd>{{ historyDevice(lastWorkerBeforePause) }}</dd>
-          </div>
-          <div v-if="['PENDING_REVIEW', 'COMPLETED'].includes(jobOrder.state)">
-            <dt>Submitted by</dt>
-            <dd>{{ historyActor(submittedHistory) }}</dd>
-          </div>
-          <div v-if="['PENDING_REVIEW', 'COMPLETED'].includes(jobOrder.state)">
-            <dt>Completion device</dt>
-            <dd>{{ historyDevice(submittedHistory) }}</dd>
-          </div>
-        </dl>
-
-        <h2 class="crm-section__title">Client &amp; Vessel</h2>
-        <dl class="detail-grid">
-          <div>
-            <dt>Client</dt>
-            <dd>{{ jobClientName }}</dd>
-          </div>
-          <div>
-            <dt>Vessel</dt>
-            <dd>{{ jobVesselName }}</dd>
-          </div>
-          <div v-if="jobOrder.state === 'ON_HOLD' || jobOrder.state === 'CANCELLED'">
-            <dt>{{ jobOrder.state === 'ON_HOLD' ? 'Pause reason' : 'Cancellation reason' }}</dt>
-            <dd>{{ (jobOrder.state === 'ON_HOLD' ? pausedHistory?.reason : cancelledHistory?.reason) ?? '—' }}</dd>
-          </div>
-        </dl>
-
-        <h2 class="crm-section__title">Financials</h2>
-        <dl class="detail-grid">
-          <div v-if="jobOrder.state !== 'CANCELLED'">
-            <dt>Quoted amount</dt>
-            <dd><span class="mx-money">{{ formatMoney({ amountMinor: jobOrder.quotedAmountMinor, currency: jobOrder.quotedCurrency }) }}</span></dd>
-          </div>
-          <div v-if="jobOrder.state === 'CLOSED'">
-            <dt>Amount earned</dt>
-            <dd><span class="mx-money">{{ earnedMoneyLabel() }}</span></dd>
-          </div>
-          <div v-if="latestInvoice">
-            <dt>Invoice</dt>
-            <dd><MonoText :value="latestInvoice.invoiceNumber" /> · <span class="mx-money">{{ invoiceMoneyLabel(latestInvoice) }}</span></dd>
-          </div>
-        </dl>
-
-        <div
-          v-if="canGenerateCompletionOutput || canViewClosedOutput || showRenewAction || canUseCompletionReport"
-          class="record-form__actions record-form__actions--left"
-        >
-          <Button
-            v-if="canUseCompletionReport"
-            :label="reportUrl || jobOrder.reportObjectKey ? 'Preview report' : 'Generating...'"
-            icon="pi pi-file-pdf"
-            severity="secondary"
-            :loading="isReportLoading"
-            :disabled="!jobOrder.reportObjectKey"
-            @click="openReport"
-          />
-          <Button
-            v-if="canUseCompletionReport && jobOrder.reportObjectKey"
-            label="Download report"
-            icon="pi pi-download"
-            severity="secondary"
-            :loading="isReportLoading"
-            @click="openReport"
-          />
-          <Button v-if="canOpenInvoiceDraft" label="Create Invoice" icon="pi pi-receipt" severity="secondary" @click="openInvoiceDraft" />
-          <Button v-else-if="canGenerateCompletionOutput && latestInvoice" label="Go to invoice" icon="pi pi-receipt" severity="secondary" @click="openInvoiceDraft" />
-          <Button v-if="canViewClosedOutput" label="View invoice" icon="pi pi-receipt" severity="secondary" @click="openInvoiceDraft" />
-          <Button v-if="showRenewAction" label="Renew" icon="pi pi-refresh" severity="secondary" @click="router.push('/job-orders/new')" />
-        </div>
-        <p v-if="reportError" class="auth-message auth-message--error" role="alert">
-          {{ reportError }}
-        </p>
-      </section>
-
-      <section class="crm-section" aria-labelledby="job-order-actions-title">
-        <h2 id="job-order-actions-title" class="crm-section__title">Actions</h2>
-        <div class="record-form__actions record-form__actions--left">
-          <Button v-if="canCreateVariation" label="Add Variation" icon="pi pi-plus" @click="openVariationForm" />
-          <Button
-            v-for="action in transitionActions"
-            :key="`${action.to}-${action.kind}`"
-            :label="action.label"
-            :severity="action.to === 'CANCELLED' ? 'danger' : undefined"
-            @click="openTransition(action)"
-          />
-          <Button
-            v-if="canManageLifecycle"
-            label="Archive"
-            icon="pi pi-box"
-            severity="secondary"
-            outlined
-            :loading="isSaving"
-            @click="moveToArchive"
-          />
-          <Button
-            v-if="canManageLifecycle"
-            label="Move to trash"
-            icon="pi pi-trash"
-            severity="danger"
-            outlined
-            :loading="isSaving"
-            @click="moveToTrash"
-          />
-        </div>
-        <p v-if="lifecycleError" class="auth-message auth-message--error" role="alert">
-          {{ lifecycleError }}
-        </p>
-        <p v-if="execOwnerTransitions.length" class="crm-empty">
-          Execution-owner transition:
-          <span
-            v-for="rule in execOwnerTransitions"
-            :key="`${rule.from}-${rule.to}`"
-          >
-            <MonoText :value="`${rule.from} -> ${rule.to}`" />
-          </span>
-        </p>
-      </section>
-
-      <section class="crm-section" aria-labelledby="job-order-variation-summary-title">
-        <h2 id="job-order-variation-summary-title" class="crm-section__title">Commercial summary</h2>
-        <dl class="detail-grid">
-          <div>
-            <dt>Baseline</dt>
-            <dd><span class="mx-money">{{ moneyLabel(jobOrder.quotedAmountMinor, jobOrder.quotedCurrency) }}</span></dd>
-          </div>
-          <div>
-            <dt>Approved variations</dt>
-            <dd><span class="mx-money">{{ moneyLabel(approvedVariationAmountMinor, jobOrder.quotedCurrency) }}</span></dd>
-          </div>
-          <div>
-            <dt>Projected total</dt>
-            <dd><span class="mx-money">{{ moneyLabel(projectedTotalAmountMinor, jobOrder.quotedCurrency) }}</span></dd>
-          </div>
-          <div>
-            <dt>Proposed variations</dt>
-            <dd><span class="mx-money">{{ moneyLabel(proposedVariationAmountMinor, jobOrder.quotedCurrency) }}</span></dd>
-          </div>
-        </dl>
-      </section>
-
-      <section class="crm-section" aria-labelledby="job-order-variations-title">
-        <div class="crm-page__header">
-          <h2 id="job-order-variations-title" class="crm-section__title">Variations</h2>
-          <p class="record-form__version">New variations are always PROPOSED.</p>
-        </div>
-
-        <p v-if="variationError" class="auth-message auth-message--error" role="alert">
-          {{ variationError }}
-        </p>
-
-        <form v-if="showVariationForm" class="record-form record-form--wide" @submit.prevent="createVariation">
-          <label class="auth-field" for="variation-reason">
-            <span>Reason</span>
-            <textarea id="variation-reason" v-model="variationReason" class="auth-input record-form__textarea" required />
-            <FieldError :message="variationReasonError" />
-          </label>
-
-          <label class="auth-field" for="variation-currency">
-            <span>Currency</span>
-            <input id="variation-currency" v-model="variationCurrency" class="auth-input mono-input" required />
-          </label>
-
-          <div class="variation-lines">
-            <MaterialLineRow
-              v-for="line in variationLines"
-              :key="line.id"
-              :line="line"
-              :can-remove="variationLines.length > 1"
-              @remove="removeVariationLine"
-            />
-          </div>
-          <FieldError :message="variationLineError" />
-
-          <p class="record-form__version">
-            Computed amount <span class="mx-money">{{ moneyLabel(variationDraftAmountMinor, variationCurrency) }}</span>
-          </p>
-
-          <div class="record-form__actions">
-            <Button label="Add line" severity="secondary" type="button" @click="addVariationLine" />
-            <Button label="Cancel" severity="secondary" type="button" @click="showVariationForm = false" />
-            <Button label="Submit variation" icon="pi pi-save" type="submit" :loading="isSaving" />
-          </div>
-        </form>
-
-        <div v-if="variations.length" class="variation-list">
-          <article v-for="variation in variations" :key="variation.id" class="variation-item">
-            <div class="variation-item__header">
-              <div>
-                <p class="record-form__version">Variation <MonoText :value="variation.id" /></p>
-                <h3 class="variation-item__title">{{ variation.reason }}</h3>
-              </div>
-              <span class="jo-chip" :class="variation.status === 'APPROVED' ? 'mx-status-synced' : variation.status === 'REJECTED' ? 'mx-status-error' : 'mx-status-pending'">
-                {{ variation.status }}
+      <div class="jo-detail-layout">
+        <div class="jo-detail-layout__main">
+          <section class="jo-detail-card" aria-labelledby="job-order-scope-title">
+            <div class="jo-detail-card__header">
+              <h2 id="job-order-scope-title" class="crm-section__title">Scope</h2>
+              <span v-if="jobOrder.port" class="jo-port-pill">{{ jobOrder.port }}</span>
+            </div>
+            <div v-if="categoryLabels.length" class="jo-chip-list">
+              <span v-for="category in categoryLabels" :key="category" class="jo-category-chip">
+                {{ category }}
               </span>
             </div>
-
-            <dl class="detail-grid">
+            <p class="jo-scope-copy">{{ jobOrder.scopeSummary }}</p>
+            <dl class="detail-grid detail-grid--compact">
               <div>
-                <dt>Amount</dt>
-                <dd><span class="mx-money">{{ moneyLabel(variation.amountMinor, variation.amountCurrency) }}</span></dd>
+                <dt>Requested date</dt>
+                <dd>{{ formatDate(jobOrder.createdAt) }}</dd>
               </div>
               <div>
-                <dt>Version</dt>
-                <dd><MonoText :value="variation.version" /></dd>
+                <dt>Scheduled date</dt>
+                <dd>{{ formatDateTime(scheduledHistory?.at ?? jobOrder.plannedStartDate) }}</dd>
               </div>
               <div>
-                <dt>Approver</dt>
-                <dd><MonoText :value="variation.approverId" /></dd>
+                <dt>Deadline</dt>
+                <dd>{{ formatDate(jobOrder.deadline) }}</dd>
               </div>
             </dl>
+            <p v-if="jobOrder.state === 'ON_HOLD' || jobOrder.state === 'CANCELLED'" class="jo-reason">
+              <strong>{{ jobOrder.state === 'ON_HOLD' ? 'Pause reason' : 'Cancellation reason' }}:</strong>
+              {{ (jobOrder.state === 'ON_HOLD' ? pausedHistory?.reason : cancelledHistory?.reason) ?? '—' }}
+            </p>
+          </section>
 
-            <div v-if="variation.status === 'PROPOSED' && (canApproveVariation || canRejectVariation)" class="record-form__actions record-form__actions--left">
-              <Button v-if="canApproveVariation" label="Approve" icon="pi pi-check" :loading="isSaving" @click="decideVariation(variation, 'approve')" />
-              <Button v-if="canRejectVariation" label="Reject" icon="pi pi-times" severity="danger" :loading="isSaving" @click="decideVariation(variation, 'reject')" />
+          <section class="jo-detail-card" aria-labelledby="job-order-variations-title">
+            <div class="jo-detail-card__header">
+              <h2 id="job-order-variations-title" class="crm-section__title">Variations</h2>
+              <p class="record-form__version">New variations are always PROPOSED.</p>
             </div>
-          </article>
+
+            <p v-if="variationError" class="auth-message auth-message--error" role="alert">
+              {{ variationError }}
+            </p>
+
+            <form v-if="showVariationForm" class="record-form record-form--wide" @submit.prevent="createVariation">
+              <label class="auth-field" for="variation-reason">
+                <span>Reason</span>
+                <textarea id="variation-reason" v-model="variationReason" class="auth-input record-form__textarea" required />
+                <FieldError :message="variationReasonError" />
+              </label>
+
+              <label class="auth-field" for="variation-currency">
+                <span>Currency</span>
+                <input id="variation-currency" v-model="variationCurrency" class="auth-input mono-input" required />
+              </label>
+
+              <div class="variation-lines">
+                <MaterialLineRow
+                  v-for="line in variationLines"
+                  :key="line.id"
+                  :line="line"
+                  :can-remove="variationLines.length > 1"
+                  @remove="removeVariationLine"
+                />
+              </div>
+              <FieldError :message="variationLineError" />
+
+              <p class="record-form__version">
+                Computed amount <span class="mx-money">{{ moneyLabel(variationDraftAmountMinor, variationCurrency) }}</span>
+              </p>
+
+              <div class="record-form__actions">
+                <Button label="Add line" severity="secondary" type="button" @click="addVariationLine" />
+                <Button label="Cancel" severity="secondary" type="button" @click="showVariationForm = false" />
+                <Button label="Submit variation" icon="pi pi-save" type="submit" :loading="isSaving" />
+              </div>
+            </form>
+
+            <div v-if="variations.length" class="variation-list">
+              <article v-for="variation in variations" :key="variation.id" class="variation-item">
+                <div class="variation-item__header">
+                  <div>
+                    <p class="record-form__version">Variation <MonoText :value="variation.id" /></p>
+                    <h3 class="variation-item__title">{{ variation.reason }}</h3>
+                  </div>
+                  <span class="jo-chip" :class="variationStatusClass(variation.status)">
+                    {{ variationStatusLabel(variation.status) }}
+                  </span>
+                </div>
+
+                <dl class="detail-grid">
+                  <div>
+                    <dt>Amount</dt>
+                    <dd><span class="mx-money">{{ moneyLabel(variation.amountMinor, variation.amountCurrency) }}</span></dd>
+                  </div>
+                  <div>
+                    <dt>Version</dt>
+                    <dd><MonoText :value="variation.version" /></dd>
+                  </div>
+                  <div>
+                    <dt>Approver</dt>
+                    <dd><MonoText :value="variation.approverId" /></dd>
+                  </div>
+                </dl>
+
+                <div v-if="variation.status === 'PROPOSED' && (canApproveVariation || canRejectVariation)" class="record-form__actions record-form__actions--left">
+                  <Button v-if="canApproveVariation" label="Approve" icon="pi pi-check" :loading="isSaving" @click="decideVariation(variation, 'approve')" />
+                  <Button v-if="canRejectVariation" label="Reject" icon="pi pi-times" severity="danger" :loading="isSaving" @click="decideVariation(variation, 'reject')" />
+                </div>
+              </article>
+            </div>
+
+            <p v-else class="crm-empty">
+              No variations yet.
+            </p>
+          </section>
+
+          <section class="jo-detail-card" aria-labelledby="job-order-documents-title">
+            <div class="jo-detail-card__header">
+              <h2 id="job-order-documents-title" class="crm-section__title">Documents</h2>
+            </div>
+            <div class="jo-document-chip-list">
+              <span class="jo-document-chip">
+                <i class="ti ti-file-text" aria-hidden="true" />
+                Job documents
+              </span>
+              <span v-if="jobOrder.reportObjectKey" class="jo-document-chip">
+                <i class="ti ti-file-report" aria-hidden="true" />
+                Completion report
+              </span>
+              <span v-if="latestInvoice?.pdfObjectKey" class="jo-document-chip">
+                <i class="ti ti-receipt" aria-hidden="true" />
+                Invoice PDF
+              </span>
+            </div>
+          </section>
+
+          <section
+            v-if="canGenerateCompletionOutput || canViewClosedOutput || showRenewAction || canUseCompletionReport"
+            class="jo-detail-card"
+            aria-labelledby="job-order-output-title"
+          >
+            <div class="jo-detail-card__header">
+              <h2 id="job-order-output-title" class="crm-section__title">Output</h2>
+            </div>
+            <div class="record-form__actions record-form__actions--left">
+              <Button
+                v-if="canUseCompletionReport"
+                :label="reportUrl || jobOrder.reportObjectKey ? 'Preview report' : 'Generating...'"
+                icon="pi pi-file-pdf"
+                severity="secondary"
+                :loading="isReportLoading"
+                :disabled="!jobOrder.reportObjectKey"
+                @click="openReport"
+              />
+              <Button
+                v-if="canUseCompletionReport && jobOrder.reportObjectKey"
+                label="Download report"
+                icon="pi pi-download"
+                severity="secondary"
+                :loading="isReportLoading"
+                @click="downloadReport"
+              />
+              <Button v-if="canOpenInvoiceDraft" label="Create Invoice" icon="pi pi-receipt" severity="secondary" @click="openInvoiceDraft" />
+              <Button v-else-if="canGenerateCompletionOutput && latestInvoice" label="Go to invoice" icon="pi pi-receipt" severity="secondary" @click="openInvoiceDraft" />
+              <Button v-if="canViewClosedOutput" label="View invoice" icon="pi pi-receipt" severity="secondary" @click="openInvoiceDraft" />
+              <Button
+                v-if="canUseInvoicePdf"
+                :label="invoicePdfUrl || latestInvoice?.pdfObjectKey ? 'Preview invoice PDF' : 'Invoice PDF generating...'"
+                icon="pi pi-file-pdf"
+                severity="secondary"
+                :loading="isInvoicePdfLoading"
+                :disabled="!latestInvoice?.pdfObjectKey"
+                @click="openInvoicePdf"
+              />
+              <Button
+                v-if="canUseInvoicePdf && latestInvoice?.pdfObjectKey"
+                label="Download invoice PDF"
+                icon="pi pi-download"
+                severity="secondary"
+                :loading="isInvoicePdfLoading"
+                @click="downloadInvoicePdf"
+              />
+              <Button v-if="showRenewAction" label="Renew" icon="pi pi-refresh" severity="secondary" @click="router.push('/job-orders/new')" />
+            </div>
+            <p v-if="reportError" class="auth-message auth-message--error" role="alert">
+              {{ reportError }}
+            </p>
+            <p v-if="invoicePdfError" class="auth-message auth-message--error" role="alert">
+              {{ invoicePdfError }}
+            </p>
+          </section>
+
+          <section class="jo-detail-card" aria-labelledby="job-order-history-title">
+            <div class="jo-detail-card__header">
+              <h2 id="job-order-history-title" class="crm-section__title">History</h2>
+            </div>
+            <ol v-if="recentHistory.length" class="jo-history-list">
+              <li v-for="entry in recentHistory" :key="entry.id" class="jo-history-item">
+                <span class="jo-history-item__dot" aria-hidden="true" />
+                <div>
+                  <p>
+                    Moved to
+                    <span class="jo-history-item__state" :class="jobOrderStateMeta(entry.toState).className">
+                      {{ jobOrderStateMeta(entry.toState).label }}
+                    </span>
+                  </p>
+                  <p class="jo-history-item__meta">
+                    {{ historyActor(entry) }}{{ historyDeviceSuffix(entry) }} · {{ formatRelativeTime(entry.at) }}
+                    <span :title="formatDateTime(entry.at)">· {{ formatDateTime(entry.at) }}</span>
+                  </p>
+                  <p v-if="entry.reason" class="jo-history-item__reason">
+                    {{ entry.reason }}
+                  </p>
+                </div>
+              </li>
+            </ol>
+            <p v-else class="crm-empty">No history yet.</p>
+          </section>
+
+          <section class="jo-detail-card" aria-labelledby="job-order-actions-title">
+            <div class="jo-detail-card__header">
+              <h2 id="job-order-actions-title" class="crm-section__title">Actions</h2>
+            </div>
+            <div class="record-form__actions record-form__actions--left">
+              <Button v-if="canCreateVariation" label="Add Variation" icon="pi pi-plus" @click="openVariationForm" />
+              <Button
+                v-for="action in transitionActions"
+                :key="`${action.to}-${action.kind}`"
+                :label="action.label"
+                :severity="action.to === 'CANCELLED' ? 'danger' : undefined"
+                @click="openTransition(action)"
+              />
+              <Button
+                v-if="canManageLifecycle"
+                label="Archive"
+                icon="pi pi-box"
+                severity="secondary"
+                outlined
+                :loading="isSaving"
+                @click="moveToArchive"
+              />
+              <Button
+                v-if="canManageLifecycle"
+                label="Move to trash"
+                icon="pi pi-trash"
+                severity="danger"
+                outlined
+                :loading="isSaving"
+                @click="moveToTrash"
+              />
+            </div>
+            <p v-if="lifecycleError" class="auth-message auth-message--error" role="alert">
+              {{ lifecycleError }}
+            </p>
+            <p v-if="execOwnerTransitions.length" class="crm-empty">
+              Execution-owner transition:
+              <span
+                v-for="rule in execOwnerTransitions"
+                :key="`${rule.from}-${rule.to}`"
+              >
+                <MonoText :value="`${rule.from} -> ${rule.to}`" />
+              </span>
+            </p>
+          </section>
         </div>
 
-        <p v-else class="crm-empty">
-          No variations yet.
-        </p>
-      </section>
+        <aside class="jo-detail-layout__aside">
+          <section class="jo-detail-card" aria-labelledby="job-order-client-title">
+            <h2 id="job-order-client-title" class="crm-section__title">Client</h2>
+            <p class="jo-card-primary">{{ jobClientName }}</p>
+            <p class="record-form__version"><MonoText :value="jobOrder.clientId" /></p>
+          </section>
 
-      <section class="crm-section" aria-labelledby="job-order-header-title">
+          <section class="jo-detail-card" aria-labelledby="job-order-vessel-title">
+            <h2 id="job-order-vessel-title" class="crm-section__title">Vessel</h2>
+            <p class="jo-card-primary">{{ jobVesselName }}</p>
+            <p v-if="jobOrder.vessel?.imoNumber" class="record-form__version">
+              IMO <MonoText :value="jobOrder.vessel.imoNumber" />
+            </p>
+          </section>
+
+          <section class="jo-detail-card" aria-labelledby="job-order-commercial-title">
+            <h2 id="job-order-commercial-title" class="crm-section__title">Commercial</h2>
+            <dl class="detail-grid detail-grid--single">
+              <div>
+                <dt>Quoted amount</dt>
+                <dd><span class="mx-money">{{ formatMoney({ amountMinor: jobOrder.quotedAmountMinor, currency: jobOrder.quotedCurrency }) }}</span></dd>
+              </div>
+              <div>
+                <dt>Approved variations</dt>
+                <dd><span class="mx-money">{{ moneyLabel(approvedVariationAmountMinor, jobOrder.quotedCurrency) }}</span></dd>
+              </div>
+              <div>
+                <dt>Proposed variations</dt>
+                <dd><span class="mx-money">{{ moneyLabel(proposedVariationAmountMinor, jobOrder.quotedCurrency) }}</span></dd>
+              </div>
+              <div>
+                <dt>Projected total</dt>
+                <dd><span class="mx-money">{{ moneyLabel(projectedTotalAmountMinor, jobOrder.quotedCurrency) }}</span></dd>
+              </div>
+              <div>
+                <dt>Labour rate</dt>
+                <dd>
+                  <span v-if="jobOrder.labourRateAmountMinor != null && jobOrder.labourRateCurrency" class="mx-money">
+                    {{ formatMoney({ amountMinor: jobOrder.labourRateAmountMinor, currency: jobOrder.labourRateCurrency }) }}
+                  </span>
+                  <span v-else>—</span>
+                </dd>
+              </div>
+              <div v-if="jobOrder.state === 'CLOSED'">
+                <dt>Amount earned</dt>
+                <dd><span class="mx-money">{{ earnedMoneyLabel() }}</span></dd>
+              </div>
+              <div v-if="latestInvoice">
+                <dt>Invoice</dt>
+                <dd><MonoText :value="latestInvoice.invoiceNumber" /> · <span class="mx-money">{{ invoiceMoneyLabel(latestInvoice) }}</span></dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="jo-detail-card" aria-labelledby="job-order-assignment-title">
+            <h2 id="job-order-assignment-title" class="crm-section__title">Assignment</h2>
+            <dl class="detail-grid detail-grid--single">
+              <div>
+                <dt>Assigned technicians</dt>
+                <dd>{{ assignedTechnicianNames(jobOrder) }}</dd>
+              </div>
+              <div>
+                <dt>Execution owner</dt>
+                <dd>{{ executionOwnerName(jobOrder) }}</dd>
+              </div>
+              <div v-if="jobOrder.state === 'IN_PROGRESS'">
+                <dt>Device</dt>
+                <dd>{{ historyDevice(startedHistory) }}</dd>
+              </div>
+              <div v-if="jobOrder.state === 'ON_HOLD'">
+                <dt>Person working</dt>
+                <dd>{{ historyActor(lastWorkerBeforePause) }}</dd>
+              </div>
+              <div v-if="jobOrder.state === 'ON_HOLD'">
+                <dt>Device</dt>
+                <dd>{{ historyDevice(lastWorkerBeforePause) }}</dd>
+              </div>
+              <div v-if="['PENDING_REVIEW', 'COMPLETED'].includes(jobOrder.state)">
+                <dt>Submitted by</dt>
+                <dd>{{ historyActor(submittedHistory) }}</dd>
+              </div>
+              <div v-if="['PENDING_REVIEW', 'COMPLETED'].includes(jobOrder.state)">
+                <dt>Completion device</dt>
+                <dd>{{ historyDevice(submittedHistory) }}</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="jo-worklog-placeholder" aria-labelledby="job-order-worklog-title">
+            <i class="ti ti-users" aria-hidden="true" />
+            <div>
+              <h2 id="job-order-worklog-title" class="crm-section__title">Technicians worked</h2>
+              <p>Technician work-log breakdown is coming soon.</p>
+            </div>
+          </section>
+        </aside>
+      </div>
+
+      <section v-if="isEditing" class="crm-section" aria-labelledby="job-order-header-title">
         <div class="crm-page__header">
           <h2 id="job-order-header-title" class="crm-section__title">Header</h2>
           <p v-if="!isHeaderEditable" class="record-form__version">
             Header locked from IN_PROGRESS onward. Add Variation for scope changes.
           </p>
+          <Button label="Done" severity="secondary" outlined @click="cancelEditing" />
         </div>
 
         <form class="record-form" @submit.prevent="saveCategories">
@@ -1042,43 +1230,6 @@ watch(jobOrderId, async () => {
         </dl>
       </section>
 
-      <section class="crm-section" aria-labelledby="job-order-commercial-title">
-        <h2 id="job-order-commercial-title" class="crm-section__title">Commercial</h2>
-        <dl class="detail-grid">
-          <div>
-            <dt>Client</dt>
-            <dd>{{ jobClientName }}</dd>
-          </div>
-          <div>
-            <dt>Vessel</dt>
-            <dd>{{ jobVesselName }}</dd>
-          </div>
-          <div>
-            <dt>Quoted amount</dt>
-            <dd><span class="mx-money">{{ formatMoney({ amountMinor: jobOrder.quotedAmountMinor, currency: jobOrder.quotedCurrency }) }}</span></dd>
-          </div>
-          <div>
-            <dt>Labour rate</dt>
-            <dd>
-              <span v-if="jobOrder.labourRateAmountMinor != null && jobOrder.labourRateCurrency" class="mx-money">
-                {{ formatMoney({ amountMinor: jobOrder.labourRateAmountMinor, currency: jobOrder.labourRateCurrency }) }}
-              </span>
-              <span v-else>—</span>
-            </dd>
-          </div>
-          <div>
-            <dt>Assigned technicians</dt>
-            <dd>
-              <MonoText :value="jobOrder.assignedTechnicianIds.length ? jobOrder.assignedTechnicianIds.join(', ') : null" />
-            </dd>
-          </div>
-          <div>
-            <dt>Execution owner</dt>
-            <dd><MonoText :value="jobOrder.executionOwnerId" /></dd>
-          </div>
-        </dl>
-      </section>
-
     </template>
 
     <div v-if="showTransitionDialog && pendingTransition" class="version-dialog" role="presentation">
@@ -1115,3 +1266,211 @@ watch(jobOrderId, async () => {
     />
   </main>
 </template>
+
+<style scoped>
+.jo-detail-hero {
+  align-items: flex-start;
+  gap: 24px;
+}
+
+.jo-detail-hero__title {
+  margin-top: 6px;
+}
+
+.jo-detail-hero__subtitle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  color: #5C7081;
+  font-size: 13px;
+}
+
+.jo-detail-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.jo-version-badge,
+.jo-port-pill,
+.jo-category-chip,
+.jo-document-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.jo-version-badge {
+  padding: 2px 8px;
+  background: #ECEFF2;
+  color: #5C7081;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+}
+
+.jo-detail-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  gap: 16px;
+  align-items: start;
+}
+
+.jo-detail-layout__main,
+.jo-detail-layout__aside {
+  display: grid;
+  gap: 16px;
+}
+
+.jo-detail-card {
+  padding: 18px;
+  border: 0.5px solid #D3DCE3;
+  border-radius: 8px;
+  background: #FFFFFF;
+}
+
+.jo-detail-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.jo-port-pill {
+  padding: 3px 10px;
+  background: #E2EFFC;
+  color: #0F4C92;
+}
+
+.jo-chip-list,
+.jo-document-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.jo-category-chip {
+  padding: 3px 10px;
+  background: #F4F7FA;
+  color: #34495C;
+}
+
+.jo-scope-copy {
+  margin: 14px 0;
+  color: #11202E;
+  line-height: 1.55;
+}
+
+.jo-reason {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #FBF1C9;
+  color: #7A5A00;
+  font-size: 13px;
+}
+
+.detail-grid--compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.detail-grid--single {
+  grid-template-columns: 1fr;
+}
+
+.jo-document-chip {
+  gap: 6px;
+  padding: 5px 10px;
+  background: #F4F7FA;
+  color: #34495C;
+}
+
+.jo-history-list {
+  display: grid;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.jo-history-item {
+  display: grid;
+  grid-template-columns: 12px 1fr;
+  gap: 10px;
+}
+
+.jo-history-item__dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: #0B2A4A;
+}
+
+.jo-history-item p {
+  margin: 0;
+}
+
+.jo-history-item__state {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 2px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.jo-history-item__meta,
+.jo-history-item__reason {
+  margin-top: 4px;
+  color: #5C7081;
+  font-size: 12px;
+}
+
+.jo-card-primary {
+  margin: 8px 0 4px;
+  color: #11202E;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.jo-worklog-placeholder {
+  display: flex;
+  gap: 10px;
+  padding: 12px;
+  border: 0.5px dashed #C2CCD4;
+  border-radius: 8px;
+  background: #F4F7FA;
+}
+
+.jo-worklog-placeholder i {
+  color: #8B98A3;
+  font-size: 18px;
+}
+
+.jo-worklog-placeholder p {
+  margin: 6px 0 0;
+  color: #8B98A3;
+  font-style: italic;
+}
+
+@media (max-width: 960px) {
+  .jo-detail-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-grid--compact {
+    grid-template-columns: 1fr;
+  }
+
+  .jo-detail-hero__actions {
+    justify-content: flex-start;
+  }
+}
+</style>

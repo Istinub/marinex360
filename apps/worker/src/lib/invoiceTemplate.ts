@@ -2,6 +2,7 @@
 // HTML string out) so it's unit-testable without launching a browser. Imports the SAME token
 // CSS the web app uses (marinex360-design-tokens.css) so branding is identical everywhere.
 import { BANK_DETAILS } from './invoicePdfConfig.js';
+import type { BrandingLogo } from './branding.js';
 
 export interface InvoiceForPdf {
   invoiceNumber: string;
@@ -35,7 +36,7 @@ const sgtDate = (d: Date | null) =>
       })
     : '';
 
-export function renderInvoiceHtml(inv: InvoiceForPdf): string {
+export function renderInvoiceHtml(inv: InvoiceForPdf, brandingLogo?: BrandingLogo): string {
   const rows = inv.lines.map((l) => `
     <tr>
       <td>${l.description}</td>
@@ -52,6 +53,8 @@ export function renderInvoiceHtml(inv: InvoiceForPdf): string {
   .mono { font-family: 'IBM Plex Mono', monospace; }
   .right { text-align: right; }
   header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand img { max-width: 148px; max-height: 56px; object-fit: contain; }
   .invoiceNumber { font-family: 'IBM Plex Mono', monospace; font-size: 14px; }
   table { width: 100%; border-collapse: collapse; margin-top: 16px; }
   th, td { padding: 8px; border-bottom: 1px solid #E0E0E0; }
@@ -63,7 +66,10 @@ export function renderInvoiceHtml(inv: InvoiceForPdf): string {
 </style></head>
 <body>
   <header>
-    <div><strong>TKMR Marine &amp; Offshore Engineering Pte. Ltd.</strong></div>
+    <div class="brand">
+      ${brandingLogo ? `<img src="${brandingLogo.dataUri}" alt="${brandingLogo.filename}" />` : ''}
+      <strong>TKMR Marine &amp; Offshore Engineering Pte. Ltd.</strong>
+    </div>
     <div class="right">
       <div class="invoiceNumber">${inv.invoiceNumber}</div>
       <div>Issued: ${sgtDate(inv.issuedAt)}</div>

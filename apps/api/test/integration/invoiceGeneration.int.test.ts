@@ -343,7 +343,7 @@ run('Invoice generation (integration)', () => {
     expect(await prisma.invoice.count({ where: { jobOrderId: jo.id } })).toBe(0);
   });
 
-  it('D-031: attempting to generate an invoice for an unsupported branch (non-SG) is rejected explicitly', async () => {
+  it('uses the JobOrder currency, not branch default, when generating the invoice draft', async () => {
     const admin = await prisma.user.findUniqueOrThrow({ where: { email: 'admin@tkmr.local' } });
     const clientMY = await prisma.client.upsert({
       where: { id: 'client-inttest-invoice-my' },
@@ -365,10 +365,44 @@ run('Invoice generation (integration)', () => {
         origin: 'MANUAL',
         quotedAmountMinor: 100000,
         quotedCurrency: 'MYR',
+        labourRateAmountMinor: 9000,
+        labourRateCurrency: 'MYR',
         state: 'DRAFT',
         createdBy: admin.id,
         assignedTechnicianIds: [admin.id],
         executionOwnerId: admin.id,
+      },
+    });
+    await prisma.workLog.create({
+      data: {
+        jobOrderId: joMY.id,
+        technicianId: admin.id,
+        startedAt: new Date('2026-07-02T00:00:00.000Z'),
+        endedAt: new Date('2026-07-02T02:00:00.000Z'),
+        labourRateAmountMinor: 9000,
+        labourRateCurrency: 'MYR',
+      },
+    });
+    await prisma.materialLine.create({
+      data: {
+        jobOrderId: joMY.id,
+        description: 'MYR field material',
+        quantity: 1,
+        unit: 'pcs',
+        unitCostAmountMinor: 5000,
+        unitCostCurrency: 'MYR',
+        source: 'FIELD',
+        addedById: admin.id,
+      },
+    });
+    await prisma.variation.create({
+      data: {
+        jobOrderId: joMY.id,
+        reason: 'MYR approved variation',
+        amountMinor: 7000,
+        amountCurrency: 'MYR',
+        status: 'APPROVED',
+        approverId: admin.id,
       },
     });
 
@@ -407,11 +441,13 @@ run('Invoice generation (integration)', () => {
       payload: { to: 'COMPLETED', version: v },
     });
 
-    expect(completed.statusCode).toBe(400);
-    expect(completed.json().error.message).toMatch(/not yet supported for auto-invoicing/);
-    const freshJoMY = await prisma.jobOrder.findUniqueOrThrow({ where: { id: joMY.id } });
-    expect(freshJoMY.state).toBe('PENDING_REVIEW');
-    expect(freshJoMY.version).toBe(v);
-    expect(await prisma.invoice.count({ where: { jobOrderId: joMY.id } })).toBe(0);
+    expect(completed.statusCode).toBe(200);
+    const invoice = await prisma.invoice.findFirstOrThrow({ where: { jobOrderId: joMY.id }, include: { lines: true } });
+    expect(invoice.status).toBe('DRAFT');
+    expect(invoice.totalCurrency).toBe('MYR');
+    expect(invoice.gstCurrency).toBe('MYR');
+    expect(invoice.lines).toHaveLength(3);
+    expect(invoice.lines.every((line) => line.lineTotalCurrency === 'MYR')).toBe(true);
+    expect(invoice.totalAmountMinor).toBe((2 * 9000) + 5000 + 7000);
   });
 });

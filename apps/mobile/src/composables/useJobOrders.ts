@@ -48,6 +48,7 @@ export interface MobileJobOrder {
   client?: NamedRelation | null;
   vessel?: NamedRelation | null;
   checklistItems?: JobOrderChecklistItem[];
+  workers?: JobOrderWorker[];
 }
 
 export interface JobOrderChecklistItem {
@@ -58,6 +59,13 @@ export interface JobOrderChecklistItem {
   checked: boolean;
   createdAt?: string | null;
   updatedAt?: string | null;
+}
+
+export interface JobOrderWorker {
+  id: string;
+  jobOrderId: string;
+  name: string;
+  addedAt: string;
 }
 
 interface JoCacheRow {
@@ -338,6 +346,34 @@ export async function updateJobOrderChecklistItem(jobOrderId: string, itemId: st
   const updated = await jsonResponse<JobOrderChecklistItem>(response);
   await cacheJobOrderChecklistItems(jobOrderId, [updated]);
   return updated;
+}
+
+export async function loadJobOrderWorkers(jobOrderId: string): Promise<JobOrderWorker[]> {
+  const response = await authenticatedFetch(`${apiBase()}/job-orders/${jobOrderId}/workers`, {
+    headers: { Accept: 'application/json' },
+  });
+  return jsonResponse<JobOrderWorker[]>(response);
+}
+
+export async function addJobOrderWorker(jobOrderId: string, name: string): Promise<JobOrderWorker> {
+  const response = await authenticatedFetch(`${apiBase()}/job-orders/${jobOrderId}/workers`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ name }),
+  });
+  return jsonResponse<JobOrderWorker>(response);
+}
+
+export async function suggestJobOrderWorkers(query: string): Promise<string[]> {
+  const cleanQuery = query.trim();
+  if (!cleanQuery) return [];
+  const response = await authenticatedFetch(`${apiBase()}/job-orders/workers/suggest?q=${encodeURIComponent(cleanQuery)}`, {
+    headers: { Accept: 'application/json' },
+  });
+  return jsonResponse<string[]>(response);
 }
 
 export async function cacheJobOrderChecklistItems(jobOrderId: string, items: JobOrderChecklistItem[]): Promise<void> {

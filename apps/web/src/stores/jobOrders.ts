@@ -7,6 +7,10 @@ export type JobOrderReportResponse =
   | { status: 'PENDING' }
   | { status: 'READY'; url: string; objectKey: string };
 
+export type PdfUrlResponse =
+  | { status: 'PENDING' }
+  | { status: 'READY'; url: string; objectKey: string };
+
 export interface JobOrderCreateInput {
   branch?: string;
   clientId?: string;
@@ -89,6 +93,10 @@ export const useJobOrdersStore = defineStore('jobOrders', () => {
     return get<JobOrderReportResponse>(`/job-orders/${id}/report`);
   }
 
+  function loadInvoicePdf(id: string): Promise<PdfUrlResponse> {
+    return get<PdfUrlResponse>(`/invoices/${id}/pdf`);
+  }
+
   async function createJobOrder(input: JobOrderCreateInput): Promise<JobOrder> {
     const created = await post<JobOrder, JobOrderCreateInput>('/job-orders', input);
     jobOrders.value = [created, ...jobOrders.value.filter((jobOrder) => jobOrder.id !== created.id)];
@@ -159,6 +167,7 @@ export const useJobOrdersStore = defineStore('jobOrders', () => {
     loadArchivedJobOrders,
     loadJobOrder,
     loadJobOrderReport,
+    loadInvoicePdf,
     createJobOrder,
     updateJobOrder,
     updateJobOrderCategories,

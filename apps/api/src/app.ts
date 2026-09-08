@@ -17,6 +17,7 @@ import { certificateRoutes } from './routes/certificates.js';
 import { syncRoutes } from './routes/sync.js';
 import { jobRequestRoutes } from './routes/jobRequests.js';
 import { deviceRoutes } from './routes/devices.js';
+import { brandingSettingsRoutes } from './routes/brandingSettings.js';
 
 export interface AppDeps { prisma: PrismaClient; accessSecret: string; presignPut: PresignPut; }
 
@@ -57,6 +58,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   syncRoutes(app, deps.prisma);
   jobRequestRoutes(app, deps.prisma);
   deviceRoutes(app, deps.prisma, deps.accessSecret);
+  brandingSettingsRoutes(app, deps.prisma);
 
   return app;
 }

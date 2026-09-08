@@ -25,6 +25,7 @@ import JobRequestQueueView from '@/views/job-requests/JobRequestQueueView.vue';
 import InvoiceDetailView from '@/views/invoices/InvoiceDetailView.vue';
 import ReportsView from '@/views/reports/ReportsView.vue';
 import AccountManagementView from '@/views/settings/AccountManagementView.vue';
+import BrandingSettingsView from '@/views/settings/BrandingSettingsView.vue';
 import DeviceTroubleshootingView from '@/views/settings/DeviceTroubleshootingView.vue';
 import DevicesView from '@/views/settings/DevicesView.vue';
 import JobExecutionSettingsView from '@/views/settings/JobExecutionSettingsView.vue';
@@ -198,6 +199,12 @@ const routes = [
         path: 'settings/devices',
         name: 'settings-devices',
         component: DevicesView,
+        meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
+      },
+      {
+        path: 'settings/branding',
+        name: 'settings-branding',
+        component: BrandingSettingsView,
         meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
       },
       {

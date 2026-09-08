@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import puppeteer from 'puppeteer-core';
 import { Storage } from '@marinex360/storage';
 import { renderJobOrderReportHtml } from '../lib/jobOrderReportTemplate.js';
+import { loadBrandingLogo } from '../lib/branding.js';
 
 const prisma = new PrismaClient();
 const storage = Storage.fromEnv();
@@ -28,7 +29,8 @@ export async function generateJobOrderReport(jobOrderId: string): Promise<{ repo
       signature: true,
     },
   });
-  const html = renderJobOrderReportHtml(jobOrder);
+  const brandingLogo = await loadBrandingLogo(prisma);
+  const html = renderJobOrderReportHtml(jobOrder, brandingLogo);
 
   const execPath = process.env.PUPPETEER_EXECUTABLE_PATH ?? '/usr/bin/chromium';
   const browser = await puppeteer.launch({

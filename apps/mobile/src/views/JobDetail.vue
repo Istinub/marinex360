@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import Button from 'primevue/button';
+import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
 import ProgressSpinner from 'primevue/progressspinner';
 import Textarea from 'primevue/textarea';
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
 import MobileBackLink from '@/components/MobileBackLink.vue';
 import { currentSessionSnapshot } from '@/composables/useAuth';
@@ -12,7 +13,11 @@ import { recordJobOpened } from '@/composables/useTodayActivity';
 import {
   loadCachedJobOrder,
   loadLiveJobOrder,
+  addJobOrderWorker,
+  loadJobOrderWorkers,
+  suggestJobOrderWorkers,
   transitionJobOrder,
+  type JobOrderWorker,
   type JobState,
   type MobileJobOrder,
 } from '@/composables/useJobOrders';
@@ -39,6 +44,14 @@ const showPauseDialog = ref(false);
 const resumeReason = ref('');
 const resumeFieldError = ref<string | null>(null);
 const showResumeDialog = ref(false);
+const workers = ref<JobOrderWorker[]>([]);
+const showWorkerDialog = ref(false);
+const workerDialogMode = ref<'start' | 'add'>('add');
+const workerName = ref('');
+const workerFieldError = ref<string | null>(null);
+const workerSuggestions = ref<string[]>([]);
+const isSavingWorker = ref(false);
+let workerSuggestTimer: ReturnType<typeof setTimeout> | null = null;
 
 const currentUserId = computed(() => currentSessionSnapshot()?.userId ?? null);
 const isExecutionOwner = computed(() => Boolean(jobOrder.value?.executionOwnerId && jobOrder.value.executionOwnerId === currentUserId.value));
@@ -46,6 +59,7 @@ const showOwnerWarning = computed(() => Boolean(jobOrder.value?.executionOwnerId
 const canStart = computed(() => jobOrder.value?.state === 'SCHEDULED' && jobOrder.value.canStart !== false && jobOrder.value.readOnly !== true);
 const canPause = computed(() => jobOrder.value?.state === 'IN_PROGRESS' && jobOrder.value.readOnly !== true && isExecutionOwner.value);
 const canComplete = computed(() => jobOrder.value?.state === 'IN_PROGRESS' && jobOrder.value.readOnly !== true && isExecutionOwner.value);
+const canAddWorker = computed(() => jobOrder.value?.state === 'IN_PROGRESS' && jobOrder.value.readOnly !== true && isExecutionOwner.value);
 const canResume = computed(() => jobOrder.value?.state === 'ON_HOLD' && jobOrder.value.canResume !== false && jobOrder.value.readOnly !== true);
 const canTransitionToInProgress = computed(() => canStart.value || canResume.value);
 const inProgressTransitionLabel = computed(() => (jobOrder.value?.state === 'SCHEDULED' ? 'Start job' : 'Resume'));
@@ -72,6 +86,7 @@ function applyJobOrder(nextJobOrder: MobileJobOrder): void {
   jobNumber.value = nextJobOrder.joNumber ?? nextJobOrder.id;
   vesselName.value = nextJobOrder.vessel?.name ?? nextJobOrder.vesselName ?? 'No vessel on record';
   clientName.value = nextJobOrder.client?.name ?? nextJobOrder.clientName ?? 'No client on record';
+  if (Array.isArray(nextJobOrder.workers)) workers.value = nextJobOrder.workers;
 }
 
 async function loadJob(): Promise<void> {
@@ -88,6 +103,7 @@ async function loadJob(): Promise<void> {
 
     if (typeof navigator === 'undefined' || navigator.onLine) {
       applyJobOrder(await loadLiveJobOrder(id));
+      workers.value = await loadJobOrderWorkers(id);
     } else if (!cached) {
       throw new Error('Job order is not available offline.');
     }
@@ -128,6 +144,8 @@ async function startJob(): Promise<void> {
     const updated = await transitionJobOrder(jobOrder.value, 'IN_PROGRESS');
     applyJobOrder(updated);
     successMessage.value = 'Job started.';
+    workerDialogMode.value = 'start';
+    showWorkerDialog.value = true;
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : 'Unable to start job.';
   } finally {
@@ -192,6 +210,72 @@ function beginInProgressTransition(): void {
   }
   if (jobOrder.value?.state === 'ON_HOLD') showResumeDialog.value = true;
 }
+
+function openWorkerDialog(mode: 'start' | 'add' = 'add'): void {
+  workerDialogMode.value = mode;
+  workerName.value = '';
+  workerFieldError.value = null;
+  workerSuggestions.value = [];
+  showWorkerDialog.value = true;
+}
+
+function closeWorkerDialog(): void {
+  showWorkerDialog.value = false;
+  workerName.value = '';
+  workerFieldError.value = null;
+  workerSuggestions.value = [];
+}
+
+async function saveWorker(addAnother = false): Promise<void> {
+  if (!jobOrder.value) return;
+  const cleanName = workerName.value.trim();
+  workerFieldError.value = null;
+  if (!cleanName) {
+    workerFieldError.value = 'Name is required.';
+    return;
+  }
+
+  isSavingWorker.value = true;
+  errorMessage.value = null;
+  try {
+    const created = await addJobOrderWorker(jobOrder.value.id, cleanName);
+    workers.value = [created, ...workers.value.filter((worker) => worker.id !== created.id)];
+    workerName.value = '';
+    workerSuggestions.value = [];
+    successMessage.value = 'Worker added.';
+    if (!addAnother) closeWorkerDialog();
+  } catch (error) {
+    workerFieldError.value = error instanceof Error ? error.message : 'Unable to add worker.';
+  } finally {
+    isSavingWorker.value = false;
+  }
+}
+
+function continueWorkerDialog(): void {
+  if (!workerName.value.trim()) {
+    closeWorkerDialog();
+    return;
+  }
+  void saveWorker(false);
+}
+
+watch(workerName, (value) => {
+  if (workerSuggestTimer) clearTimeout(workerSuggestTimer);
+  const cleanValue = value.trim();
+  if (cleanValue.length < 2) {
+    workerSuggestions.value = [];
+    return;
+  }
+  workerSuggestTimer = setTimeout(() => {
+    suggestJobOrderWorkers(cleanValue)
+      .then((names) => {
+        workerSuggestions.value = names;
+      })
+      .catch(() => {
+        workerSuggestions.value = [];
+      });
+  }, 250);
+});
 
 const checklistPath = computed(() => `/jobs/${jobOrderId.value}/checklist`);
 const materialsPath = computed(() => `/jobs/${jobOrderId.value}/materials`);
@@ -289,6 +373,20 @@ onMounted(() => {
       </RouterLink>
     </section>
 
+    <section v-if="jobOrder && ['IN_PROGRESS', 'ON_HOLD', 'PENDING_REVIEW', 'COMPLETED', 'INVOICED', 'CLOSED'].includes(jobOrder.state)" class="job-detail__card" aria-label="Workers on this job">
+      <div class="job-detail__section-head">
+        <div>
+          <h2>Who's on this job?</h2>
+          <p>Field-worker roster for this job.</p>
+        </div>
+        <Button v-if="canAddWorker" label="Add worker" icon="pi pi-user-plus" severity="secondary" outlined @click="openWorkerDialog('add')" />
+      </div>
+      <div v-if="workers.length" class="job-detail__worker-list">
+        <span v-for="worker in workers" :key="worker.id" class="job-detail__worker-chip">{{ worker.name }}</span>
+      </div>
+      <p v-else class="job-detail__empty-note">No workers added yet.</p>
+    </section>
+
     <section v-if="showExecutionTabs" class="job-detail__execution" aria-label="Execution actions">
       <div class="job-detail__work-grid" aria-label="Job data entry">
         <RouterLink class="job-detail__work-action" :to="checklistPath">
@@ -355,6 +453,39 @@ onMounted(() => {
         <div class="job-detail__dialog-actions">
           <Button label="Cancel" severity="secondary" @click="showResumeDialog = false" />
           <Button :label="inProgressTransitionLabel" :loading="isSaving" @click="resumeJob" />
+        </div>
+      </section>
+    </div>
+
+    <div v-if="showWorkerDialog" class="job-detail__dialog" role="presentation">
+      <section class="job-detail__dialog-card" role="dialog" aria-modal="true" aria-labelledby="worker-title">
+        <h2 id="worker-title">{{ workerDialogMode === 'start' ? "Who's on this job?" : 'Add worker' }}</h2>
+        <p v-if="workerDialogMode === 'start'" class="job-detail__dialog-copy">
+          Add the field-worker names for this job now, or skip and add them later.
+        </p>
+        <label class="job-detail__field" for="worker-name">
+          <span>Name</span>
+          <InputText id="worker-name" v-model="workerName" class="job-detail__input" autocomplete="off" />
+          <small v-if="workerFieldError" class="job-detail__error">{{ workerFieldError }}</small>
+        </label>
+        <div v-if="workerSuggestions.length" class="job-detail__suggestions" role="listbox" aria-label="Worker suggestions">
+          <button
+            v-for="suggestion in workerSuggestions"
+            :key="suggestion"
+            class="job-detail__suggestion"
+            type="button"
+            @click="workerName = suggestion"
+          >
+            {{ suggestion }}
+          </button>
+        </div>
+        <div v-if="workers.length" class="job-detail__worker-list">
+          <span v-for="worker in workers" :key="worker.id" class="job-detail__worker-chip">{{ worker.name }}</span>
+        </div>
+        <div class="job-detail__dialog-actions">
+          <Button :label="workerDialogMode === 'start' ? 'Skip' : 'Done'" severity="secondary" @click="closeWorkerDialog" />
+          <Button label="Add another" severity="secondary" outlined :loading="isSavingWorker" @click="saveWorker(true)" />
+          <Button label="Continue" :loading="isSavingWorker" @click="continueWorkerDialog" />
         </div>
       </section>
     </div>
@@ -457,6 +588,53 @@ onMounted(() => {
   margin: 0;
   font-size: var(--fs-body);
   line-height: var(--lh-base);
+}
+
+.job-detail__section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.job-detail__section-head h2,
+.job-detail__section-head p,
+.job-detail__dialog-copy,
+.job-detail__empty-note {
+  margin: 0;
+}
+
+.job-detail__section-head h2 {
+  font-size: var(--fs-body-lg);
+  font-weight: var(--fw-semibold);
+}
+
+.job-detail__section-head p,
+.job-detail__dialog-copy,
+.job-detail__empty-note {
+  color: var(--color-text-muted);
+  font-size: var(--fs-body-sm);
+  line-height: var(--lh-base);
+}
+
+.job-detail__worker-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.job-detail__worker-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 4px 10px;
+  border: var(--border-1);
+  border-radius: var(--radius-pill);
+  background: var(--color-canvas);
+  color: var(--color-text);
+  font-size: var(--fs-body-sm);
+  font-weight: var(--fw-semibold);
 }
 
 .job-detail__documents-link,
@@ -636,6 +814,29 @@ onMounted(() => {
   width: 100%;
   font-family: var(--font-ui);
   font-size: var(--fs-body);
+}
+
+.job-detail__suggestions {
+  display: grid;
+  overflow: hidden;
+  border: var(--border-1);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.job-detail__suggestion {
+  min-height: var(--tap-min);
+  padding: var(--sp-2) var(--sp-3);
+  border: 0;
+  border-bottom: var(--border-1);
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+}
+
+.job-detail__suggestion:last-child {
+  border-bottom: 0;
 }
 
 .job-detail__error {

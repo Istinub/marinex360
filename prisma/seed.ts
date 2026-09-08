@@ -185,6 +185,12 @@ async function main() {
     });
   }
 
+  await prisma.brandingSettings.upsert({
+    where: { id: 'singleton' },
+    update: { logoFilename: 'TKMR_Logo.png', updatedBy: admin.id },
+    create: { id: 'singleton', logoFilename: 'TKMR_Logo.png', updatedBy: admin.id },
+  });
+
   void finance;
   console.log('Seeded: 7 users, 2 contacts, 2 clients, 2 vessels, 2 job orders (DRAFT + IN_PROGRESS), 5 devices, 6 checklist categories.');
   console.log(`Local login password for all seed users: ${PW}`);

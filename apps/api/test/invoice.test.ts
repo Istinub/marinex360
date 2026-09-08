@@ -75,9 +75,22 @@ describe('buildDraftInvoice (FR-40)', () => {
     expect(draft.lines[0].unitPriceCurrency).toBe('SGD');
   });
 
-  it('D-031: unsupported branch is rejected explicitly, not silently guessed', () => {
+  it('D-031: missing branch/default currency is rejected explicitly, not silently guessed', () => {
     expect(() => buildDraftInvoice({ branch: 'MY', workLogs: [], materialLines: [], variations: [] }))
-      .toThrowError(/not yet supported for auto-invoicing/);
+      .toThrowError(/no invoice currency configured/);
+  });
+
+  it('uses a JobOrder-provided currency instead of requiring a branch default', () => {
+    const draft = buildDraftInvoice({
+      branch: 'MY',
+      currency: 'MYR',
+      workLogs: [{ startedAt: h(0), endedAt: h(1), labourRateAmountMinor: 10000, labourRateCurrency: 'MYR' }],
+      materialLines: [{ description: 'x', quantity: 1, unit: 'pcs', unitCostAmountMinor: 1000, unitCostCurrency: 'MYR' }],
+      variations: [{ reason: 'extra', status: 'APPROVED', amountMinor: 2000, amountCurrency: 'MYR' }],
+    });
+    expect(draft.currency).toBe('MYR');
+    expect(draft.lines).toHaveLength(3);
+    expect(draft.totalAmountMinor).toBe(13000);
   });
 
   it('D-031: a line in the wrong currency is rejected, never silently mixed or converted', () => {
