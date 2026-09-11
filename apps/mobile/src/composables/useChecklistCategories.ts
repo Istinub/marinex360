@@ -5,13 +5,13 @@ export interface ChecklistTemplateItem {
   id: string;
   categoryId: string;
   label: string;
-  sortOrder: number;
+  createdAt?: string | null;
 }
 
 export interface ChecklistCategory {
   id: string;
   name: string;
-  sortOrder: number;
+  createdAt?: string | null;
   items: ChecklistTemplateItem[];
 }
 
@@ -45,14 +45,14 @@ function parseItems(value: string): ChecklistTemplateItem[] {
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((item, index) => {
+    return parsed.flatMap((item) => {
       const row = item as Partial<ChecklistTemplateItem>;
       if (typeof row.id !== 'string' || typeof row.label !== 'string') return [];
       return [{
         id: row.id,
         categoryId: typeof row.categoryId === 'string' ? row.categoryId : '',
         label: row.label,
-        sortOrder: typeof row.sortOrder === 'number' ? row.sortOrder : (index + 1) * 10,
+        createdAt: typeof row.createdAt === 'string' ? row.createdAt : null,
       }];
     });
   } catch {
@@ -82,7 +82,7 @@ async function cacheCategories(categories: ChecklistCategory[]): Promise<void> {
           id: item.id,
           categoryId: category.id,
           label: item.label,
-          sortOrder: item.sortOrder,
+          createdAt: item.createdAt ?? null,
         }))),
       ],
     );
@@ -100,12 +100,12 @@ export async function loadCachedChecklistCategories(): Promise<ChecklistCategory
      ORDER BY service_category ASC`,
   );
 
-  return rows.map((row, index) => {
+  return rows.map((row) => {
     const categoryId = row.service_category ?? row.id.replace(/^fixed-/, '');
     return {
       id: categoryId,
       name: row.name?.replace(/\s+checklist$/i, '') || categoryId,
-      sortOrder: (index + 1) * 10,
+      createdAt: null,
       items: parseItems(row.items_json).map((item) => ({ ...item, categoryId })),
     };
   });

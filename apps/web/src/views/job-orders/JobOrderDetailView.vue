@@ -11,7 +11,7 @@ import NotFoundState from '@/components/common/NotFoundState.vue';
 import VersionConflictDialog from '@/components/common/VersionConflictDialog.vue';
 import { post } from '@/lib/api/client';
 import { ApiResponseError } from '@/lib/api/errors';
-import type { Invoice, JobOrder, JobState, JobStatusHistoryEntry, Variation, VariationStatus } from '@/lib/api/types';
+import type { Invoice, JobOrder, JobOrderEditHistoryEntry, JobState, JobStatusHistoryEntry, Variation, VariationStatus } from '@/lib/api/types';
 import { formatMoney } from '@/lib/money';
 import { jobOrderStateMeta } from '@/composables/useJobOrderStateMeta';
 import { useAuthStore } from '@/stores/auth';
@@ -109,7 +109,8 @@ const officeRoles = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN', 'DIRECTOR'];
 const schedulerRoles = ['SYSTEM_ADMIN', 'DIRECTOR'];
 const financeRoles = ['FINANCE', 'SYSTEM_ADMIN', 'DIRECTOR'];
 const cancelRoles = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN', 'DIRECTOR'];
-const variationCreateRoles = ['SYSTEM_ADMIN', 'OPS_SUPERVISOR'];
+const variationCreateRoles = ['SYSTEM_ADMIN', 'OPS_SUPERVISOR', 'DIRECTOR'];
+const terminalVariationStates: JobState[] = ['CLOSED', 'CANCELLED'];
 const variationApproveRoles = ['DIRECTOR', 'SYSTEM_ADMIN'];
 const variationRejectRoles = ['DIRECTOR', 'SYSTEM_ADMIN'];
 const lifecycleRoles = ['DIRECTOR', 'SYSTEM_ADMIN'];
@@ -132,11 +133,11 @@ const josmRules: JosmRule[] = [
 ];
 
 const roles = computed(() => auth.identity?.roles ?? []);
-const canCreateVariation = computed(() => roles.value.some((role) => variationCreateRoles.includes(role)));
 const canApproveVariation = computed(() => roles.value.some((role) => variationApproveRoles.includes(role)));
 const canRejectVariation = computed(() => roles.value.some((role) => variationRejectRoles.includes(role)));
 const canManageLifecycle = computed(() => roles.value.some((role) => lifecycleRoles.includes(role)));
 const isHeaderEditable = computed(() => jobOrder.value?.state === 'DRAFT' || jobOrder.value?.state === 'SCHEDULED');
+const canEditJobOrderForm = computed(() => isHeaderEditable.value && roles.value.some((role) => officeRoles.includes(role)));
 const approvedVariationAmountMinor = computed(() =>
   variations.value
     .filter((variation) => variation.status === 'APPROVED')
@@ -159,17 +160,10 @@ const variationDraftAmountMinor = computed(() =>
 const stateMeta = computed(() => jobOrder.value ? jobOrderStateMeta(jobOrder.value.state) : null);
 const sortedHistory = computed(() => [...(jobOrder.value?.statusHistory ?? [])].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime()));
 const scheduledHistory = computed(() => firstHistoryTo('SCHEDULED'));
-const startedHistory = computed(() => firstHistoryTo('IN_PROGRESS'));
 const submittedHistory = computed(() => firstHistoryTo('PENDING_REVIEW'));
 const completedHistory = computed(() => firstHistoryTo('COMPLETED'));
 const cancelledHistory = computed(() => lastHistoryTo('CANCELLED'));
 const pausedHistory = computed(() => lastHistoryTo('ON_HOLD'));
-const lastWorkerBeforePause = computed(() => {
-  const pauseAt = pausedHistory.value ? new Date(pausedHistory.value.at).getTime() : Number.POSITIVE_INFINITY;
-  return [...sortedHistory.value]
-    .reverse()
-    .find((entry) => entry.toState === 'IN_PROGRESS' && new Date(entry.at).getTime() <= pauseAt) ?? null;
-});
 const latestInvoice = computed(() => jobOrder.value?.invoices?.[0] ?? null);
 const earnedAmount = computed(() => {
   const invoice = latestInvoice.value;
@@ -179,12 +173,29 @@ const earnedAmount = computed(() => {
 });
 const jobClientName = computed(() => jobOrder.value?.client?.name ?? jobOrder.value?.clientId ?? '—');
 const jobVesselName = computed(() => jobOrder.value?.vessel?.name ?? jobOrder.value?.vesselId ?? '—');
+const jobVesselImo = computed(() => displayImo(jobOrder.value?.vessel?.imoNumber));
 const categoryLabels = computed(() =>
   (jobOrder.value?.serviceCategories ?? []).map((category) =>
     categoryOptions.value.find((option) => option.value === category)?.label ?? category,
   ),
 );
-const recentHistory = computed(() => [...sortedHistory.value].reverse());
+const recentHistory = computed(() => [
+  ...sortedHistory.value.map((entry) => ({ id: `status-${entry.id}`, type: 'status' as const, at: entry.at, entry })),
+  ...(jobOrder.value?.editHistory ?? []).map((entry) => ({ id: `edit-${entry.id}`, type: 'edit' as const, at: entry.createdAt, entry })),
+].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()));
+const canCreateVariation = computed(() => {
+  const state = jobOrder.value?.state;
+  return Boolean(
+    state
+    && !terminalVariationStates.includes(state)
+    && roles.value.some((role) => variationCreateRoles.includes(role)),
+  );
+});
+const variationCreateHelper = computed(() =>
+  roles.value.some((role) => ['SYSTEM_ADMIN', 'DIRECTOR'].includes(role))
+    ? 'Director/Admin variations are approved immediately. Ops variations remain proposed.'
+    : 'New variations are submitted as PROPOSED.',
+);
 const canGenerateCompletionOutput = computed(() => jobOrder.value?.state === 'COMPLETED');
 const canViewClosedOutput = computed(() => jobOrder.value?.state === 'CLOSED');
 const canUseCompletionReport = computed(() => jobOrder.value ? ['COMPLETED', 'INVOICED', 'CLOSED'].includes(jobOrder.value.state) : false);
@@ -280,17 +291,16 @@ function dateInputValue(value?: string | null): string {
   return new Date(value).toISOString().slice(0, 10);
 }
 
-function assignedTechnicianNames(jobOrder: JobOrder): string {
-  return jobOrder.assignedTechnicianIds.length
-    ? jobOrder.assignedTechnicianIds.join(', ')
-    : '—';
-}
-
-function executionOwnerName(jobOrder: JobOrder): string {
-  return jobOrder.executionOwnerId ?? '—';
+function displayImo(value?: string | null): string {
+  if (!value || value.startsWith('MANUAL-')) return '';
+  return value;
 }
 
 function historyActor(entry?: JobStatusHistoryEntry | null): string {
+  return entry?.actor?.name ?? entry?.actor?.email ?? entry?.actorId ?? '—';
+}
+
+function editHistoryActor(entry?: JobOrderEditHistoryEntry | null): string {
   return entry?.actor?.name ?? entry?.actor?.email ?? entry?.actorId ?? '—';
 }
 
@@ -301,6 +311,33 @@ function historyDevice(entry?: JobStatusHistoryEntry | null): string {
 function historyDeviceSuffix(entry?: JobStatusHistoryEntry | null): string {
   const device = historyDevice(entry);
   return device === '—' ? '' : ` (${device})`;
+}
+
+function editFieldLabel(field: string): string {
+  const labels: Record<string, string> = {
+    branch: 'Branch',
+    clientId: 'Client',
+    vesselId: 'Vessel',
+    vendorId: 'Vendor',
+    isSubcontracted: 'Subcontracted',
+    serviceCategories: 'Service categories',
+    port: 'Port',
+    plannedStartDate: 'Planned start',
+    deadline: 'Deadline',
+    scopeSummary: 'Scope summary',
+    externalQuoteRef: 'External quote ref',
+    externalRfqRef: 'External RFQ ref',
+    quotedAmountMinor: 'Quoted amount',
+    quotedCurrency: 'Currency',
+  };
+  return labels[field] ?? field.replace(/([A-Z])/g, ' $1').replace(/^./, (char) => char.toUpperCase());
+}
+
+function editValueLabel(value: unknown): string {
+  if (value == null || value === '') return '—';
+  if (Array.isArray(value)) return value.length ? value.join(', ') : '—';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
 }
 
 function startEditing(): void {
@@ -760,7 +797,14 @@ watch(jobOrderId, async () => {
           <span v-if="stateMeta" class="jo-chip" :class="stateMeta.className">
             {{ stateMeta.label }}
           </span>
-          <Button label="Edit" icon="pi pi-pencil" severity="secondary" outlined @click="startEditing" />
+          <Button
+            v-if="canEditJobOrderForm"
+            label="Edit"
+            icon="pi pi-pencil"
+            severity="secondary"
+            outlined
+            @click="router.push(`/job-orders/${jobOrder.id}/edit`)"
+          />
         </div>
       </header>
 
@@ -799,8 +843,11 @@ watch(jobOrderId, async () => {
 
           <section class="jo-detail-card" aria-labelledby="job-order-variations-title">
             <div class="jo-detail-card__header">
-              <h2 id="job-order-variations-title" class="crm-section__title">Variations</h2>
-              <p class="record-form__version">New variations are always PROPOSED.</p>
+              <div>
+                <h2 id="job-order-variations-title" class="crm-section__title">Variations</h2>
+                <p class="record-form__version">{{ variationCreateHelper }}</p>
+              </div>
+              <Button v-if="canCreateVariation" label="Add Variation" icon="pi pi-plus" severity="secondary" @click="openVariationForm" />
             </div>
 
             <p v-if="variationError" class="auth-message auth-message--error" role="alert">
@@ -961,22 +1008,37 @@ watch(jobOrderId, async () => {
               <h2 id="job-order-history-title" class="crm-section__title">History</h2>
             </div>
             <ol v-if="recentHistory.length" class="jo-history-list">
-              <li v-for="entry in recentHistory" :key="entry.id" class="jo-history-item">
+              <li v-for="event in recentHistory" :key="event.id" class="jo-history-item">
                 <span class="jo-history-item__dot" aria-hidden="true" />
-                <div>
+                <div v-if="event.type === 'status'">
                   <p>
                     Moved to
-                    <span class="jo-history-item__state" :class="jobOrderStateMeta(entry.toState).className">
-                      {{ jobOrderStateMeta(entry.toState).label }}
+                    <span class="jo-history-item__state" :class="jobOrderStateMeta(event.entry.toState).className">
+                      {{ jobOrderStateMeta(event.entry.toState).label }}
                     </span>
                   </p>
                   <p class="jo-history-item__meta">
-                    {{ historyActor(entry) }}{{ historyDeviceSuffix(entry) }} · {{ formatRelativeTime(entry.at) }}
-                    <span :title="formatDateTime(entry.at)">· {{ formatDateTime(entry.at) }}</span>
+                    {{ historyActor(event.entry) }}{{ historyDeviceSuffix(event.entry) }} · {{ formatRelativeTime(event.entry.at) }}
+                    <span :title="formatDateTime(event.entry.at)">· {{ formatDateTime(event.entry.at) }}</span>
                   </p>
-                  <p v-if="entry.reason" class="jo-history-item__reason">
-                    {{ entry.reason }}
+                  <p v-if="event.entry.reason" class="jo-history-item__reason">
+                    {{ event.entry.reason }}
                   </p>
+                </div>
+                <div v-else>
+                  <p>Edited job order</p>
+                  <p class="jo-history-item__meta">
+                    {{ editHistoryActor(event.entry) }} · {{ formatRelativeTime(event.entry.createdAt) }}
+                    <span :title="formatDateTime(event.entry.createdAt)">· {{ formatDateTime(event.entry.createdAt) }}</span>
+                  </p>
+                  <ul class="jo-history-edit-list">
+                    <li v-for="change in event.entry.changedFields" :key="`${event.entry.id}-${change.field}`">
+                      <strong>{{ editFieldLabel(change.field) }}:</strong>
+                      <span>{{ editValueLabel(change.oldValue) }}</span>
+                      <span aria-hidden="true">→</span>
+                      <span>{{ editValueLabel(change.newValue) }}</span>
+                    </li>
+                  </ul>
                 </div>
               </li>
             </ol>
@@ -988,7 +1050,6 @@ watch(jobOrderId, async () => {
               <h2 id="job-order-actions-title" class="crm-section__title">Actions</h2>
             </div>
             <div class="record-form__actions record-form__actions--left">
-              <Button v-if="canCreateVariation" label="Add Variation" icon="pi pi-plus" @click="openVariationForm" />
               <Button
                 v-for="action in transitionActions"
                 :key="`${action.to}-${action.kind}`"
@@ -1040,8 +1101,8 @@ watch(jobOrderId, async () => {
           <section class="jo-detail-card" aria-labelledby="job-order-vessel-title">
             <h2 id="job-order-vessel-title" class="crm-section__title">Vessel</h2>
             <p class="jo-card-primary">{{ jobVesselName }}</p>
-            <p v-if="jobOrder.vessel?.imoNumber" class="record-form__version">
-              IMO <MonoText :value="jobOrder.vessel.imoNumber" />
+            <p v-if="jobVesselImo" class="record-form__version">
+              IMO <MonoText :value="jobVesselImo" />
             </p>
           </section>
 
@@ -1080,40 +1141,6 @@ watch(jobOrderId, async () => {
               <div v-if="latestInvoice">
                 <dt>Invoice</dt>
                 <dd><MonoText :value="latestInvoice.invoiceNumber" /> · <span class="mx-money">{{ invoiceMoneyLabel(latestInvoice) }}</span></dd>
-              </div>
-            </dl>
-          </section>
-
-          <section class="jo-detail-card" aria-labelledby="job-order-assignment-title">
-            <h2 id="job-order-assignment-title" class="crm-section__title">Assignment</h2>
-            <dl class="detail-grid detail-grid--single">
-              <div>
-                <dt>Assigned technicians</dt>
-                <dd>{{ assignedTechnicianNames(jobOrder) }}</dd>
-              </div>
-              <div>
-                <dt>Execution owner</dt>
-                <dd>{{ executionOwnerName(jobOrder) }}</dd>
-              </div>
-              <div v-if="jobOrder.state === 'IN_PROGRESS'">
-                <dt>Device</dt>
-                <dd>{{ historyDevice(startedHistory) }}</dd>
-              </div>
-              <div v-if="jobOrder.state === 'ON_HOLD'">
-                <dt>Person working</dt>
-                <dd>{{ historyActor(lastWorkerBeforePause) }}</dd>
-              </div>
-              <div v-if="jobOrder.state === 'ON_HOLD'">
-                <dt>Device</dt>
-                <dd>{{ historyDevice(lastWorkerBeforePause) }}</dd>
-              </div>
-              <div v-if="['PENDING_REVIEW', 'COMPLETED'].includes(jobOrder.state)">
-                <dt>Submitted by</dt>
-                <dd>{{ historyActor(submittedHistory) }}</dd>
-              </div>
-              <div v-if="['PENDING_REVIEW', 'COMPLETED'].includes(jobOrder.state)">
-                <dt>Completion device</dt>
-                <dd>{{ historyDevice(submittedHistory) }}</dd>
               </div>
             </dl>
           </section>
@@ -1431,6 +1458,22 @@ watch(jobOrderId, async () => {
   margin-top: 4px;
   color: #5C7081;
   font-size: 12px;
+}
+
+.jo-history-edit-list {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  color: #34495C;
+  font-size: 12px;
+}
+
+.jo-history-edit-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .jo-card-primary {

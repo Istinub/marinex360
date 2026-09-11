@@ -55,7 +55,6 @@ export interface JobOrderChecklistItem {
   id: string;
   jobOrderId: string;
   label: string;
-  sortOrder: number;
   checked: boolean;
   createdAt?: string | null;
   updatedAt?: string | null;
@@ -384,12 +383,11 @@ export async function cacheJobOrderChecklistItems(jobOrderId: string, items: Job
   for (const item of items) {
     await adapter.execute(
       `INSERT INTO job_order_checklist_item_cache
-        (id, job_order_id, label, sort_order, checked, created_at, updated_at, pulled_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (id, job_order_id, label, checked, created_at, updated_at, pulled_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          job_order_id=excluded.job_order_id,
          label=excluded.label,
-         sort_order=excluded.sort_order,
          checked=excluded.checked,
          created_at=excluded.created_at,
          updated_at=excluded.updated_at,
@@ -398,7 +396,6 @@ export async function cacheJobOrderChecklistItems(jobOrderId: string, items: Job
         item.id,
         item.jobOrderId ?? jobOrderId,
         item.label,
-        item.sortOrder,
         item.checked ? 1 : 0,
         item.createdAt ?? null,
         item.updatedAt ?? null,
@@ -416,13 +413,12 @@ async function loadCachedJobOrderChecklistItems(jobOrderId: string): Promise<Job
     id: string;
     job_order_id: string;
     label: string;
-    sort_order: number;
     checked: number;
   }>(
-    `SELECT id, job_order_id, label, sort_order, checked
+    `SELECT id, job_order_id, label, checked
      FROM job_order_checklist_item_cache
      WHERE job_order_id=?
-     ORDER BY sort_order ASC, label ASC`,
+     ORDER BY created_at ASC, label ASC`,
     [jobOrderId],
   );
 
@@ -430,7 +426,6 @@ async function loadCachedJobOrderChecklistItems(jobOrderId: string): Promise<Job
     id: row.id,
     jobOrderId: row.job_order_id,
     label: row.label,
-    sortOrder: Number(row.sort_order),
     checked: row.checked === 1,
   }));
 }

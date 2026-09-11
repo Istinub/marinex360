@@ -21,7 +21,7 @@ export async function generateJobOrderReport(jobOrderId: string): Promise<{ repo
           device: { select: { id: true, name: true } },
         },
       },
-      checklistItems: { orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }] },
+      checklistItems: { orderBy: [{ createdAt: 'asc' }, { label: 'asc' }] },
       observations: { orderBy: { createdAt: 'asc' } },
       photos: { orderBy: { takenAt: 'asc' } },
       materials: { where: { deletedAt: null }, orderBy: { createdAt: 'asc' } },

@@ -1,5 +1,6 @@
 // Integration tests — Variations (D-003 every-variation-to-Director, no threshold; D-021
-// one-way decisions) against real Postgres. Guarded like the rest of the suite; RUN_DB_TESTS=1.
+// one-way decisions; Ops propose while Director/System Admin auto-approve on create) against
+// real Postgres. Guarded like the rest of the suite; RUN_DB_TESTS=1.
 //
 // NOTE on VAR-6 (branch scoping): variation:approve/reject is held ONLY by DIRECTOR and
 // SYSTEM_ADMIN, and BOTH are CROSS_BRANCH_ROLES by design (D-003 intends Directors to oversee
@@ -83,6 +84,46 @@ run('Variations (integration)', () => {
     const body = res.json();
     expect(body.status).toBe('PROPOSED');
     expect(await prisma.auditEntry.count({ where: { entityType: 'Variation' } })).toBe(before + 1);
+
+    const summary = await app.inject({
+      method: 'GET', url: `/api/v1/job-orders/${joSG.id}/financial-summary`, headers: { authorization: bearer(sup) },
+    });
+    expect(summary.statusCode).toBe(200);
+    expect(summary.json().actualAmountMinor).toBe(0);
+  });
+
+  it('VAR-1b: Director CREATE variation -> 201 APPROVED immediately and counted in commercial summary', async () => {
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/job-orders/${joSG.id}/variations`, headers: { authorization: bearer(director) },
+      payload: { reason: 'Director-approved immediate scope', amountMinor: 40000, amountCurrency: 'SGD' },
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.status).toBe('APPROVED');
+    expect(body.approverId).toBe(director.id);
+
+    const summary = await app.inject({
+      method: 'GET', url: `/api/v1/job-orders/${joSG.id}/financial-summary`, headers: { authorization: bearer(director) },
+    });
+    expect(summary.statusCode).toBe(200);
+    expect(summary.json().actualAmountMinor).toBe(40000);
+  });
+
+  it('VAR-1c: System Admin CREATE variation -> 201 APPROVED immediately and counted in commercial summary', async () => {
+    const res = await app.inject({
+      method: 'POST', url: `/api/v1/job-orders/${joSG.id}/variations`, headers: { authorization: bearer(admin) },
+      payload: { reason: 'Admin-approved immediate scope', amountMinor: 60000, amountCurrency: 'SGD' },
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.status).toBe('APPROVED');
+    expect(body.approverId).toBe(admin.id);
+
+    const summary = await app.inject({
+      method: 'GET', url: `/api/v1/job-orders/${joSG.id}/financial-summary`, headers: { authorization: bearer(admin) },
+    });
+    expect(summary.statusCode).toBe(200);
+    expect(summary.json().actualAmountMinor).toBe(100000);
   });
 
   it('VAR-2: non-Director/Admin (Supervisor) cannot approve -> 403 FORBIDDEN (D-003)', async () => {
@@ -106,10 +147,16 @@ run('Variations (integration)', () => {
     expect(body.status).toBe('APPROVED');
     expect(body.approverId).toBe(director.id);
     expect(await prisma.auditEntry.count({ where: { entityType: 'Variation', entityId: variation.id, action: 'APPROVE' } })).toBe(1);
+
+    const summary = await app.inject({
+      method: 'GET', url: `/api/v1/job-orders/${joSG.id}/financial-summary`, headers: { authorization: bearer(director) },
+    });
+    expect(summary.statusCode).toBe(200);
+    expect(summary.json().actualAmountMinor).toBe(150000);
   });
 
   it('VAR-7 (D-021): re-deciding an already-APPROVED variation -> 409 STATE_TRANSITION_INVALID, not VALIDATION_ERROR', async () => {
-    const variation = await prisma.variation.findFirstOrThrow({ where: { jobOrderId: joSG.id, status: 'APPROVED' } });
+    const variation = await prisma.variation.findFirstOrThrow({ where: { jobOrderId: joSG.id, status: 'APPROVED', reason: 'Director-approved immediate scope' } });
     const res = await app.inject({
       method: 'POST', url: `/api/v1/variations/${variation.id}/reject`, headers: { authorization: bearer(director) },
       payload: { version: variation.version },
@@ -170,18 +217,14 @@ run('Variations (integration)', () => {
     expect(res.json().error.code).toBe('NOT_FOUND');
   });
 
-  it('VAR-6 contrast: cross-branch role (Director) CAN approve a variation on the MY-branch JO (D-003 intends cross-branch Director oversight)', async () => {
+  it('VAR-6 contrast: cross-branch System Admin creates an auto-approved variation on the MY-branch JO', async () => {
     const created = await app.inject({
-      method: 'POST', url: `/api/v1/job-orders/${joMY.id}/variations`, headers: { authorization: bearer(admin) }, // admin creates it (cross-branch, has variation:create too)
-      payload: { reason: 'MY-branch variation for cross-branch approval test', amountMinor: 5000, amountCurrency: 'MYR' },
+      method: 'POST', url: `/api/v1/job-orders/${joMY.id}/variations`, headers: { authorization: bearer(admin) },
+      payload: { reason: 'MY-branch auto-approved variation test', amountMinor: 5000, amountCurrency: 'MYR' },
     });
     expect(created.statusCode).toBe(201);
     const variation = created.json();
-    const res = await app.inject({
-      method: 'POST', url: `/api/v1/variations/${variation.id}/approve`, headers: { authorization: bearer(director) }, // SG-based Director approving a MY variation
-      payload: { version: variation.version },
-    });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().status).toBe('APPROVED');
+    expect(variation.status).toBe('APPROVED');
+    expect(variation.approverId).toBe(admin.id);
   });
 });

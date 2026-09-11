@@ -5,12 +5,10 @@ import type { ChecklistCategory, ChecklistTemplate, ChecklistTemplateEntry } fro
 
 export interface ChecklistCategoryInput {
   name: string;
-  sortOrder?: number;
 }
 
 export interface ChecklistItemInput {
   label: string;
-  sortOrder?: number;
 }
 
 export interface ChecklistTemplateInput {
@@ -27,7 +25,7 @@ export const useChecklistCategoriesStore = defineStore('checklistCategories', ()
   const loaded = ref(false);
   const templatesLoaded = ref(false);
 
-  const sortedCategories = computed(() => [...categories.value].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)));
+  const sortedCategories = computed(() => [...categories.value].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime() || a.name.localeCompare(b.name)));
   const options = computed(() => sortedCategories.value.map((category) => ({ label: category.name, value: category.id })));
   const sortedTemplates = computed(() => [...templates.value].sort((a, b) => a.name.localeCompare(b.name)));
 

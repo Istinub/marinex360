@@ -92,7 +92,7 @@ async function attachPhoto(source: CameraSource.Camera | CameraSource.Photos): P
   }
 }
 
-async function submitObservation(addAnother = false): Promise<void> {
+async function submitObservation(): Promise<void> {
   if (!validate()) return;
 
   isSubmitting.value = true;
@@ -107,10 +107,6 @@ async function submitObservation(addAnother = false): Promise<void> {
     }
     await refreshEntries();
     resetForm();
-
-    if (addAnother) {
-      return;
-    }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : 'Unable to queue observation.';
   } finally {
@@ -162,7 +158,7 @@ onMounted(() => {
       {{ errorMessage }}
     </Message>
 
-    <form class="observation-form__body" @submit.prevent="submitObservation(false)">
+    <form class="observation-form__body" @submit.prevent="submitObservation">
       <label class="observation-form__field" for="observation-body">
         <span>Description / observation</span>
         <Textarea
@@ -191,13 +187,6 @@ onMounted(() => {
       </section>
 
       <div class="observation-form__actions">
-        <Button
-          type="button"
-          label="Save and add another"
-          severity="secondary"
-          :loading="isSubmitting"
-          @click="submitObservation(true)"
-        />
         <Button type="submit" :label="editingEntry ? 'Update' : 'Save observation'" icon="pi pi-save" :loading="isSubmitting" />
       </div>
     </form>
@@ -363,7 +352,7 @@ onMounted(() => {
   }
 
   .observation-form__actions {
-    grid-template-columns: repeat(2, minmax(0, max-content));
+    grid-template-columns: minmax(0, max-content);
     justify-content: end;
   }
 

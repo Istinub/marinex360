@@ -147,14 +147,14 @@ async function main() {
   for (const category of SEEDED_CHECKLIST_CATEGORIES) {
     await prisma.checklistCategory.upsert({
       where: { id: category.id },
-      update: { name: category.name, sortOrder: category.sortOrder },
-      create: { id: category.id, name: category.name, sortOrder: category.sortOrder },
+      update: { name: category.name },
+      create: { id: category.id, name: category.name },
     });
     for (const item of category.items) {
       await prisma.checklistTemplateItem.upsert({
         where: { id: item.id },
-        update: { categoryId: category.id, label: item.label, sortOrder: item.sortOrder },
-        create: { id: item.id, categoryId: category.id, label: item.label, sortOrder: item.sortOrder },
+        update: { categoryId: category.id, label: item.label },
+        create: { id: item.id, categoryId: category.id, label: item.label },
       });
     }
     await prisma.checklistTemplate.upsert({
@@ -167,7 +167,7 @@ async function main() {
         active: true,
         entries: {
           deleteMany: {},
-          create: category.items.map((item) => ({ label: item.label, sortOrder: item.sortOrder })),
+          create: category.items.map((item) => ({ label: item.label })),
         },
       },
       create: {
@@ -179,7 +179,7 @@ async function main() {
         items: category.items.map((item) => ({ id: item.id, label: item.label })),
         active: true,
         entries: {
-          create: category.items.map((item) => ({ label: item.label, sortOrder: item.sortOrder })),
+          create: category.items.map((item) => ({ label: item.label })),
         },
       },
     });

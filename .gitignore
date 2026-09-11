@@ -26,3 +26,5 @@ coverage/
 *.local.pdf
 tmp/
 prisma/seed.js
+/chrome/
+/chrome/

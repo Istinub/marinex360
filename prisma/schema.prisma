@@ -31,8 +31,8 @@ generator client {
 
 // ===================== AUTH & USERS (G-2, G-3) =====================
 model User {
-  id                String         @id @default(uuid())
-  email             String         @unique
+  id                String             @id @default(uuid())
+  email             String             @unique
   name              String
   passwordHash      String
   roles             String[]
@@ -41,19 +41,20 @@ model User {
   designation       String?
   baseLocation      String? // G-3
   skills            String[] // G-3 technician skills
-  available         Boolean        @default(true) // G-3 roster availability
+  available         Boolean            @default(true) // G-3 roster availability
   totpSecret        String? // active secret (NFR-07; enforced for admin/finance)
   totpPendingSecret String? // set during enrolment, promoted on confirm (G-2)
-  mfaEnrolled       Boolean        @default(false)
+  mfaEnrolled       Boolean            @default(false)
   recoveryCodes     String[] // HASHED single-use recovery codes (G-2)
-  active            Boolean        @default(true)
-  version           Int            @default(0)
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
+  active            Boolean            @default(true)
+  version           Int                @default(0)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
   refreshTokens     RefreshToken[]
   devices           Device[]
-  client            Client?        @relation(fields: [clientId], references: [id])
+  client            Client?            @relation(fields: [clientId], references: [id])
   statusHistory     JobStatusHistory[]
+  jobOrderEditHistory JobOrderEditHistory[]
 
   @@index([branch])
   @@index([clientId])
@@ -77,13 +78,13 @@ model RefreshToken {
 }
 
 model Device {
-  id             String   @id @default(uuid())
+  id             String             @id @default(uuid())
   name           String?
   pin            String
-  assignedUser   User     @relation(fields: [assignedUserId], references: [id])
+  assignedUser   User               @relation(fields: [assignedUserId], references: [id])
   assignedUserId String
   branch         String
-  createdAt      DateTime @default(now())
+  createdAt      DateTime           @default(now())
   refreshTokens  RefreshToken[]
   statusHistory  JobStatusHistory[]
 
@@ -94,11 +95,9 @@ model Device {
 model ChecklistCategory {
   id        String                  @id @default(uuid())
   name      String
-  sortOrder Int                     @default(0)
+  createdAt DateTime                @default(now())
   items     ChecklistTemplateItem[]
   templates ChecklistTemplate[]
-
-  @@index([sortOrder])
 }
 
 model ChecklistTemplateItem {
@@ -106,9 +105,9 @@ model ChecklistTemplateItem {
   category   ChecklistCategory @relation(fields: [categoryId], references: [id])
   categoryId String
   label      String
-  sortOrder  Int               @default(0)
+  createdAt  DateTime          @default(now())
 
-  @@index([categoryId, sortOrder])
+  @@index([categoryId, createdAt])
 }
 
 model BrandingSettings {
@@ -171,33 +170,33 @@ model JobRequest {
 }
 
 model Vessel {
-  id             String    @id @default(uuid())
-  client         Client    @relation(fields: [clientId], references: [id])
+  id             String     @id @default(uuid())
+  client         Client     @relation(fields: [clientId], references: [id])
   clientId       String
-  imoNumber      String    @unique
+  imoNumber      String     @unique
   name           String
   type           String?
   flag           String?
   classification String?
   deletedAt      DateTime?
-  version        Int       @default(0)
+  version        Int        @default(0)
   jobOrders      JobOrder[]
 
   @@index([clientId])
 }
 
 model Vendor {
-  id        String    @id @default(uuid())
-  branch    String
-  name      String
-  email     String?
-  phone     String?
-  address   String?
-  deletedAt DateTime?
-  version   Int       @default(0)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  jobOrders JobOrder[]
+  id         String      @id @default(uuid())
+  branch     String
+  name       String
+  email      String?
+  phone      String?
+  address    String?
+  deletedAt  DateTime?
+  version    Int         @default(0)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  jobOrders  JobOrder[]
   variations Variation[]
 
   @@index([branch])
@@ -206,27 +205,27 @@ model Vendor {
 
 // ===================== JOB ORDER (OD-02/05, CC-1, CC-3) =====================
 model JobOrder {
-  id                    String              @id @default(uuid())
-  joNumber              String              @unique
+  id                    String                  @id @default(uuid())
+  joNumber              String                  @unique
   branch                String
   clientId              String
   vesselId              String
   vendorId              String?
-  client                Client              @relation(fields: [clientId], references: [id])
-  vessel                Vessel              @relation(fields: [vesselId], references: [id])
-  vendor                Vendor?             @relation(fields: [vendorId], references: [id])
-  isSubcontracted       Boolean             @default(false)
+  client                Client                  @relation(fields: [clientId], references: [id])
+  vessel                Vessel                  @relation(fields: [vesselId], references: [id])
+  vendor                Vendor?                 @relation(fields: [vendorId], references: [id])
+  isSubcontracted       Boolean                 @default(false)
   serviceCategories     String[]
   port                  String?
   scopeSummary          String
-  origin                String              @default("MANUAL") // JobOrigin (OD-02)
+  origin                String                  @default("MANUAL") // JobOrigin (OD-02)
   externalQuoteRef      String?
   externalRfqRef        String?
   quotedAmountMinor     Int // frozen baseline (OD-02)
   quotedCurrency        String
   labourRateAmountMinor Int? // CC-3 RATIFIED; service layer defaults 9000 (SGD 90.00/hr, D-004)
-  labourRateCurrency    String?             @default("SGD")
-  state                 String              @default("DRAFT") // JobState (ADR-2 adjacency)
+  labourRateCurrency    String?                 @default("SGD")
+  state                 String                  @default("DRAFT") // JobState (ADR-2 adjacency)
   assignedTechnicianIds String[]
   executionOwnerId      String? // CC-1 RATIFIED — single owner of execution data (OD-05)
   plannedStartDate      DateTime?
@@ -235,12 +234,13 @@ model JobOrder {
   deletedAt             DateTime?
   archivedAt            DateTime?
   purgedAt              DateTime?
-  version               Int                 @default(0)
+  version               Int                     @default(0)
   createdBy             String
-  createdAt             DateTime            @default(now())
-  updatedAt             DateTime            @updatedAt
-  changeSeq             BigInt              @default(autoincrement())
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+  changeSeq             BigInt                  @default(autoincrement())
   statusHistory         JobStatusHistory[]
+  editHistory           JobOrderEditHistory[]
   materials             MaterialLine[]
   variations            Variation[]
   workers               JobOrderWorker[]
@@ -289,21 +289,34 @@ model JobStatusHistory {
   @@index([deviceId])
 }
 
+model JobOrderEditHistory {
+  id            String   @id @default(uuid())
+  jobOrder      JobOrder @relation(fields: [jobOrderId], references: [id])
+  jobOrderId    String
+  actor         User     @relation(fields: [actorId], references: [id])
+  actorId       String
+  changedFields Json
+  createdAt     DateTime @default(now())
+
+  @@index([jobOrderId, createdAt])
+  @@index([actorId])
+}
+
 model Variation {
-  id             String         @id @default(uuid())
-  jobOrder       JobOrder       @relation(fields: [jobOrderId], references: [id])
-  jobOrderId     String
-  vendor         Vendor?        @relation(fields: [vendorId], references: [id])
-  vendorId       String?
-  isSubcontracted Boolean       @default(false)
-  reason         String
-  amountMinor    Int
-  amountCurrency String
-  status         String         @default("PROPOSED") // PROPOSED -> APPROVED | REJECTED (Director/System Admin only)
-  approverId     String? // must resolve to a Director/System Admin role
-  version        Int            @default(0)
-  createdAt      DateTime       @default(now())
-  lines          MaterialLine[]
+  id              String         @id @default(uuid())
+  jobOrder        JobOrder       @relation(fields: [jobOrderId], references: [id])
+  jobOrderId      String
+  vendor          Vendor?        @relation(fields: [vendorId], references: [id])
+  vendorId        String?
+  isSubcontracted Boolean        @default(false)
+  reason          String
+  amountMinor     Int
+  amountCurrency  String
+  status          String         @default("PROPOSED") // PROPOSED -> APPROVED | REJECTED (Director/System Admin only)
+  approverId      String? // must resolve to a Director/System Admin role
+  version         Int            @default(0)
+  createdAt       DateTime       @default(now())
+  lines           MaterialLine[]
 
   @@index([vendorId])
 }
@@ -409,17 +422,17 @@ model Observation {
 }
 
 model ChecklistTemplate {
-  id              String              @id @default(uuid())
+  id              String                   @id @default(uuid())
   name            String
-  category        ChecklistCategory?  @relation(fields: [categoryId], references: [id])
+  category        ChecklistCategory?       @relation(fields: [categoryId], references: [id])
   categoryId      String?
-  createdBy       String              @default("system")
-  createdAt       DateTime            @default(now())
+  createdBy       String                   @default("system")
+  createdAt       DateTime                 @default(now())
   serviceCategory String?
   jobType         String?
   items           Json
-  active          Boolean             @default(true)
-  version         Int                 @default(0)
+  active          Boolean                  @default(true)
+  version         Int                      @default(0)
   entries         ChecklistTemplateEntry[]
   instances       ChecklistInstance[]
 
@@ -431,9 +444,9 @@ model ChecklistTemplateEntry {
   template   ChecklistTemplate @relation(fields: [templateId], references: [id])
   templateId String
   label      String
-  sortOrder  Int               @default(0)
+  createdAt  DateTime          @default(now())
 
-  @@index([templateId, sortOrder])
+  @@index([templateId, createdAt])
 }
 
 model JobOrderChecklistItem {
@@ -441,12 +454,11 @@ model JobOrderChecklistItem {
   jobOrder   JobOrder @relation(fields: [jobOrderId], references: [id])
   jobOrderId String
   label      String
-  sortOrder  Int      @default(0)
   checked    Boolean  @default(false)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  @@index([jobOrderId, sortOrder])
+  @@index([jobOrderId, createdAt])
 }
 
 model ChecklistInstance {

@@ -1,4 +1,5 @@
 import type { BrandingLogo } from './branding.js';
+import { letterheadStyles, renderPdfLetterhead } from './pdfLetterhead.js';
 
 type Money = { amountMinor: number; currency: string };
 
@@ -13,7 +14,7 @@ type ReportJobOrder = {
   client: { name: string };
   vessel: { name: string; imoNumber: string };
   statusHistory: { toState: string; at: Date; actor?: { name: string; email: string } | null; device?: { name: string | null; id: string } | null }[];
-  checklistItems: { label: string; checked: boolean; sortOrder: number }[];
+  checklistItems: { label: string; checked: boolean }[];
   observations: { body: string; createdAt: Date; authorId: string }[];
   photos: { s3Key: string | null; phase: string; takenAt: Date }[];
   materials: { description: string; quantity: unknown; unit: string; unitCostAmountMinor: number; unitCostCurrency: string }[];
@@ -62,9 +63,7 @@ export function renderJobOrderReportHtml(jobOrder: ReportJobOrder, brandingLogo?
   <title>${escapeHtml(jobOrder.joNumber)} completion report</title>
   <style>
     body { margin: 32px; color: #11202E; font-family: "IBM Plex Sans", Arial, sans-serif; font-size: 12px; }
-    header { border-bottom: 2px solid #0B2A4A; margin-bottom: 20px; padding-bottom: 14px; }
-    .brand-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-    .brand-row img { max-width: 148px; max-height: 56px; object-fit: contain; }
+    ${letterheadStyles}
     h1 { margin: 0 0 6px; color: #0B2A4A; font-size: 24px; }
     h2 { margin: 22px 0 8px; color: #0B2A4A; font-size: 14px; }
     .muted { color: #5C7081; }
@@ -77,15 +76,11 @@ export function renderJobOrderReportHtml(jobOrder: ReportJobOrder, brandingLogo?
   </style>
 </head>
 <body>
-  <header>
-    <div class="brand-row">
-      <div>
-        <h1>Job Completion Report</h1>
-        <p class="muted">${escapeHtml(jobOrder.joNumber)} · ${escapeHtml(jobOrder.state)}</p>
-      </div>
-      ${brandingLogo ? `<img src="${brandingLogo.dataUri}" alt="${escapeHtml(brandingLogo.filename)}" />` : ''}
-    </div>
-  </header>
+  ${renderPdfLetterhead({
+    brandingLogo,
+    documentTitle: 'Job Completion Report',
+    documentMeta: [`${jobOrder.joNumber} · ${jobOrder.state}`],
+  })}
   ${section('Job details', `<div class="grid">
     <div><div class="label">Client</div><p class="value">${escapeHtml(jobOrder.client.name)}</p></div>
     <div><div class="label">Vessel</div><p class="value">${escapeHtml(jobOrder.vessel.name)} (${escapeHtml(jobOrder.vessel.imoNumber)})</p></div>

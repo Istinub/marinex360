@@ -47,7 +47,7 @@ run('Checklist categories (integration)', () => {
       method: 'POST',
       url: '/api/v1/checklist-categories',
       headers: { authorization: bearer(sup) },
-      payload: { name: 'Supervisor blocked', sortOrder: 999 },
+      payload: { name: 'Supervisor blocked' },
     });
 
     expect(res.statusCode).toBe(403);
@@ -59,7 +59,7 @@ run('Checklist categories (integration)', () => {
       method: 'POST',
       url: '/api/v1/checklist-categories',
       headers: { authorization: bearer(admin) },
-      payload: { name: `Test category ${suffix}`, sortOrder: 700 },
+      payload: { name: `Test category ${suffix}` },
     });
     expect(create.statusCode).toBe(201);
     const created = create.json();
@@ -69,7 +69,7 @@ run('Checklist categories (integration)', () => {
       method: 'PATCH',
       url: `/api/v1/checklist-categories/${created.id}`,
       headers: { authorization: bearer(admin) },
-      payload: { name: `Updated category ${suffix}`, sortOrder: 710 },
+      payload: { name: `Updated category ${suffix}` },
     });
     expect(patch.statusCode).toBe(200);
     expect(patch.json().name).toBe(`Updated category ${suffix}`);
@@ -89,7 +89,7 @@ run('Checklist categories (integration)', () => {
       method: 'POST',
       url: '/api/v1/checklist-categories',
       headers: { authorization: bearer(admin) },
-      payload: { name: `Item category ${suffix}`, sortOrder: 800 },
+      payload: { name: `Item category ${suffix}` },
     });
     const category = create.json();
 
@@ -97,7 +97,7 @@ run('Checklist categories (integration)', () => {
       method: 'POST',
       url: `/api/v1/checklist-categories/${category.id}/items`,
       headers: { authorization: bearer(admin) },
-      payload: { label: 'Initial item', sortOrder: 10 },
+      payload: { label: 'Initial item' },
     });
     expect(addItem.statusCode).toBe(201);
     const item = addItem.json().items[0];
@@ -107,7 +107,7 @@ run('Checklist categories (integration)', () => {
       method: 'PATCH',
       url: `/api/v1/checklist-categories/${category.id}/items/${item.id}`,
       headers: { authorization: bearer(admin) },
-      payload: { label: 'Updated item', sortOrder: 20 },
+      payload: { label: 'Updated item' },
     });
     expect(updateItem.statusCode).toBe(200);
     expect(updateItem.json().items[0].label).toBe('Updated item');
@@ -127,7 +127,7 @@ run('Checklist categories (integration)', () => {
   it('creates, reads, updates, and deletes named checklist templates and entries', async () => {
     const suffix = Date.now();
     const category = await prisma.checklistCategory.create({
-      data: { name: `Template fixture category ${suffix}`, sortOrder: 840 },
+      data: { name: `Template fixture category ${suffix}` },
     });
 
     const create = await app.inject({
@@ -137,7 +137,7 @@ run('Checklist categories (integration)', () => {
       payload: {
         name: `Reusable template ${suffix}`,
         categoryId: category.id,
-        entries: [{ label: 'Initial reusable item', sortOrder: 10 }],
+        entries: [{ label: 'Initial reusable item' }],
       },
     });
     expect(create.statusCode).toBe(201);
@@ -157,7 +157,7 @@ run('Checklist categories (integration)', () => {
       method: 'POST',
       url: `/api/v1/checklist-templates/${template.id}/entries`,
       headers: { authorization: bearer(director) },
-      payload: { label: 'Second reusable item', sortOrder: 20 },
+      payload: { label: 'Second reusable item' },
     });
     expect(addEntry.statusCode).toBe(201);
 
@@ -165,7 +165,7 @@ run('Checklist categories (integration)', () => {
       method: 'PATCH',
       url: `/api/v1/checklist-templates/${template.id}/entries/${addEntry.json().id}`,
       headers: { authorization: bearer(admin) },
-      payload: { label: 'Updated reusable item', sortOrder: 30 },
+      payload: { label: 'Updated reusable item' },
     });
     expect(updateEntry.statusCode).toBe(200);
     expect(updateEntry.json().label).toBe('Updated reusable item');
@@ -205,7 +205,7 @@ run('Checklist categories (integration)', () => {
       headers: { authorization: bearer(admin) },
       payload: {
         name: `Independent template ${suffix}`,
-        entries: [{ label: 'Independent reusable item', sortOrder: 10 }],
+        entries: [{ label: 'Independent reusable item' }],
       },
     });
 
@@ -227,7 +227,7 @@ run('Checklist categories (integration)', () => {
     const seedClient = await prisma.client.findFirstOrThrow({ where: { branch: 'SG', deletedAt: null } });
     const seedVessel = await prisma.vessel.findFirstOrThrow({ where: { deletedAt: null, clientId: seedClient.id } });
     const category = await prisma.checklistCategory.create({
-      data: { name: `Snapshot category ${suffix}`, sortOrder: 850 },
+      data: { name: `Snapshot category ${suffix}` },
     });
     const template = await prisma.checklistTemplate.create({
       data: {
@@ -238,8 +238,8 @@ run('Checklist categories (integration)', () => {
         items: [{ id: 'legacy-one', label: 'Snapshot item one' }],
         entries: {
           create: [
-            { label: 'Snapshot item one', sortOrder: 10 },
-            { label: 'Snapshot item two', sortOrder: 20 },
+            { label: 'Snapshot item one' },
+            { label: 'Snapshot item two' },
           ],
         },
       },
@@ -271,7 +271,7 @@ run('Checklist categories (integration)', () => {
     expect(scheduleJo.json().state).toBe('SCHEDULED');
 
     await prisma.checklistTemplateEntry.create({
-      data: { templateId: template.id, label: 'Added after job creation', sortOrder: 30 },
+      data: { templateId: template.id, label: 'Added after job creation' },
     });
 
     const jobItems = await app.inject({
@@ -291,14 +291,14 @@ run('Checklist categories (integration)', () => {
       method: 'POST',
       url: '/api/v1/checklist-categories',
       headers: { authorization: bearer(admin) },
-      payload: { name: `Used category ${suffix}`, sortOrder: 900 },
+      payload: { name: `Used category ${suffix}` },
     });
     const category = create.json();
     const withItem = await app.inject({
       method: 'POST',
       url: `/api/v1/checklist-categories/${category.id}/items`,
       headers: { authorization: bearer(admin) },
-      payload: { label: 'Used item', sortOrder: 10 },
+      payload: { label: 'Used item' },
     });
     expect(withItem.statusCode).toBe(201);
     const jo = await prisma.jobOrder.create({
@@ -341,7 +341,7 @@ run('Checklist categories (integration)', () => {
     const seedClient = await prisma.client.findFirstOrThrow({ where: { branch: 'SG', deletedAt: null } });
     const seedVessel = await prisma.vessel.findFirstOrThrow({ where: { deletedAt: null, clientId: seedClient.id } });
     const category = await prisma.checklistCategory.create({
-      data: { name: `Reopen category ${suffix}`, sortOrder: 910 },
+      data: { name: `Reopen category ${suffix}` },
     });
     await prisma.checklistTemplate.create({
       data: { id: `fixed-${category.id}`, name: `${category.name} checklist`, serviceCategory: category.id, items: [], active: true },
@@ -366,7 +366,7 @@ run('Checklist categories (integration)', () => {
       method: 'POST',
       url: `/api/v1/job-orders/${jo.id}/checklist-items`,
       headers: { authorization: bearer(director) },
-      payload: { label: 'New verification item', sortOrder: 10 },
+      payload: { label: 'New verification item' },
     });
 
     expect(addItem.statusCode).toBe(201);
@@ -384,7 +384,7 @@ run('Checklist categories (integration)', () => {
     const seedClient = await prisma.client.findFirstOrThrow({ where: { branch: 'SG', deletedAt: null } });
     const seedVessel = await prisma.vessel.findFirstOrThrow({ where: { deletedAt: null, clientId: seedClient.id } });
     const category = await prisma.checklistCategory.create({
-      data: { name: `Invoiced category ${suffix}`, sortOrder: 920 },
+      data: { name: `Invoiced category ${suffix}` },
     });
     await prisma.checklistTemplate.create({
       data: { id: `fixed-${category.id}`, name: `${category.name} checklist`, serviceCategory: category.id, items: [], active: true },
@@ -409,7 +409,7 @@ run('Checklist categories (integration)', () => {
       method: 'POST',
       url: `/api/v1/job-orders/${jo.id}/checklist-items`,
       headers: { authorization: bearer(admin) },
-      payload: { label: 'Blocked item', sortOrder: 10 },
+      payload: { label: 'Blocked item' },
     });
 
     expect(addItem.statusCode).toBe(400);
@@ -442,7 +442,7 @@ run('Checklist categories (integration)', () => {
       method: 'POST',
       url: `/api/v1/job-orders/${jo.id}/checklist-items`,
       headers: { authorization: bearer(sup) },
-      payload: { label: 'Supervisor blocked item', sortOrder: 10 },
+      payload: { label: 'Supervisor blocked item' },
     });
 
     expect(addItem.statusCode).toBe(403);

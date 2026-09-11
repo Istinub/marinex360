@@ -3,6 +3,7 @@
 // CSS the web app uses (marinex360-design-tokens.css) so branding is identical everywhere.
 import { BANK_DETAILS } from './invoicePdfConfig.js';
 import type { BrandingLogo } from './branding.js';
+import { letterheadStyles, renderPdfLetterhead } from './pdfLetterhead.js';
 
 export interface InvoiceForPdf {
   invoiceNumber: string;
@@ -52,9 +53,7 @@ export function renderInvoiceHtml(inv: InvoiceForPdf, brandingLogo?: BrandingLog
   body { font-family: 'IBM Plex Sans', sans-serif; color: #1A1A1A; }
   .mono { font-family: 'IBM Plex Mono', monospace; }
   .right { text-align: right; }
-  header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; }
-  .brand { display: flex; align-items: center; gap: 12px; }
-  .brand img { max-width: 148px; max-height: 56px; object-fit: contain; }
+  ${letterheadStyles}
   .invoiceNumber { font-family: 'IBM Plex Mono', monospace; font-size: 14px; }
   table { width: 100%; border-collapse: collapse; margin-top: 16px; }
   th, td { padding: 8px; border-bottom: 1px solid #E0E0E0; }
@@ -65,17 +64,11 @@ export function renderInvoiceHtml(inv: InvoiceForPdf, brandingLogo?: BrandingLog
   footer { margin-top: 40px; font-size: 11px; color: #666; }
 </style></head>
 <body>
-  <header>
-    <div class="brand">
-      ${brandingLogo ? `<img src="${brandingLogo.dataUri}" alt="${brandingLogo.filename}" />` : ''}
-      <strong>TKMR Marine &amp; Offshore Engineering Pte. Ltd.</strong>
-    </div>
-    <div class="right">
-      <div class="invoiceNumber">${inv.invoiceNumber}</div>
-      <div>Issued: ${sgtDate(inv.issuedAt)}</div>
-      <div>Status: ${inv.status}</div>
-    </div>
-  </header>
+  ${renderPdfLetterhead({
+    brandingLogo,
+    documentTitle: 'Invoice',
+    documentMeta: [inv.invoiceNumber, `Issued: ${sgtDate(inv.issuedAt)}`, `Status: ${inv.status}`],
+  })}
   <section>
     <strong>Bill To</strong><br/>
     ${inv.billToName}<br/>

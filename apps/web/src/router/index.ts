@@ -160,6 +160,12 @@ const routes = [
         meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR', 'OPS_SUPERVISOR'] },
       },
       {
+        path: 'job-orders/:id/edit',
+        name: 'job-order-edit',
+        component: JobOrderFormView,
+        meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR', 'OPS_SUPERVISOR'] },
+      },
+      {
         path: 'job-orders/:id',
         name: 'job-order-detail',
         component: JobOrderDetailView,

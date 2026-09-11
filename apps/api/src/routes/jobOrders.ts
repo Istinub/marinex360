@@ -21,6 +21,32 @@ const isDirector = (roles: string[]) => roles.includes('DIRECTOR');
 
 type TechnicianJoAccess = { visible: boolean; canOpen: boolean; readOnly: boolean; canStart: boolean; canResume: boolean };
 
+const jobOrderDetailInclude = {
+  variations: true,
+  client: { select: { id: true, name: true } },
+  vessel: { select: { id: true, name: true, imoNumber: true } },
+  vendor: { select: { id: true, name: true } },
+  checklistItems: { orderBy: [{ createdAt: 'asc' }, { label: 'asc' }] },
+  workers: { orderBy: { addedAt: 'desc' } },
+  statusHistory: {
+    orderBy: { at: 'asc' },
+    include: {
+      actor: { select: { id: true, name: true, email: true } },
+      device: { select: { id: true, name: true } },
+    },
+  },
+  editHistory: {
+    orderBy: { createdAt: 'asc' },
+    include: {
+      actor: { select: { id: true, name: true, email: true } },
+    },
+  },
+  invoices: {
+    orderBy: { createdAt: 'desc' },
+    include: { payments: true },
+  },
+} satisfies Prisma.JobOrderInclude;
+
 // P3-11: technician visibility/editability rules should become admin-configurable here.
 function technicianAccessFor(jo: { state: string; executionOwnerId?: string | null }, userId: string): TechnicianJoAccess {
   const isOwner = jo.executionOwnerId === userId;
@@ -67,7 +93,7 @@ async function validateServiceCategories(prisma: PrismaClient | Prisma.Transacti
   return categories;
 }
 
-async function assertJobOrderCreateScope(prisma: PrismaClient, branch: string, clientId: string, vesselId: string): Promise<void> {
+async function assertJobOrderCreateScope(prisma: PrismaClient | Prisma.TransactionClient, branch: string, clientId: string, vesselId: string): Promise<void> {
   const client = await prisma.client.findFirst({ where: { id: clientId, deletedAt: null } });
   if (!client || client.branch !== branch) throw new AppError('NOT_FOUND', 'client not found');
 
@@ -77,6 +103,63 @@ async function assertJobOrderCreateScope(prisma: PrismaClient, branch: string, c
   });
   if (!vessel || vessel.client.deletedAt != null || vessel.client.branch !== branch) throw new AppError('NOT_FOUND', 'vessel not found');
   if (vessel.clientId !== clientId) throw new AppError('VALIDATION_ERROR', 'vesselId must belong to clientId', { field: 'vesselId', reason: 'client_mismatch' });
+}
+
+async function resolveJobOrderFormReferences(
+  tx: Prisma.TransactionClient,
+  ctx: any,
+  branch: string,
+  input: { clientId?: unknown; vesselId?: unknown; newClientName?: unknown; newVesselName?: unknown },
+): Promise<{ clientId: string | null; vesselId: string | null }> {
+  let clientId = typeof input.clientId === 'string' && input.clientId.trim() ? input.clientId.trim() : null;
+  let client = clientId ? await tx.client.findFirst({ where: { id: clientId, deletedAt: null } }) : null;
+  if (clientId && !client) throw new AppError('NOT_FOUND', 'client not found');
+
+  if (!client) {
+    const newClientName = typeof input.newClientName === 'string' ? input.newClientName.trim() : '';
+    if (newClientName) {
+      client = await tx.client.findFirst({ where: { branch, name: newClientName, deletedAt: null } });
+      if (!client) client = await tx.client.create({ data: { branch, name: newClientName } });
+      clientId = client.id;
+    }
+  }
+
+  if (client && client.branch !== branch) throw new AppError('NOT_FOUND', 'client not found');
+  if (client) assertBranchAccess(ctx, client.branch);
+
+  let vesselId = typeof input.vesselId === 'string' && input.vesselId.trim() ? input.vesselId.trim() : null;
+  let vessel = vesselId && clientId
+    ? await tx.vessel.findFirst({ where: { id: vesselId, clientId, deletedAt: null } })
+    : null;
+  if (vesselId && !vessel) throw new AppError('VALIDATION_ERROR', 'vesselId must belong to clientId', { field: 'vesselId', reason: 'client_mismatch' });
+
+  if (!vessel && clientId) {
+    const newVesselName = typeof input.newVesselName === 'string' ? input.newVesselName.trim() : '';
+    if (newVesselName) {
+      vessel = await tx.vessel.findFirst({ where: { clientId, name: newVesselName, deletedAt: null } });
+      if (!vessel) {
+        vessel = await tx.vessel.create({
+          data: {
+            clientId,
+            imoNumber: `MANUAL-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`.slice(0, 32),
+            name: newVesselName,
+          },
+        });
+      }
+      vesselId = vessel.id;
+    }
+  }
+
+  return { clientId, vesselId };
+}
+
+async function replaceJobChecklistForSetup(
+  tx: Prisma.TransactionClient,
+  jobOrderId: string,
+  input: { checklistTemplateId?: string | null; checklistItems?: unknown; customChecklistItems?: unknown },
+): Promise<void> {
+  await tx.jobOrderChecklistItem.deleteMany({ where: { jobOrderId } });
+  await snapshotChecklistForJob(tx, jobOrderId, input);
 }
 
 function normalizeCurrency(input: unknown): string {
@@ -118,13 +201,39 @@ async function assertAssignableTechnicians(prisma: PrismaClient | Prisma.Transac
   }
 }
 
-function normalizeJobChecklistItems(input: unknown): { label: string; sortOrder: number }[] {
+function normalizeJobChecklistItems(input: unknown): { label: string }[] {
   if (!Array.isArray(input)) return [];
-  return input.map((item: any, index) => {
+  return input.map((item: any) => {
     const label = typeof item?.label === 'string' ? item.label.trim() : '';
     if (!label) throw new AppError('VALIDATION_ERROR', 'checklist item label required');
-    return { label, sortOrder: typeof item.sortOrder === 'number' ? item.sortOrder : index };
+    return { label };
   });
+}
+
+type JobOrderEditChange = { field: string; oldValue: Prisma.JsonValue; newValue: Prisma.JsonValue };
+
+function normalizeHistoryValue(value: unknown): Prisma.JsonValue {
+  if (value instanceof Date) return value.toISOString();
+  if (value == null) return null;
+  if (Array.isArray(value)) return value.map((item) => normalizeHistoryValue(item));
+  if (typeof value === 'object') return JSON.parse(JSON.stringify(value)) as Prisma.JsonValue;
+  if (['string', 'number', 'boolean'].includes(typeof value)) return value as Prisma.JsonValue;
+  return String(value);
+}
+
+function historyValuesEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(normalizeHistoryValue(left)) === JSON.stringify(normalizeHistoryValue(right));
+}
+
+function jobOrderEditChanges(jo: Record<string, unknown>, data: Record<string, unknown>): JobOrderEditChange[] {
+  return Object.keys(data)
+    .filter((field) => field !== 'version')
+    .filter((field) => !historyValuesEqual(jo[field], data[field]))
+    .map((field) => ({
+      field,
+      oldValue: normalizeHistoryValue(jo[field]),
+      newValue: normalizeHistoryValue(data[field]),
+    }));
 }
 
 async function snapshotChecklistForJob(
@@ -138,13 +247,13 @@ async function snapshotChecklistForJob(
   if (input.checklistTemplateId) {
     const template = await tx.checklistTemplate.findFirst({
       where: { id: input.checklistTemplateId, active: true },
-      include: { entries: { orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }] } },
+      include: { entries: { orderBy: [{ createdAt: 'asc' }, { label: 'asc' }] } },
     });
     if (!template) throw new AppError('NOT_FOUND', 'checklist template not found');
-    const entries = template.entries.map((entry, index) => ({ label: entry.label, sortOrder: entry.sortOrder ?? index }));
+    const entries = template.entries.map((entry) => ({ label: entry.label }));
     if (entries.length === 0 && Array.isArray(template.items)) {
-      for (const [index, item] of (template.items as any[]).entries()) {
-        if (typeof item?.label === 'string' && item.label.trim()) entries.push({ label: item.label.trim(), sortOrder: index });
+      for (const item of template.items as any[]) {
+        if (typeof item?.label === 'string' && item.label.trim()) entries.push({ label: item.label.trim() });
       }
     }
     if (entries.length > 0) await tx.jobOrderChecklistItem.createMany({ data: entries.map((entry) => ({ jobOrderId, ...entry })) });
@@ -190,19 +299,21 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
   // CREATE (OD-02 frozen baseline; D-004 labour rate default; CONV-ID-1 server-issued id)
   app.post('/api/v1/job-orders', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('jobOrder:create')] }, async (req, reply) => {
     const b = (req.body ?? {}) as any;
-    if (!b.clientId || !b.vesselId || !b.scopeSummary || b.quotedAmountMinor == null || !b.quotedCurrency) {
-      throw new AppError('VALIDATION_ERROR', 'clientId, vesselId, scopeSummary, quotedAmount required');
+    if (!b.scopeSummary || b.quotedAmountMinor == null || !b.quotedCurrency) {
+      throw new AppError('VALIDATION_ERROR', 'scopeSummary, quotedAmount required');
     }
     const branch = branchForCreate(req.ctx, b.branch);
     const quotedCurrency = normalizeCurrency(b.quotedCurrency);
-    await assertJobOrderCreateScope(prisma, branch, b.clientId, b.vesselId);
     const created = await prisma.$transaction(async (tx) => {
+      const refs = await resolveJobOrderFormReferences(tx, req.ctx, branch, b);
+      if (!refs.clientId || !refs.vesselId) throw new AppError('VALIDATION_ERROR', 'clientId, vesselId, scopeSummary, quotedAmount required');
+      await assertJobOrderCreateScope(tx, branch, refs.clientId, refs.vesselId);
       const serviceCategories = await validateServiceCategories(tx, b.serviceCategories ?? []);
       const vendorTag = await vendorTagForBranch(tx, branch, b);
       const joNumber = await nextJoNumber(tx, branch);
       const jo = await tx.jobOrder.create({
         data: {
-          joNumber, branch, clientId: b.clientId, vesselId: b.vesselId,
+          joNumber, branch, clientId: refs.clientId, vesselId: refs.vesselId,
           vendorId: vendorTag.vendorId,
           isSubcontracted: vendorTag.isSubcontracted,
           serviceCategories, port: b.port ?? null, scopeSummary: b.scopeSummary,
@@ -332,25 +443,7 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
     const { id } = req.params as any;
     const jo = await prisma.jobOrder.findFirst({
       where: { id, deletedAt: null, archivedAt: null, purgedAt: null },
-      include: {
-        variations: true,
-        client: { select: { id: true, name: true } },
-        vessel: { select: { id: true, name: true, imoNumber: true } },
-        vendor: { select: { id: true, name: true } },
-        checklistItems: { orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }] },
-        workers: { orderBy: { addedAt: 'desc' } },
-        statusHistory: {
-          orderBy: { at: 'asc' },
-          include: {
-            actor: { select: { id: true, name: true, email: true } },
-            device: { select: { id: true, name: true } },
-          },
-        },
-        invoices: {
-          orderBy: { createdAt: 'desc' },
-          include: { payments: true },
-        },
-      },
+      include: jobOrderDetailInclude,
     });
     if (!jo) throw new AppError('NOT_FOUND');
     assertBranchAccess(req.ctx, jo.branch);                 // scope BEFORE anything else (CC-05)
@@ -475,13 +568,47 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
       if (isHeaderLocked(jo.state as JoState)) throw new AppError('FORBIDDEN', 'header locked; scope changes require a Variation');
       const data: any = {};
       for (const f of HEADER_FIELDS) if (f in b) data[f] = b[f];
-      if ('isSubcontracted' in b || 'vendorId' in b) {
-        Object.assign(data, await vendorTagForBranch(tx, jo.branch, b));
+      const branch = 'branch' in b ? branchForCreate(req.ctx, b.branch) : jo.branch;
+      if ('branch' in b) data.branch = branch;
+      if ('clientId' in b || 'vesselId' in b || 'newClientName' in b || 'newVesselName' in b || 'branch' in b) {
+        const refs = await resolveJobOrderFormReferences(tx, req.ctx, branch, b);
+        const clientId = refs.clientId ?? jo.clientId;
+        const vesselId = refs.vesselId ?? jo.vesselId;
+        await assertJobOrderCreateScope(tx, branch, clientId, vesselId);
+        data.clientId = clientId;
+        data.vesselId = vesselId;
       }
+      if ('quotedAmountMinor' in b) {
+        if (typeof b.quotedAmountMinor !== 'number' || !Number.isInteger(b.quotedAmountMinor)) {
+          throw new AppError('VALIDATION_ERROR', 'quotedAmountMinor must be an integer', { field: 'quotedAmountMinor', reason: 'type' });
+        }
+        data.quotedAmountMinor = b.quotedAmountMinor;
+      }
+      if ('quotedCurrency' in b) data.quotedCurrency = normalizeCurrency(b.quotedCurrency);
+      if ('serviceCategories' in b) data.serviceCategories = await validateServiceCategories(tx, b.serviceCategories);
+      if ('isSubcontracted' in b || 'vendorId' in b) {
+        Object.assign(data, await vendorTagForBranch(tx, branch, b));
+      }
+      const changes = jobOrderEditChanges(jo as unknown as Record<string, unknown>, data);
       const res = await tx.jobOrder.updateMany({ where: { id, version: b.version }, data: { ...data, version: { increment: 1 } } });
       if (res.count === 0) throw new AppError('VERSION_CONFLICT');
+      if ('checklistTemplateId' in b || 'checklistItems' in b || 'customChecklistItems' in b) {
+        await replaceJobChecklistForSetup(tx, id, b);
+      }
+      if (changes.length > 0) {
+        await tx.jobOrderEditHistory.create({
+          data: {
+            jobOrderId: id,
+            actorId: req.ctx.userId,
+            changedFields: changes,
+          },
+        });
+      }
       await appendAudit(tx, req.ctx, { entityType: 'JobOrder', entityId: id, action: 'UPDATE', diff: data });
-      return tx.jobOrder.findUnique({ where: { id } });
+      return tx.jobOrder.findUnique({
+        where: { id },
+        include: jobOrderDetailInclude,
+      });
     });
   });
 
@@ -530,7 +657,7 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
     const { id } = req.params as any;
     return prisma.$transaction(async (tx) => {
       await findScopedVisibleJobOrder(tx, id, req.ctx);
-      return tx.jobOrderChecklistItem.findMany({ where: { jobOrderId: id }, orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }] });
+      return tx.jobOrderChecklistItem.findMany({ where: { jobOrderId: id }, orderBy: [{ createdAt: 'asc' }, { label: 'asc' }] });
     });
   });
 
@@ -694,7 +821,7 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
         });
         await appendAudit(tx, req.ctx, { entityType: 'Invoice', entityId: invoice.id, action: 'CREATE', diff: { jobOrderId: id, totalAmountMinor: draft.totalAmountMinor, lineCount: draft.lines.length } });
       }
-      return tx.jobOrder.findUnique({ where: { id } });
+      return tx.jobOrder.findUnique({ where: { id }, include: jobOrderDetailInclude });
     });
     if (transitioned?.state === 'COMPLETED') {
       try {

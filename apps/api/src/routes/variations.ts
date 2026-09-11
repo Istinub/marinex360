@@ -1,6 +1,6 @@
-// Variation routes (D-003) — EVERY variation routes to a Director; no threshold. PROPOSED on
-// create; approve/reject are Director-only (enforced by the RBAC matrix: only DIRECTOR/ADMIN
-// hold variation:approve|reject). CC-02: approved variations feed the invoice alongside baseline.
+// Variation routes (D-003) — Ops-created variations route to a Director/Admin for decision.
+// Director/Admin-created variations are auto-approved at create time. CC-02: approved
+// variations feed the invoice alongside baseline.
 import type { FastifyInstance } from 'fastify';
 import type { PrismaClient } from '@prisma/client';
 import { AppError } from '../lib/errors.js';
@@ -31,9 +31,26 @@ export function variationRoutes(app: FastifyInstance, prisma: PrismaClient): voi
       const jo = await tx.jobOrder.findFirst({ where: { id, deletedAt: null } });
       if (!jo) throw new AppError('NOT_FOUND');
       assertBranchAccess(req.ctx, jo.branch);
+      if (['CLOSED', 'CANCELLED'].includes(jo.state)) throw new AppError('STATE_TRANSITION_INVALID', 'cannot create variations for terminal job orders');
       const vendorTag = await vendorTagForBranch(tx as any, jo.branch, req.body as any);
-      const variation = await tx.variation.create({ data: { jobOrderId: id, reason, amountMinor, amountCurrency, status: 'PROPOSED', ...vendorTag } });
-      await appendAudit(tx, req.ctx, { entityType: 'Variation', entityId: variation.id, action: 'CREATE', diff: { jobOrderId: id, amountMinor, amountCurrency, ...vendorTag } });
+      const autoApprove = req.ctx.roles.includes('DIRECTOR') || req.ctx.roles.includes('SYSTEM_ADMIN');
+      const variation = await tx.variation.create({
+        data: {
+          jobOrderId: id,
+          reason,
+          amountMinor,
+          amountCurrency,
+          status: autoApprove ? 'APPROVED' : 'PROPOSED',
+          approverId: autoApprove ? req.ctx.userId : null,
+          ...vendorTag,
+        },
+      });
+      await appendAudit(tx, req.ctx, {
+        entityType: 'Variation',
+        entityId: variation.id,
+        action: autoApprove ? 'CREATE_APPROVED' : 'CREATE',
+        diff: { jobOrderId: id, amountMinor, amountCurrency, status: variation.status, approverId: variation.approverId, ...vendorTag },
+      });
       return variation;
     });
     return reply.status(201).send(v);

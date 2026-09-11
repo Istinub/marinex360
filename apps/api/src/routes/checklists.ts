@@ -14,29 +14,25 @@ const isAssignee = (jo: { executionOwnerId: string | null; assignedTechnicianIds
   jo.executionOwnerId === uid || jo.assignedTechnicianIds.includes(uid);
 const isTemplateManager = (roles: string[]) => roles.includes('SYSTEM_ADMIN') || roles.includes('DIRECTOR');
 
-type TemplateEntryInput = { id?: string; label?: unknown; sortOrder?: unknown };
+type TemplateEntryInput = { id?: string; label?: unknown };
 
-function normalizeTemplateEntries(input: unknown): { label: string; sortOrder: number }[] {
+function normalizeTemplateEntries(input: unknown): { label: string }[] {
   if (!Array.isArray(input)) return [];
-  return input.map((entry: TemplateEntryInput, index) => {
+  return input.map((entry: TemplateEntryInput) => {
     const label = typeof entry.label === 'string' ? entry.label.trim() : '';
     if (!label) throw new AppError('VALIDATION_ERROR', 'entry label required');
-    return {
-      label,
-      sortOrder: typeof entry.sortOrder === 'number' ? entry.sortOrder : index,
-    };
+    return { label };
   });
 }
 
-function legacyItemsFromEntries(entries: { label: string; sortOrder: number }[]): Prisma.InputJsonValue {
+function legacyItemsFromEntries(entries: { label: string }[]): Prisma.InputJsonValue {
   return entries
     .slice()
-    .sort((a, b) => a.sortOrder - b.sortOrder)
     .map((entry, index) => ({ id: `entry-${index + 1}`, label: entry.label, type: 'boolean', required: false })) as unknown as Prisma.InputJsonValue;
 }
 
 async function syncLegacyTemplateItems(tx: Prisma.TransactionClient, templateId: string): Promise<void> {
-  const entries = await tx.checklistTemplateEntry.findMany({ where: { templateId }, orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }] });
+  const entries = await tx.checklistTemplateEntry.findMany({ where: { templateId }, orderBy: [{ createdAt: 'asc' }, { label: 'asc' }] });
   await tx.checklistTemplate.update({
     where: { id: templateId },
     data: { items: legacyItemsFromEntries(entries), version: { increment: 1 } },
@@ -68,7 +64,7 @@ export function checklistRoutes(app: FastifyInstance, prisma: PrismaClient): voi
           items: legacyItemsFromEntries(entries),
           entries: { create: entries },
         },
-        include: { entries: { orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }] }, category: true },
+        include: { entries: { orderBy: [{ createdAt: 'asc' }, { label: 'asc' }] }, category: true },
       });
       await appendAudit(tx, req.ctx, { entityType: 'ChecklistTemplate', entityId: t.id, action: 'CREATE' });
       return t;
@@ -84,7 +80,7 @@ export function checklistRoutes(app: FastifyInstance, prisma: PrismaClient): voi
     return prisma.checklistTemplate.findMany({
       where,
       orderBy: [{ categoryId: 'asc' }, { name: 'asc' }],
-      include: { entries: { orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }] }, category: true },
+      include: { entries: { orderBy: [{ createdAt: 'asc' }, { label: 'asc' }] }, category: true },
     });
   });
 
@@ -112,7 +108,7 @@ export function checklistRoutes(app: FastifyInstance, prisma: PrismaClient): voi
       const updated = await tx.checklistTemplate.update({
         where: { id },
         data: { ...data, version: { increment: 1 } },
-        include: { entries: { orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }] }, category: true },
+        include: { entries: { orderBy: [{ createdAt: 'asc' }, { label: 'asc' }] }, category: true },
       });
       await appendAudit(tx, req.ctx, { entityType: 'ChecklistTemplate', entityId: id, action: 'UPDATE', diff: b });
       return updated;
@@ -158,10 +154,6 @@ export function checklistRoutes(app: FastifyInstance, prisma: PrismaClient): voi
         const label = typeof b.label === 'string' ? b.label.trim() : '';
         if (!label) throw new AppError('VALIDATION_ERROR', 'entry label required');
         data.label = label;
-      }
-      if ('sortOrder' in b) {
-        if (typeof b.sortOrder !== 'number') throw new AppError('VALIDATION_ERROR', 'sortOrder must be a number');
-        data.sortOrder = b.sortOrder;
       }
       const updated = await tx.checklistTemplateEntry.update({ where: { id: entryId }, data });
       await syncLegacyTemplateItems(tx, id);

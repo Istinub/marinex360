@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import Button from 'primevue/button';
 import MultiSelect from 'primevue/multiselect';
-import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import FieldError from '@/components/common/FieldError.vue';
+import { post } from '@/lib/api/client';
 import { ApiResponseError } from '@/lib/api/errors';
 import { useChecklistCategoriesStore } from '@/stores/checklistCategories';
 import { useClientsStore } from '@/stores/clients';
 import { useAuthStore } from '@/stores/auth';
-import { useJobOrdersStore, type JobOrderCreateInput } from '@/stores/jobOrders';
+import { useJobOrdersStore, type JobOrderCreateInput, type JobOrderPatchInput } from '@/stores/jobOrders';
 import { useVendorsStore } from '@/stores/vendors';
-import type { ChecklistTemplate } from '@/lib/api/types';
+import type { ChecklistTemplate, JobOrder, Variation } from '@/lib/api/types';
 
 type JobOrderField =
   | 'branch'
@@ -28,6 +29,7 @@ type JobOrderField =
   | 'checklistTemplateId'
   | 'checklistItems';
 
+const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 const clientsStore = useClientsStore();
@@ -44,13 +46,18 @@ const isSaving = ref(false);
 const isLoadingTemplates = ref(false);
 const formError = ref<string | null>(null);
 const fieldErrors = reactive<Partial<Record<JobOrderField, string>>>({});
-const checklistTemplates = ref<ChecklistTemplate[]>([]);
+const allChecklistTemplates = ref<ChecklistTemplate[]>([]);
 const checklistMode = ref<'template' | 'custom'>('template');
-const selectedChecklistCategoryId = ref('');
 const selectedChecklistTemplateId = ref('');
 const customChecklistItems = ref<string[]>(['']);
 const saveCustomAsTemplate = ref(false);
 const newTemplateName = ref('');
+const variations = ref<Variation[]>([]);
+const variationReason = ref('');
+const variationAmount = ref('');
+const variationError = ref<string | null>(null);
+const variationReasonError = ref<string | null>(null);
+const variationAmountError = ref<string | null>(null);
 const clientSearch = ref('');
 const vesselSearch = ref('');
 const vendorSearch = ref('');
@@ -60,6 +67,8 @@ const debouncedVendorSearch = ref('');
 const clientSuggestionsOpen = ref(false);
 const vesselSuggestionsOpen = ref(false);
 const vendorSuggestionsOpen = ref(false);
+const editableJobOrder = ref<JobOrder | null>(null);
+const isPrefilling = ref(false);
 let clientSearchTimer: ReturnType<typeof setTimeout> | null = null;
 let vesselSearchTimer: ReturnType<typeof setTimeout> | null = null;
 let vendorSearchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -81,6 +90,16 @@ const form = reactive({
 
 const vesselOptions = computed(() => clientsStore.selectedClient?.vessels ?? []);
 const categoryOptions = computed(() => checklistCategoriesStore.options);
+const checklistTemplates = computed(() => {
+  const selectedCategoryIds = new Set(form.serviceCategories);
+  return allChecklistTemplates.value
+    .filter((template) => template.categoryId == null || selectedCategoryIds.has(template.categoryId))
+    .sort((left, right) => {
+      if (left.categoryId == null && right.categoryId != null) return -1;
+      if (left.categoryId != null && right.categoryId == null) return 1;
+      return left.name.localeCompare(right.name);
+    });
+});
 const selectedChecklistTemplate = computed(() => checklistTemplates.value.find((template) => template.id === selectedChecklistTemplateId.value) ?? null);
 const previewChecklistItems = computed(() => {
   if (checklistMode.value === 'template') return selectedChecklistTemplate.value?.entries.map((entry) => entry.label) ?? [];
@@ -91,8 +110,19 @@ const selectedVessel = computed(() => vesselOptions.value.find((vessel) => vesse
 const selectedClientName = computed(() => selectedClient.value?.name ?? clientSearch.value.trim());
 const selectedVesselName = computed(() => selectedVessel.value?.name ?? vesselSearch.value.trim());
 const hasAssignmentPreview = computed(() => Boolean(selectedClientName.value && selectedVesselName.value));
-const canScheduleOnCreate = computed(() => auth.identity?.roles.some((role) => ['SYSTEM_ADMIN', 'DIRECTOR'].includes(role)) ?? false);
+const editJobOrderId = computed(() => (typeof route.params.id === 'string' ? route.params.id : ''));
+const isEditMode = computed(() => Boolean(editJobOrderId.value));
+const pageTitle = computed(() => (isEditMode.value ? 'Edit job order' : 'New job order'));
+const canScheduleOnCreate = computed(() => !isEditMode.value && (auth.identity?.roles.some((role) => ['SYSTEM_ADMIN', 'DIRECTOR'].includes(role)) ?? false));
 const canChooseBranch = computed(() => auth.identity?.roles.some((role) => ['SYSTEM_ADMIN', 'DIRECTOR'].includes(role)) ?? false);
+const canCreateVariation = computed(() => {
+  const state = editableJobOrder.value?.state;
+  return Boolean(
+    state
+    && !['CLOSED', 'CANCELLED'].includes(state)
+    && (auth.identity?.roles.some((role) => ['SYSTEM_ADMIN', 'OPS_SUPERVISOR'].includes(role)) ?? false),
+  );
+});
 const clientSuggestions = computed(() => {
   const query = debouncedClientSearch.value.trim().toLowerCase();
   if (!query) return clientsStore.sortedClients.slice(0, 8);
@@ -142,13 +172,26 @@ function decimalToMinorUnits(value: string): number | null {
   return Number(minorUnits);
 }
 
+function minorUnitsToDecimal(value: number): string {
+  return (value / 100).toFixed(2);
+}
+
+function displayImo(value?: string | null): string {
+  if (!value || value.startsWith('MANUAL-')) return '';
+  return value;
+}
+
+function moneyLabel(amountMinor: number, currency: string): string {
+  return new Intl.NumberFormat('en-SG', { style: 'currency', currency }).format(amountMinor / 100);
+}
+
 function clearFieldErrors(): void {
   for (const key of Object.keys(fieldErrors) as JobOrderField[]) delete fieldErrors[key];
 }
 
-function normalizedCustomChecklistItems(): { label: string; sortOrder: number }[] {
+function normalizedCustomChecklistItems(): { label: string }[] {
   return customChecklistItems.value
-    .map((label, index) => ({ label: label.trim(), sortOrder: index }))
+    .map((label) => ({ label: label.trim() }))
     .filter((item) => item.label.length > 0);
 }
 
@@ -190,8 +233,10 @@ function validateForm(): boolean {
 }
 
 async function payload(): Promise<JobOrderCreateInput> {
-  const client = selectedClient.value ?? exactClientMatch.value;
-  const vessel = selectedVessel.value ?? exactVesselMatch.value;
+  const clientId = form.clientId.trim();
+  const vesselId = form.vesselId.trim();
+  const client = clientId ? { id: clientId } : selectedClient.value ?? exactClientMatch.value;
+  const vessel = vesselId ? { id: vesselId } : selectedVessel.value ?? exactVesselMatch.value;
   let vendor = selectedVendor.value ?? exactVendorMatch.value;
   if (form.isSubcontracted && !vendor && vendorSearch.value.trim()) {
     vendor = await vendorsStore.createVendor({ name: vendorSearch.value.trim(), branch: form.branch });
@@ -201,7 +246,7 @@ async function payload(): Promise<JobOrderCreateInput> {
   if (checklistMode.value === 'custom' && saveCustomAsTemplate.value && checklistItems.length > 0) {
     const template = await jobOrdersStore.createChecklistTemplate({
       name: newTemplateName.value.trim(),
-      categoryId: selectedChecklistCategoryId.value || null,
+      categoryId: form.serviceCategories[0] ?? null,
       entries: checklistItems,
     });
     checklistTemplateId = template.id;
@@ -224,6 +269,90 @@ async function payload(): Promise<JobOrderCreateInput> {
     checklistTemplateId,
     checklistItems,
   };
+}
+
+async function updatePayload(): Promise<JobOrderPatchInput> {
+  if (!editableJobOrder.value) throw new Error('Job order is not loaded.');
+  return {
+    ...(await payload()),
+    version: editableJobOrder.value.version,
+  };
+}
+
+async function prefillJobOrder(jobOrder: JobOrder): Promise<void> {
+  if (!['DRAFT', 'SCHEDULED'].includes(jobOrder.state)) {
+    formError.value = 'This job order is locked. Use Variations for changes after execution starts.';
+    return;
+  }
+
+  isPrefilling.value = true;
+  try {
+    await clientsStore.loadClient(jobOrder.clientId);
+    editableJobOrder.value = jobOrder;
+    variations.value = [...(jobOrder.variations ?? [])];
+    form.branch = jobOrder.branch;
+    form.clientId = jobOrder.clientId;
+    form.vesselId = jobOrder.vesselId;
+    form.vendorId = jobOrder.vendorId ?? '';
+    form.isSubcontracted = jobOrder.isSubcontracted;
+    form.serviceCategories = [...jobOrder.serviceCategories];
+    form.port = jobOrder.port ?? '';
+    form.deadline = jobOrder.deadline ? jobOrder.deadline.slice(0, 10) : '';
+    form.scopeSummary = jobOrder.scopeSummary;
+    form.externalQuoteRef = jobOrder.externalQuoteRef ?? '';
+    form.externalRfqRef = jobOrder.externalRfqRef ?? '';
+    form.quotedAmount = minorUnitsToDecimal(jobOrder.quotedAmountMinor);
+    form.quotedCurrency = jobOrder.quotedCurrency;
+
+    clientSearch.value = jobOrder.client?.name ?? selectedClient.value?.name ?? jobOrder.clientId;
+    debouncedClientSearch.value = clientSearch.value;
+    vesselSearch.value = jobOrder.vessel?.name ?? selectedVessel.value?.name ?? jobOrder.vesselId;
+    debouncedVesselSearch.value = vesselSearch.value;
+    vendorSearch.value = jobOrder.vendor?.name ?? selectedVendor.value?.name ?? '';
+    debouncedVendorSearch.value = vendorSearch.value;
+
+    const checklistLabels = (jobOrder.checklistItems ?? []).map((item) => item.label);
+    checklistMode.value = checklistLabels.length ? 'custom' : 'template';
+    selectedChecklistTemplateId.value = '';
+    customChecklistItems.value = checklistLabels.length ? checklistLabels : [''];
+    saveCustomAsTemplate.value = false;
+    newTemplateName.value = '';
+  } finally {
+    await nextTick();
+    isPrefilling.value = false;
+  }
+}
+
+function validateVariation(): boolean {
+  variationReasonError.value = null;
+  variationAmountError.value = null;
+  variationError.value = null;
+  if (!variationReason.value.trim()) variationReasonError.value = 'Reason is required.';
+  const amountMinor = decimalToMinorUnits(variationAmount.value);
+  if (amountMinor == null || amountMinor <= 0) variationAmountError.value = 'Enter a variation amount greater than zero.';
+  return !variationReasonError.value && !variationAmountError.value;
+}
+
+async function createVariation(): Promise<void> {
+  if (!editableJobOrder.value || !validateVariation()) return;
+  isSaving.value = true;
+  try {
+    const created = await post<Variation, { reason: string; amountMinor: number; amountCurrency: string }>(
+      `/job-orders/${editableJobOrder.value.id}/variations`,
+      {
+        reason: variationReason.value.trim(),
+        amountMinor: decimalToMinorUnits(variationAmount.value)!,
+        amountCurrency: form.quotedCurrency,
+      },
+    );
+    variations.value = [created, ...variations.value.filter((variation) => variation.id !== created.id)];
+    variationReason.value = '';
+    variationAmount.value = '';
+  } catch (error) {
+    variationError.value = error instanceof ApiResponseError ? error.message : 'Unable to create variation.';
+  } finally {
+    isSaving.value = false;
+  }
 }
 
 async function loadVesselsForClient(clientId: string): Promise<void> {
@@ -266,10 +395,7 @@ function selectVendor(vendor: { id: string; name: string }): void {
 async function loadChecklistTemplates(): Promise<void> {
   isLoadingTemplates.value = true;
   try {
-    checklistTemplates.value = await jobOrdersStore.loadChecklistTemplates(selectedChecklistCategoryId.value || null);
-    if (selectedChecklistTemplateId.value && !checklistTemplates.value.some((template) => template.id === selectedChecklistTemplateId.value)) {
-      selectedChecklistTemplateId.value = '';
-    }
+    allChecklistTemplates.value = await jobOrdersStore.loadChecklistTemplates(null);
   } catch (error) {
     formError.value = error instanceof ApiResponseError ? error.message : 'Unable to load checklist templates.';
   } finally {
@@ -291,6 +417,13 @@ async function saveJobOrder(scheduleNow = false): Promise<void> {
   isSaving.value = true;
 
   try {
+    if (isEditMode.value) {
+      const updated = await jobOrdersStore.updateJobOrder(editJobOrderId.value, await updatePayload());
+      editableJobOrder.value = updated;
+      await router.replace(`/job-orders/${updated.id}`);
+      return;
+    }
+
     const created = await jobOrdersStore.createJobOrder(await payload());
     if (scheduleNow) {
       const scheduled = await jobOrdersStore.transitionJobOrder(created.id, {
@@ -314,10 +447,12 @@ async function saveJobOrder(scheduleNow = false): Promise<void> {
 }
 
 watch(() => form.clientId, (clientId) => {
+  if (isPrefilling.value) return;
   void loadVesselsForClient(clientId);
 });
 
 watch(clientSearch, (value) => {
+  if (isPrefilling.value) return;
   if (selectedClient.value?.name !== value) {
     form.clientId = '';
     form.vesselId = '';
@@ -330,6 +465,7 @@ watch(clientSearch, (value) => {
 });
 
 watch(vesselSearch, (value) => {
+  if (isPrefilling.value) return;
   if (selectedVessel.value?.name !== value) form.vesselId = '';
   if (vesselSearchTimer) clearTimeout(vesselSearchTimer);
   vesselSearchTimer = setTimeout(() => {
@@ -338,6 +474,7 @@ watch(vesselSearch, (value) => {
 });
 
 watch(vendorSearch, (value) => {
+  if (isPrefilling.value) return;
   if (selectedVendor.value?.name !== value) form.vendorId = '';
   if (vendorSearchTimer) clearTimeout(vendorSearchTimer);
   vendorSearchTimer = setTimeout(() => {
@@ -354,22 +491,28 @@ watch(() => form.isSubcontracted, (enabled) => {
 });
 
 watch(() => form.branch, () => {
+  if (isPrefilling.value) return;
   if (!canChooseBranch.value) form.branch = auth.identity?.branch ?? form.branch;
   form.vendorId = '';
   vendorSearch.value = '';
   debouncedVendorSearch.value = '';
 });
 
-watch(selectedChecklistCategoryId, () => {
-  void loadChecklistTemplates();
+watch(() => [...form.serviceCategories], () => {
+  if (selectedChecklistTemplateId.value && !checklistTemplates.value.some((template) => template.id === selectedChecklistTemplateId.value)) {
+    selectedChecklistTemplateId.value = '';
+  }
 });
 
 onMounted(async () => {
   try {
     if (!canChooseBranch.value) form.branch = auth.identity?.branch ?? form.branch;
     await Promise.all([clientsStore.loadClients(), checklistCategoriesStore.load(), vendorsStore.loadVendors()]);
-    selectedChecklistCategoryId.value = categoryOptions.value[0]?.value ?? '';
     await loadChecklistTemplates();
+    if (isEditMode.value) {
+      const jobOrder = await jobOrdersStore.loadJobOrder(editJobOrderId.value);
+      await prefillJobOrder(jobOrder);
+    }
   } catch (error) {
     formError.value = error instanceof ApiResponseError ? error.message : 'Unable to load form data.';
   } finally {
@@ -384,7 +527,7 @@ onMounted(async () => {
       <header class="crm-page__header">
         <div>
           <p class="crm-page__eyebrow">Job order</p>
-          <h1 id="job-order-form-title" class="crm-page__title">New job order</h1>
+          <h1 id="job-order-form-title" class="crm-page__title">{{ pageTitle }}</h1>
         </div>
       </header>
 
@@ -476,7 +619,7 @@ onMounted(async () => {
                 @mousedown.prevent="selectVessel(vessel)"
               >
                 <span>{{ vessel.name }}</span>
-                <span v-if="vessel.imoNumber" class="record-form__suggestion-meta">{{ vessel.imoNumber }}</span>
+                <span v-if="displayImo(vessel.imoNumber)" class="record-form__suggestion-meta">{{ displayImo(vessel.imoNumber) }}</span>
               </button>
             </li>
           </ul>
@@ -508,21 +651,6 @@ onMounted(async () => {
           <FieldError :message="fieldErrors.serviceCategories" />
         </label>
 
-        <label v-if="canScheduleOnCreate" class="auth-field" for="jo-checklist-category">
-          <span>Checklist category</span>
-          <select
-            id="jo-checklist-category"
-            v-model="selectedChecklistCategoryId"
-            class="auth-input"
-            :class="{ 'record-form__control--placeholder': !selectedChecklistCategoryId }"
-          >
-            <option value="">Independent templates</option>
-            <option v-for="category in categoryOptions" :key="category.value" :value="category.value">
-              {{ category.label }}
-            </option>
-          </select>
-        </label>
-
         <div v-if="canScheduleOnCreate" class="record-form__field--full checklist-setup">
           <div class="checklist-setup__mode" role="group" aria-label="Checklist setup mode">
             <Button
@@ -549,7 +677,9 @@ onMounted(async () => {
               class="auth-input"
               :disabled="isLoadingTemplates"
             >
-              <option value="">{{ isLoadingTemplates ? 'Loading templates...' : 'No template selected' }}</option>
+              <option value="">
+                {{ isLoadingTemplates ? 'Loading templates...' : form.serviceCategories.length ? 'No template selected' : 'Select a service category first, or choose an independent template' }}
+              </option>
               <option v-for="template in checklistTemplates" :key="template.id" :value="template.id">
                 {{ template.name }}
               </option>
@@ -721,9 +851,48 @@ onMounted(async () => {
         </label>
       </section>
 
+      <section v-if="isEditMode && editableJobOrder" class="record-form__section" aria-labelledby="job-order-variation-heading">
+        <div class="record-form__section-header">
+          <h2 id="job-order-variation-heading" class="record-form__section-heading">Variations</h2>
+          <p class="record-form__section-optional">Proposed variations are reviewed by Director/Admin.</p>
+        </div>
+
+        <p v-if="variationError" class="auth-message auth-message--error record-form__field--full" role="alert">
+          {{ variationError }}
+        </p>
+
+        <div v-if="canCreateVariation" class="record-form__inline-form record-form__field--full">
+          <label class="auth-field" for="edit-variation-reason">
+            <span>Reason</span>
+            <input id="edit-variation-reason" v-model="variationReason" class="auth-input" placeholder="Describe the scope or cost change" />
+            <FieldError :message="variationReasonError" />
+          </label>
+          <label class="auth-field" for="edit-variation-amount">
+            <span>Amount</span>
+            <input id="edit-variation-amount" v-model="variationAmount" class="auth-input mono-input" inputmode="decimal" placeholder="0.00" />
+            <FieldError :message="variationAmountError" />
+          </label>
+          <Button type="button" label="Add Variation" icon="pi pi-plus" :loading="isSaving" @click="createVariation" />
+        </div>
+
+        <div v-if="variations.length" class="record-form__field--full variation-summary-list">
+          <article v-for="variation in variations" :key="variation.id" class="variation-summary-item">
+            <div>
+              <strong>{{ variation.reason }}</strong>
+              <p>{{ variation.status }}</p>
+            </div>
+            <span class="mx-money">{{ moneyLabel(variation.amountMinor, variation.amountCurrency) }}</span>
+          </article>
+        </div>
+
+        <p v-else class="crm-empty record-form__field--full">
+          No variations yet.
+        </p>
+      </section>
+
       <div class="record-form__actions">
-        <Button label="Cancel" severity="secondary" @click="router.back()" />
-        <Button type="submit" label="Save as draft" icon="pi pi-save" :loading="isSaving" />
+        <Button label="Cancel" severity="secondary" @click="isEditMode && editableJobOrder ? router.push(`/job-orders/${editableJobOrder.id}`) : router.back()" />
+        <Button type="submit" :label="isEditMode ? 'Save changes' : 'Save as draft'" icon="pi pi-save" :loading="isSaving" />
         <Button
           v-if="canScheduleOnCreate"
           type="button"
@@ -779,6 +948,39 @@ onMounted(async () => {
   padding-left: 20px;
 }
 
+.record-form__section-header {
+  grid-column: 1 / -1;
+}
+
+.record-form__inline-form {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(160px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.variation-summary-list {
+  display: grid;
+  gap: 8px;
+}
+
+.variation-summary-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border: 0.5px solid #D3DCE3;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.variation-summary-item p {
+  margin: 2px 0 0;
+  color: #5C7081;
+  font-size: 12px;
+}
+
 .record-form__combobox {
   position: relative;
 }
@@ -825,5 +1027,11 @@ onMounted(async () => {
   color: #5C7081;
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
   font-size: 12px;
+}
+
+@media (max-width: 768px) {
+  .record-form__inline-form {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

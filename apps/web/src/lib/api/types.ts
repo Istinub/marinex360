@@ -70,17 +70,32 @@ export interface JobStatusHistoryEntry {
   device?: Pick<Device, 'id' | 'name'> | null;
 }
 
+export interface JobOrderEditChange {
+  field: string;
+  oldValue: unknown;
+  newValue: unknown;
+}
+
+export interface JobOrderEditHistoryEntry {
+  id: string;
+  jobOrderId: string;
+  actorId: string;
+  changedFields: JobOrderEditChange[];
+  createdAt: string;
+  actor?: Pick<User, 'id' | 'name' | 'email'>;
+}
+
 export interface ChecklistTemplateItem {
   id: string;
   categoryId: string;
   label: string;
-  sortOrder: number;
+  createdAt: string;
 }
 
 export interface ChecklistCategory {
   id: string;
   name: string;
-  sortOrder: number;
+  createdAt: string;
   items: ChecklistTemplateItem[];
 }
 
@@ -88,7 +103,7 @@ export interface ChecklistTemplateEntry {
   id: string;
   templateId: string;
   label: string;
-  sortOrder: number;
+  createdAt: string;
 }
 
 export interface ChecklistTemplate {
@@ -106,8 +121,9 @@ export interface JobOrderChecklistItem {
   id: string;
   jobOrderId: string;
   label: string;
-  sortOrder: number;
   checked: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface JobOrderWorker {
@@ -207,6 +223,7 @@ export interface JobOrder {
   vessel?: Pick<Vessel, 'id' | 'name' | 'imoNumber'> | null;
   vendor?: Pick<Vendor, 'id' | 'name'> | null;
   statusHistory?: JobStatusHistoryEntry[];
+  editHistory?: JobOrderEditHistoryEntry[];
   invoices?: Invoice[];
   checklistItems?: JobOrderChecklistItem[];
   workers?: JobOrderWorker[];

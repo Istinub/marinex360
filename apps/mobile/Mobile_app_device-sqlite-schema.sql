@@ -127,13 +127,12 @@ CREATE TABLE IF NOT EXISTS job_order_checklist_item_cache (
   id            TEXT PRIMARY KEY,
   job_order_id  TEXT NOT NULL,
   label         TEXT NOT NULL,
-  sort_order    INTEGER NOT NULL DEFAULT 0,
   checked       INTEGER NOT NULL DEFAULT 0,
   created_at    TEXT,
   updated_at    TEXT,
   pulled_at     TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_job_order_checklist_item_cache_job ON job_order_checklist_item_cache (job_order_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_job_order_checklist_item_cache_job ON job_order_checklist_item_cache (job_order_id, created_at);
 
 CREATE TABLE IF NOT EXISTS checklist_template_cache (
   id                TEXT PRIMARY KEY,

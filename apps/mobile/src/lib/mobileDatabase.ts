@@ -7,7 +7,7 @@ import type { MobileSqlAdapter } from '../composables/useOfflineExecution';
 import deviceSchema from '../../Mobile_app_device-sqlite-schema.sql?raw';
 
 const DATABASE_NAME = 'marinex360-mobile';
-const DATABASE_VERSION = 3;
+const DATABASE_VERSION = 4;
 
 interface MobileRuntime {
   marinex360?: {
@@ -93,7 +93,6 @@ async function migrateLocalSchema(connection: SQLiteDBConnection): Promise<void>
       id            TEXT PRIMARY KEY,
       job_order_id  TEXT NOT NULL,
       label         TEXT NOT NULL,
-      sort_order    INTEGER NOT NULL DEFAULT 0,
       checked       INTEGER NOT NULL DEFAULT 0,
       created_at    TEXT,
       updated_at    TEXT,
@@ -101,7 +100,15 @@ async function migrateLocalSchema(connection: SQLiteDBConnection): Promise<void>
     )`,
     false,
   );
-  await connection.execute('CREATE INDEX IF NOT EXISTS idx_job_order_checklist_item_cache_job ON job_order_checklist_item_cache (job_order_id, sort_order)', false);
+  const checklistResult = await connection.query('PRAGMA table_info(job_order_checklist_item_cache)');
+  const checklistColumns = new Set((checklistResult.values ?? [])
+    .map((row) => row.name)
+    .filter((name): name is string => typeof name === 'string'));
+  if (checklistColumns.has('sort_order')) {
+    await connection.execute('DROP INDEX IF EXISTS idx_job_order_checklist_item_cache_job', false);
+    await connection.execute('ALTER TABLE job_order_checklist_item_cache DROP COLUMN sort_order', false);
+  }
+  await connection.execute('CREATE INDEX IF NOT EXISTS idx_job_order_checklist_item_cache_job ON job_order_checklist_item_cache (job_order_id, created_at)', false);
   await connection.execute(`PRAGMA user_version = ${DATABASE_VERSION}`, false);
 }
 

@@ -131,9 +131,114 @@ run('Job Orders (integration)', () => {
     expect(await prisma.jobStatusHistory.count({ where: { jobOrderId: jo.id, toState: 'IN_PROGRESS' } })).toBeGreaterThan(0);
   });
 
+  it('returns full detail history on hold/resume transition responses', async () => {
+    const fixture = await prisma.jobOrder.create({
+      data: {
+        joNumber: `SG-INTTEST-HISTORY-TRANSITION-${Date.now()}`,
+        branch: 'SG',
+        clientId: jo.clientId,
+        vesselId: jo.vesselId,
+        scopeSummary: 'History transition response fixture',
+        origin: 'MANUAL',
+        quotedAmountMinor: 100000,
+        quotedCurrency: 'SGD',
+        state: 'DRAFT',
+        createdBy: director.id,
+      },
+    });
+
+    const scheduled = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${fixture.id}/transition`,
+      headers: { authorization: bearer(director) },
+      payload: { to: 'SCHEDULED', version: fixture.version },
+    });
+    expect(scheduled.statusCode).toBe(200);
+    expect(scheduled.json().statusHistory.map((entry: any) => entry.toState)).toContain('SCHEDULED');
+
+    const started = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${fixture.id}/transition`,
+      headers: { authorization: bearer(tech) },
+      payload: { to: 'IN_PROGRESS', version: scheduled.json().version },
+    });
+    expect(started.statusCode).toBe(200);
+    expect(started.json().statusHistory.map((entry: any) => entry.toState)).toEqual(['SCHEDULED', 'IN_PROGRESS']);
+
+    const held = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${fixture.id}/transition`,
+      headers: { authorization: bearer(tech) },
+      payload: { to: 'ON_HOLD', reason: 'History response hold reason', version: started.json().version },
+    });
+    expect(held.statusCode).toBe(200);
+    expect(held.json().statusHistory.map((entry: any) => entry.toState)).toEqual(['SCHEDULED', 'IN_PROGRESS', 'ON_HOLD']);
+    expect(held.json().editHistory).toEqual([]);
+
+    const resumed = await app.inject({
+      method: 'POST',
+      url: `/api/v1/job-orders/${fixture.id}/transition`,
+      headers: { authorization: bearer(tech) },
+      payload: { to: 'IN_PROGRESS', reason: 'History response resume reason', version: held.json().version },
+    });
+    expect(resumed.statusCode).toBe(200);
+    expect(resumed.json().statusHistory.map((entry: any) => entry.toState)).toEqual(['SCHEDULED', 'IN_PROGRESS', 'ON_HOLD', 'IN_PROGRESS']);
+    expect(resumed.json().editHistory).toEqual([]);
+  });
+
   it('B2/CC-01: header edit on an IN_PROGRESS job is rejected (locked) or version-conflicts', async () => {
     const res = await app.inject({ method: 'PATCH', url: `/api/v1/job-orders/${jo.id}`, headers: { authorization: bearer(sup) }, payload: { scopeSummary: 'x', version: 0 } });
     expect([403, 409]).toContain(res.statusCode); // 403 header-locked (now IN_PROGRESS), else 409 stale version
+  });
+
+  it('records field-level edit history for DRAFT header updates and returns it on detail', async () => {
+    const fixture = await prisma.jobOrder.create({
+      data: {
+        joNumber: `SG-INTTEST-EDIT-HISTORY-${Date.now()}`,
+        branch: 'SG',
+        clientId: jo.clientId,
+        vesselId: jo.vesselId,
+        scopeSummary: 'Edit history fixture before',
+        origin: 'MANUAL',
+        quotedAmountMinor: 100000,
+        quotedCurrency: 'SGD',
+        state: 'DRAFT',
+        createdBy: sup.id,
+      },
+    });
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/job-orders/${fixture.id}`,
+      headers: { authorization: bearer(director) },
+      payload: {
+        version: fixture.version,
+        scopeSummary: 'Edit history fixture after',
+        quotedCurrency: 'USD',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const history = await prisma.jobOrderEditHistory.findFirstOrThrow({
+      where: { jobOrderId: fixture.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    const changes = history.changedFields as any[];
+    expect(changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'scopeSummary', oldValue: 'Edit history fixture before', newValue: 'Edit history fixture after' }),
+      expect.objectContaining({ field: 'quotedCurrency', oldValue: 'SGD', newValue: 'USD' }),
+    ]));
+
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/v1/job-orders/${fixture.id}`,
+      headers: { authorization: bearer(director) },
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().editHistory[0].changedFields).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'scopeSummary' }),
+      expect.objectContaining({ field: 'quotedCurrency' }),
+    ]));
   });
 
   it('updates service categories independently of header lock at DRAFT, IN_PROGRESS, and COMPLETED', async () => {

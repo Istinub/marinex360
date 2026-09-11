@@ -31,19 +31,29 @@ export interface JobOrderCreateInput {
   plannedStartDate?: string | null;
   deadline?: string | null;
   checklistTemplateId?: string | null;
-  checklistItems?: { label: string; sortOrder?: number }[];
+  checklistItems?: { label: string }[];
 }
 
 export interface JobOrderPatchInput {
   version: number;
+  branch?: string;
+  clientId?: string;
+  vesselId?: string;
+  newClientName?: string;
+  newVesselName?: string;
   scopeSummary?: string;
   port?: string | null;
   plannedStartDate?: string | null;
   deadline?: string | null;
   externalQuoteRef?: string | null;
   externalRfqRef?: string | null;
+  quotedAmountMinor?: number;
+  quotedCurrency?: string;
   vendorId?: string | null;
   isSubcontracted?: boolean;
+  serviceCategories?: string[];
+  checklistTemplateId?: string | null;
+  checklistItems?: { label: string }[];
 }
 
 export interface JobOrderCategoriesInput {
@@ -56,7 +66,7 @@ export interface JobOrderTransitionInput {
   reason?: string;
   version: number;
   checklistTemplateId?: string | null;
-  checklistItems?: { label: string; sortOrder?: number }[];
+  checklistItems?: { label: string }[];
 }
 
 export const useJobOrdersStore = defineStore('jobOrders', () => {
@@ -153,7 +163,7 @@ export const useJobOrdersStore = defineStore('jobOrders', () => {
     return get<ChecklistTemplate[]>(`/checklist-templates${suffix}`);
   }
 
-  function createChecklistTemplate(input: { name: string; categoryId?: string | null; entries: { label: string; sortOrder?: number }[] }): Promise<ChecklistTemplate> {
+  function createChecklistTemplate(input: { name: string; categoryId?: string | null; entries: { label: string }[] }): Promise<ChecklistTemplate> {
     return post<ChecklistTemplate, typeof input>('/checklist-templates', input);
   }
 

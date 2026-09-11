@@ -3,14 +3,13 @@ import Button from 'primevue/button';
 import Column from 'primevue/column';
 import DataTable from 'primevue/datatable';
 import Dialog from 'primevue/dialog';
-import InputNumber from 'primevue/inputnumber';
 import InputText from 'primevue/inputtext';
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ApiResponseError } from '@/lib/api/errors';
 import type { ChecklistCategory, ChecklistTemplate, ChecklistTemplateItem } from '@/lib/api/types';
 import { useChecklistCategoriesStore } from '@/stores/checklistCategories';
 
-type TemplateEntryDraft = { id?: string; label: string; sortOrder: number };
+type TemplateEntryDraft = { id?: string; label: string };
 
 const store = useChecklistCategoriesStore();
 const errorMessage = ref<string | null>(null);
@@ -21,8 +20,8 @@ const showCategoryDialog = ref(false);
 const showItemDialog = ref(false);
 const showTemplateDialog = ref(false);
 const templateEntryDraft = ref('');
-const categoryForm = reactive({ id: null as string | null, name: '', sortOrder: 0 });
-const itemForm = reactive({ id: null as string | null, label: '', sortOrder: 0 });
+const categoryForm = reactive({ id: null as string | null, name: '' });
+const itemForm = reactive({ id: null as string | null, label: '' });
 const templateForm = reactive({
   id: null as string | null,
   name: '',
@@ -56,14 +55,12 @@ function categoryLabel(categoryId?: string | null): string {
 function openCategoryCreate(): void {
   categoryForm.id = null;
   categoryForm.name = '';
-  categoryForm.sortOrder = (store.sortedCategories.at(-1)?.sortOrder ?? 0) + 10;
   showCategoryDialog.value = true;
 }
 
 function openCategoryEdit(category: ChecklistCategory): void {
   categoryForm.id = category.id;
   categoryForm.name = category.name;
-  categoryForm.sortOrder = category.sortOrder;
   showCategoryDialog.value = true;
 }
 
@@ -74,14 +71,12 @@ function selectCategory(event: { data: ChecklistCategory }): void {
 function openItemCreate(): void {
   itemForm.id = null;
   itemForm.label = '';
-  itemForm.sortOrder = (selectedCategory.value?.items.at(-1)?.sortOrder ?? 0) + 10;
   showItemDialog.value = true;
 }
 
 function openItemEdit(item: ChecklistTemplateItem): void {
   itemForm.id = item.id;
   itemForm.label = item.label;
-  itemForm.sortOrder = item.sortOrder;
   showItemDialog.value = true;
 }
 
@@ -92,10 +87,9 @@ function resetTemplateForm(template?: ChecklistTemplate): void {
   templateForm.categoryId = template?.categoryId ?? '';
   templateEntryDraft.value = '';
   templateForm.entries = entries
-    .map((entry, index) => ({
+    .map((entry) => ({
       id: entry.id,
       label: entry.label,
-      sortOrder: entry.sortOrder ?? (index + 1) * 10,
     }));
   templateForm.originalEntryIds = (template?.entries ?? []).map((entry) => entry.id);
 }
@@ -113,30 +107,17 @@ function openTemplateEdit(template: ChecklistTemplate): void {
 function addTemplateEntry(): void {
   const label = templateEntryDraft.value.trim();
   if (!label) return;
-  templateForm.entries.push({ label, sortOrder: (templateForm.entries.length + 1) * 10 });
+  templateForm.entries.push({ label });
   templateEntryDraft.value = '';
 }
 
 function removeTemplateEntry(index: number): void {
   templateForm.entries.splice(index, 1);
-  templateForm.entries.forEach((item, itemIndex) => {
-    item.sortOrder = (itemIndex + 1) * 10;
-  });
-}
-
-function moveTemplateEntry(index: number, direction: -1 | 1): void {
-  const nextIndex = index + direction;
-  if (nextIndex < 0 || nextIndex >= templateForm.entries.length) return;
-  const [entry] = templateForm.entries.splice(index, 1);
-  templateForm.entries.splice(nextIndex, 0, entry);
-  templateForm.entries.forEach((item, itemIndex) => {
-    item.sortOrder = (itemIndex + 1) * 10;
-  });
 }
 
 function normalizeTemplateEntries(): TemplateEntryDraft[] {
   return templateForm.entries
-    .map((entry, index) => ({ id: entry.id, label: entry.label.trim(), sortOrder: (index + 1) * 10 }))
+    .map((entry) => ({ id: entry.id, label: entry.label.trim() }))
     .filter((entry) => entry.label.length > 0);
 }
 
@@ -147,13 +128,13 @@ async function saveCategory(): Promise<void> {
   }
   isSaving.value = true;
   errorMessage.value = null;
-  successMessage.value = null;
+    successMessage.value = null;
   try {
     if (categoryForm.id) {
-      await store.updateCategory(categoryForm.id, { name: categoryForm.name.trim(), sortOrder: categoryForm.sortOrder });
+      await store.updateCategory(categoryForm.id, { name: categoryForm.name.trim() });
       successMessage.value = 'Category updated.';
     } else {
-      const category = await store.createCategory({ name: categoryForm.name.trim(), sortOrder: categoryForm.sortOrder });
+      const category = await store.createCategory({ name: categoryForm.name.trim() });
       selectedCategoryId.value = category.id;
       successMessage.value = 'Category created.';
     }
@@ -190,13 +171,13 @@ async function saveItem(): Promise<void> {
   }
   isSaving.value = true;
   errorMessage.value = null;
-  successMessage.value = null;
+    successMessage.value = null;
   try {
     if (itemForm.id) {
-      await store.updateItem(category.id, itemForm.id, { label: itemForm.label.trim(), sortOrder: itemForm.sortOrder });
+      await store.updateItem(category.id, itemForm.id, { label: itemForm.label.trim() });
       successMessage.value = 'Item updated.';
     } else {
-      await store.createItem(category.id, { label: itemForm.label.trim(), sortOrder: itemForm.sortOrder });
+      await store.createItem(category.id, { label: itemForm.label.trim() });
       successMessage.value = 'Item added.';
     }
     await store.loadTemplates(true);
@@ -244,9 +225,9 @@ async function saveTemplate(): Promise<void> {
       }
       for (const entry of entries) {
         if (entry.id) {
-          await store.updateTemplateEntry(updated.id, entry.id, { label: entry.label, sortOrder: entry.sortOrder });
+          await store.updateTemplateEntry(updated.id, entry.id, { label: entry.label });
         } else {
-          await store.createTemplateEntry(updated.id, { label: entry.label, sortOrder: entry.sortOrder });
+          await store.createTemplateEntry(updated.id, { label: entry.label });
         }
       }
       successMessage.value = 'Template updated.';
@@ -303,7 +284,6 @@ onMounted(load);
 
       <DataTable :value="store.sortedCategories" :loading="store.isLoading" data-key="id" striped-rows @row-click="selectCategory">
         <Column field="name" header="Name" sortable />
-        <Column field="sortOrder" header="Order" sortable />
         <Column header="Item count">
           <template #body="{ data }">{{ data.items.length }}</template>
         </Column>
@@ -328,7 +308,6 @@ onMounted(load);
 
         <DataTable :value="selectedCategory?.items ?? []" data-key="id" striped-rows>
           <Column field="label" header="Item" sortable />
-          <Column field="sortOrder" header="Order" sortable />
           <Column header="Actions">
             <template #body="{ data }">
               <div class="settings-execution__actions">
@@ -383,10 +362,6 @@ onMounted(load);
           <span>Name</span>
           <InputText id="checklist-category-name" v-model="categoryForm.name" class="auth-input" required />
         </label>
-        <label class="auth-field" for="checklist-category-order">
-          <span>Sort order</span>
-          <InputNumber v-model="categoryForm.sortOrder" input-id="checklist-category-order" class="auth-input" />
-        </label>
         <div class="record-form__actions">
           <Button type="button" label="Cancel" severity="secondary" @click="showCategoryDialog = false" />
           <Button type="submit" label="Save" icon="pi pi-save" :loading="isSaving" />
@@ -399,10 +374,6 @@ onMounted(load);
         <label class="auth-field" for="checklist-item-label">
           <span>Label</span>
           <InputText id="checklist-item-label" v-model="itemForm.label" class="auth-input" required />
-        </label>
-        <label class="auth-field" for="checklist-item-order">
-          <span>Sort order</span>
-          <InputNumber v-model="itemForm.sortOrder" input-id="checklist-item-order" class="auth-input" />
         </label>
         <div class="record-form__actions">
           <Button type="button" label="Cancel" severity="secondary" @click="showItemDialog = false" />
@@ -445,8 +416,6 @@ onMounted(load);
             <li v-for="(entry, index) in templateForm.entries" :key="entry.id ?? `${entry.label}-${index}`" class="settings-execution__template-item">
               <span>{{ entry.label }}</span>
               <div class="settings-execution__entry-actions">
-                <Button type="button" icon="pi pi-arrow-up" severity="secondary" text :disabled="index === 0" aria-label="Move item up" @click="moveTemplateEntry(index, -1)" />
-                <Button type="button" icon="pi pi-arrow-down" severity="secondary" text :disabled="index === templateForm.entries.length - 1" aria-label="Move item down" @click="moveTemplateEntry(index, 1)" />
                 <Button type="button" icon="pi pi-times" severity="danger" text aria-label="Remove item" @click="removeTemplateEntry(index)" />
               </div>
             </li>

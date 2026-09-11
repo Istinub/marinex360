@@ -14,21 +14,13 @@ function cleanName(value: unknown, field = 'name'): string {
   return value.trim();
 }
 
-function cleanSortOrder(value: unknown, fallback = 0): number {
-  if (value == null) return fallback;
-  if (typeof value !== 'number' || !Number.isInteger(value)) {
-    throw new AppError('VALIDATION_ERROR', 'sortOrder must be an integer', { field: 'sortOrder', reason: 'type' });
-  }
-  return value;
-}
-
 function mirrorTemplateId(categoryId: string): string {
   return `fixed-${categoryId}`;
 }
 
 function mirrorItems(category: ChecklistCategoryWithItems): Prisma.InputJsonValue {
   return category.items
-    .sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label))
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.label.localeCompare(b.label))
     .map((item) => ({ id: item.id, label: item.label })) as Prisma.InputJsonValue;
 }
 
@@ -37,7 +29,7 @@ const COMPLETED_CHECKLIST_REOPEN_REASON = 'New checklist item added — requires
 async function categoryOrNotFound(prisma: PrismaClient | Prisma.TransactionClient, id: string): Promise<ChecklistCategoryWithItems> {
   const category = await prisma.checklistCategory.findUnique({
     where: { id },
-    include: { items: { orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }] } },
+    include: { items: { orderBy: [{ createdAt: 'asc' }, { label: 'asc' }] } },
   });
   if (!category) throw new AppError('NOT_FOUND');
   return category;
@@ -72,18 +64,17 @@ export function checklistCategoryRoutes(app: FastifyInstance, prisma: PrismaClie
 
   app.get('/api/v1/checklist-categories', authed, async () =>
     prisma.checklistCategory.findMany({
-      include: { items: { orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }] } },
-      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+      include: { items: { orderBy: [{ createdAt: 'asc' }, { label: 'asc' }] } },
+      orderBy: [{ createdAt: 'asc' }, { name: 'asc' }],
     }));
 
   app.post('/api/v1/checklist-categories', adminDirector, async (req, reply) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const name = cleanName(body.name);
-    const sortOrder = cleanSortOrder(body.sortOrder);
     const category = await prisma.$transaction(async (tx) => {
-      const created = await tx.checklistCategory.create({ data: { name, sortOrder }, include: { items: true } });
+      const created = await tx.checklistCategory.create({ data: { name }, include: { items: true } });
       await refreshTemplateMirror(tx, created.id);
-      await appendAudit(tx, req.ctx, { entityType: 'ChecklistCategory', entityId: created.id, action: 'CREATE', diff: { name, sortOrder } });
+      await appendAudit(tx, req.ctx, { entityType: 'ChecklistCategory', entityId: created.id, action: 'CREATE', diff: { name } });
       return categoryOrNotFound(tx, created.id);
     });
     return reply.status(201).send(category);
@@ -92,13 +83,11 @@ export function checklistCategoryRoutes(app: FastifyInstance, prisma: PrismaClie
   app.patch('/api/v1/checklist-categories/:id', adminDirector, async (req) => {
     const { id } = req.params as { id: string };
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const existing = await categoryOrNotFound(prisma, id);
+    await categoryOrNotFound(prisma, id);
     const data: Prisma.ChecklistCategoryUpdateInput = {};
-    const diff: Record<string, string | number> = {};
+    const diff: Record<string, string> = {};
     if ('name' in body) data.name = cleanName(body.name);
     if ('name' in body) diff.name = data.name as string;
-    if ('sortOrder' in body) data.sortOrder = cleanSortOrder(body.sortOrder, existing.sortOrder);
-    if ('sortOrder' in body) diff.sortOrder = data.sortOrder as number;
     return prisma.$transaction(async (tx) => {
       await tx.checklistCategory.update({ where: { id }, data });
       await refreshTemplateMirror(tx, id);
@@ -134,7 +123,6 @@ export function checklistCategoryRoutes(app: FastifyInstance, prisma: PrismaClie
     const body = (req.body ?? {}) as Record<string, unknown>;
     await categoryOrNotFound(prisma, id);
     const label = cleanName(body.label, 'label');
-    const sortOrder = cleanSortOrder(body.sortOrder);
     const category = await prisma.$transaction(async (tx) => {
       const jobOrderId = typeof body.jobOrderId === 'string' && body.jobOrderId.trim() ? body.jobOrderId.trim() : null;
       const jobOrder = jobOrderId
@@ -150,9 +138,9 @@ export function checklistCategoryRoutes(app: FastifyInstance, prisma: PrismaClie
           throw new AppError('VALIDATION_ERROR', 'Cannot modify checklist after invoicing', { field: 'jobOrderId', reason: 'invoiced' });
         }
       }
-      const item = await tx.checklistTemplateItem.create({ data: { categoryId: id, label, sortOrder } });
+      const item = await tx.checklistTemplateItem.create({ data: { categoryId: id, label } });
       await refreshTemplateMirror(tx, id);
-      await appendAudit(tx, req.ctx, { entityType: 'ChecklistTemplateItem', entityId: item.id, action: 'CREATE', diff: { categoryId: id, label, sortOrder } });
+      await appendAudit(tx, req.ctx, { entityType: 'ChecklistTemplateItem', entityId: item.id, action: 'CREATE', diff: { categoryId: id, label } });
       if (jobOrder?.state === 'COMPLETED') {
         const history = await tx.jobStatusHistory.findMany({
           where: { jobOrderId: jobOrder.id },
@@ -196,11 +184,9 @@ export function checklistCategoryRoutes(app: FastifyInstance, prisma: PrismaClie
     const item = await prisma.checklistTemplateItem.findFirst({ where: { id: itemId, categoryId: id } });
     if (!item) throw new AppError('NOT_FOUND');
     const data: Prisma.ChecklistTemplateItemUpdateInput = {};
-    const diff: Record<string, string | number> = {};
+    const diff: Record<string, string> = {};
     if ('label' in body) data.label = cleanName(body.label, 'label');
     if ('label' in body) diff.label = data.label as string;
-    if ('sortOrder' in body) data.sortOrder = cleanSortOrder(body.sortOrder, item.sortOrder);
-    if ('sortOrder' in body) diff.sortOrder = data.sortOrder as number;
     return prisma.$transaction(async (tx) => {
       await tx.checklistTemplateItem.update({ where: { id: itemId }, data });
       await refreshTemplateMirror(tx, id);
