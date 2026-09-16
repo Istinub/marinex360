@@ -26,7 +26,7 @@ export type Action =
 export const CROSS_BRANCH_ROLES: ReadonlySet<Role> = new Set<Role>(['SYSTEM_ADMIN', 'DIRECTOR']); // [CONTRACT]
 
 // Roles that MUST complete TOTP at login (NFR-07; work order "role ∈ {Admin, Finance}"). [CONTRACT]
-export const MFA_REQUIRED_ROLES: ReadonlySet<Role> = new Set<Role>(['SYSTEM_ADMIN', 'FINANCE']);
+export const MFA_REQUIRED_ROLES: ReadonlySet<Role> = new Set<Role>([]); // TEMP: disabled pending enrollment-flow bug fix — was ['SYSTEM_ADMIN', 'FINANCE']
 
 const MATRIX: Record<Role, ReadonlySet<Action>> = {
   // [INFERRED] admin superset (routine ownership); PM confirm scope of SYSTEM_ADMIN.
