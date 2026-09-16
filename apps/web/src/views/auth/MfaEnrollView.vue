@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import QRCode from 'qrcode';
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { onBeforeRouteLeave, useRouter } from 'vue-router';
 import RecoveryCodesDialog from '@/components/common/RecoveryCodesDialog.vue';
 import { ApiResponseError } from '@/lib/api/errors';
@@ -27,6 +27,8 @@ const isLoading = ref(true);
 const isConfirming = ref(false);
 const hasAcknowledgedRecoveryCodes = ref(false);
 const errorMessage = ref<string | null>(null);
+const normalizedCode = computed(() => code.value.replace(/\D/g, '').slice(0, 6));
+const canConfirmEnrollment = computed(() => /^\d{6}$/.test(normalizedCode.value) && !isConfirming.value);
 
 onMounted(async () => {
   try {
@@ -50,12 +52,18 @@ onBeforeRouteLeave(() => {
 });
 
 async function confirmEnrollment(): Promise<void> {
+  code.value = normalizedCode.value;
+  if (!canConfirmEnrollment.value) {
+    errorMessage.value = 'Enter the 6-digit code from your authenticator app.';
+    return;
+  }
+
   isConfirming.value = true;
   errorMessage.value = null;
 
   try {
     const response = await post<TotpConfirmResponse, { code: string }>('/auth/totp/enroll/confirm', {
-      code: code.value,
+      code: normalizedCode.value,
     });
     recoveryCodes.value = response.recoveryCodes;
   } catch (error) {
@@ -69,6 +77,10 @@ async function acknowledgeRecoveryCodes(): Promise<void> {
   hasAcknowledgedRecoveryCodes.value = true;
   await auth.completeMfaEnrollment();
   await router.replace('/clients');
+}
+
+function normalizeCodeInput(): void {
+  code.value = normalizedCode.value;
 }
 </script>
 
@@ -106,10 +118,11 @@ async function acknowledgeRecoveryCodes(): Promise<void> {
               maxlength="6"
               pattern="[0-9]{6}"
               required
+              @input="normalizeCodeInput"
             />
           </label>
 
-          <button class="auth-button" type="submit" :disabled="isConfirming">
+          <button class="auth-button" type="submit" :disabled="!canConfirmEnrollment">
             <span class="pi pi-shield" aria-hidden="true" />
             <span>{{ isConfirming ? 'Confirming' : 'Confirm enrolment' }}</span>
           </button>
