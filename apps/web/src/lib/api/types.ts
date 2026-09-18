@@ -126,6 +126,65 @@ export interface JobOrderChecklistItem {
   updatedAt: string;
 }
 
+export interface JobOrderObservation {
+  id: string;
+  jobOrderId: string;
+  templateKey?: string | null;
+  body: string;
+  authorId: string;
+  reviewState?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface JobOrderPhoto {
+  id: string;
+  jobOrderId: string;
+  s3Key?: string | null;
+  url?: string | null;
+  phase: string;
+  geoLat?: number | null;
+  geoLng?: number | null;
+  takenAt: string;
+  capturedById: string;
+  reviewState?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface JobOrderMaterialLine {
+  id: string;
+  jobOrderId?: string | null;
+  description: string;
+  quantity: string | number;
+  unit: string;
+  unitCostAmountMinor: number;
+  unitCostCurrency: string;
+  source: string;
+  addedById: string;
+  reviewState?: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface JobOrderSignature {
+  id: string;
+  jobOrderId: string;
+  imageS3Key?: string | null;
+  imageUrl?: string | null;
+  signerName?: string | null;
+  signerRole?: string | null;
+  signedAt?: string | null;
+  deviceId?: string | null;
+  geoLat?: number | null;
+  geoLng?: number | null;
+  documentHash?: string | null;
+  reviewState?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface JobOrderWorker {
   id: string;
   jobOrderId: string;
@@ -212,6 +271,7 @@ export interface JobOrder {
   plannedStartDate?: string | null;
   deadline?: string | null;
   reportObjectKey?: string | null;
+  logoOverride?: string | null;
   deletedAt?: string | null;
   archivedAt?: string | null;
   purgedAt?: string | null;
@@ -226,6 +286,10 @@ export interface JobOrder {
   editHistory?: JobOrderEditHistoryEntry[];
   invoices?: Invoice[];
   checklistItems?: JobOrderChecklistItem[];
+  observations?: JobOrderObservation[];
+  photos?: JobOrderPhoto[];
+  materials?: JobOrderMaterialLine[];
+  signature?: JobOrderSignature | null;
   workers?: JobOrderWorker[];
 }
 
@@ -241,6 +305,7 @@ export interface Variation {
   isSubcontracted: boolean;
   status: VariationStatus;
   approverId?: string | null;
+  approver?: Pick<User, 'id' | 'name' | 'email'> | null;
   version: number;
   createdAt: string;
 }

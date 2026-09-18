@@ -11,6 +11,7 @@ import { assertTransition, isHeaderLocked, type JoState } from '../domain/josm.j
 import { buildDraftInvoice } from '../domain/invoice.js';
 import { buildFinancialSummary } from '../domain/financialSummary.js';
 import { enqueueJobOrderReportGeneration } from '../services/jobOrderReportQueue.js';
+import { assertBrandingLogoFilename } from '../services/brandingAssets.js';
 import { Storage } from '@marinex360/storage';
 
 const HEADER_FIELDS = ['scopeSummary', 'port', 'plannedStartDate', 'deadline', 'externalQuoteRef', 'externalRfqRef'];
@@ -18,6 +19,7 @@ const ALLOWED_CURRENCIES = new Set(['SGD', 'MYR', 'USD', 'IDR']);
 const isTech = (roles: string[]) => roles.includes('TECHNICIAN') && roles.length === 1;
 const isAdminOrDirector = (roles: string[]) => roles.includes('SYSTEM_ADMIN') || roles.includes('DIRECTOR');
 const isDirector = (roles: string[]) => roles.includes('DIRECTOR');
+const PRESENTATION_METADATA_FIELDS = new Set(['logoOverride']);
 
 type TechnicianJoAccess = { visible: boolean; canOpen: boolean; readOnly: boolean; canStart: boolean; canResume: boolean };
 
@@ -27,6 +29,50 @@ const jobOrderDetailInclude = {
   vessel: { select: { id: true, name: true, imoNumber: true } },
   vendor: { select: { id: true, name: true } },
   checklistItems: { orderBy: [{ createdAt: 'asc' }, { label: 'asc' }] },
+  observations: {
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, jobOrderId: true, templateKey: true, body: true, authorId: true, reviewState: true, createdAt: true, updatedAt: true },
+  },
+  photos: {
+    orderBy: { takenAt: 'asc' },
+    select: { id: true, jobOrderId: true, s3Key: true, phase: true, geoLat: true, geoLng: true, takenAt: true, capturedById: true, reviewState: true, createdAt: true, updatedAt: true },
+  },
+  materials: {
+    where: { deletedAt: null },
+    orderBy: { createdAt: 'asc' },
+    select: {
+      id: true,
+      jobOrderId: true,
+      description: true,
+      quantity: true,
+      unit: true,
+      unitCostAmountMinor: true,
+      unitCostCurrency: true,
+      source: true,
+      addedById: true,
+      reviewState: true,
+      version: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  },
+  signature: {
+    select: {
+      id: true,
+      jobOrderId: true,
+      imageS3Key: true,
+      signerName: true,
+      signerRole: true,
+      signedAt: true,
+      deviceId: true,
+      geoLat: true,
+      geoLng: true,
+      documentHash: true,
+      reviewState: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  },
   workers: { orderBy: { addedAt: 'desc' } },
   statusHistory: {
     orderBy: { at: 'asc' },
@@ -72,6 +118,51 @@ function technicianAccessFor(jo: { state: string; executionOwnerId?: string | nu
 
 function withTechnicianAccess<T extends { state: string; executionOwnerId?: string | null }>(jo: T, userId: string): T & TechnicianJoAccess {
   return { ...jo, ...technicianAccessFor(jo, userId) };
+}
+
+async function withCompletionAssetUrls<T extends { photos?: any[] | null; signature?: any | null }>(jo: T): Promise<T> {
+  const storage = Storage.fromEnv();
+  const photos = await Promise.all((jo.photos ?? []).map(async (photo) => ({
+    ...photo,
+    url: photo.s3Key ? await storage.presignGet(photo.s3Key, 900) : null,
+  })));
+  const signature = jo.signature
+    ? {
+        ...jo.signature,
+        imageUrl: jo.signature.imageS3Key ? await storage.presignGet(jo.signature.imageS3Key, 900) : null,
+      }
+    : null;
+  return { ...jo, photos, signature };
+}
+
+async function withVariationApprovers<T extends { variations?: { approverId?: string | null }[] | null }>(
+  prisma: PrismaClient,
+  jo: T,
+): Promise<T> {
+  const approverIds = [...new Set((jo.variations ?? [])
+    .map((variation) => variation.approverId)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0))];
+  if (approverIds.length === 0) return { ...jo, variations: (jo.variations ?? []).map((variation) => ({ ...variation, approver: null })) };
+
+  const approvers = await prisma.user.findMany({
+    where: { id: { in: approverIds } },
+    select: { id: true, name: true, email: true },
+  });
+  const approverById = new Map(approvers.map((approver) => [approver.id, approver]));
+  return {
+    ...jo,
+    variations: (jo.variations ?? []).map((variation) => ({
+      ...variation,
+      approver: variation.approverId ? approverById.get(variation.approverId) ?? null : null,
+    })),
+  };
+}
+
+async function withJobOrderDetailExtras<T extends { photos?: any[] | null; signature?: any | null; variations?: { approverId?: string | null }[] | null }>(
+  prisma: PrismaClient,
+  jo: T,
+): Promise<T> {
+  return withCompletionAssetUrls(await withVariationApprovers(prisma, jo));
 }
 
 async function validateServiceCategories(prisma: PrismaClient | Prisma.TransactionClient, serviceCategories: unknown): Promise<string[]> {
@@ -167,6 +258,12 @@ function normalizeCurrency(input: unknown): string {
   const currency = input.trim().toUpperCase();
   if (!ALLOWED_CURRENCIES.has(currency)) throw new AppError('VALIDATION_ERROR', 'currency must be one of SGD, MYR, USD, IDR');
   return currency;
+}
+
+async function normalizeOptionalLogoOverride(input: unknown): Promise<string | null> {
+  if (input == null) return null;
+  if (typeof input === 'string' && !input.trim()) return null;
+  return assertBrandingLogoFilename(input);
 }
 
 async function vendorTagForBranch(
@@ -275,6 +372,11 @@ async function findScopedVisibleJobOrder(tx: Prisma.TransactionClient, id: strin
   return jo;
 }
 
+function assertCompletionReviewEditor(jo: { state: string }, roles: string[]): void {
+  if (!isAdminOrDirector(roles)) throw new AppError('FORBIDDEN');
+  if (jo.state !== 'PENDING_REVIEW') throw new AppError('FORBIDDEN', 'completion details can only be edited during PENDING_REVIEW');
+}
+
 export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void {
   const authed = { preHandler: [app.authenticate, app.requireMfaEnrolled] };
 
@@ -304,6 +406,11 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
     }
     const branch = branchForCreate(req.ctx, b.branch);
     const quotedCurrency = normalizeCurrency(b.quotedCurrency);
+    let logoOverride: string | null = null;
+    if ('logoOverride' in b) {
+      if (!isAdminOrDirector(req.ctx.roles)) throw new AppError('FORBIDDEN');
+      logoOverride = await normalizeOptionalLogoOverride(b.logoOverride);
+    }
     const created = await prisma.$transaction(async (tx) => {
       const refs = await resolveJobOrderFormReferences(tx, req.ctx, branch, b);
       if (!refs.clientId || !refs.vesselId) throw new AppError('VALIDATION_ERROR', 'clientId, vesselId, scopeSummary, quotedAmount required');
@@ -322,6 +429,7 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
           quotedAmountMinor: b.quotedAmountMinor, quotedCurrency,
           labourRateAmountMinor: b.labourRateAmountMinor ?? DEFAULT_LABOUR_RATE.amountMinor,
           labourRateCurrency: b.labourRateCurrency ?? DEFAULT_LABOUR_RATE.currency,
+          logoOverride,
           state: 'DRAFT', createdBy: req.ctx.userId,
         },
       });
@@ -450,13 +558,13 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
     if (isTech(req.ctx.roles)) {
       const access = technicianAccessFor(jo, req.ctx.userId);
       if (!access.visible || !access.canOpen) throw new AppError('NOT_FOUND');
-      return { ...jo, ...access };
+      return withJobOrderDetailExtras(prisma, { ...jo, ...access });
     }
     if (req.ctx.roles.includes('CLIENT' as any)) {
       const clientId = await clientIdForUser(prisma, req.ctx);
       if (jo.clientId !== clientId) throw new AppError('NOT_FOUND');
     }
-    return jo;
+    return withJobOrderDetailExtras(prisma, jo);
   });
 
   app.get('/api/v1/job-orders/:id/financial-summary', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('jobOrder:read')] }, async (req) => {
@@ -565,9 +673,15 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
       const jo = await tx.jobOrder.findFirst({ where: { id, deletedAt: null, archivedAt: null, purgedAt: null } });
       if (!jo) throw new AppError('NOT_FOUND');
       assertBranchAccess(req.ctx, jo.branch);
-      if (isHeaderLocked(jo.state as JoState)) throw new AppError('FORBIDDEN', 'header locked; scope changes require a Variation');
+      const submittedFields = Object.keys(b).filter((field) => field !== 'version');
+      const onlyPresentationMetadata = submittedFields.length > 0 && submittedFields.every((field) => PRESENTATION_METADATA_FIELDS.has(field));
+      if (isHeaderLocked(jo.state as JoState) && !onlyPresentationMetadata) throw new AppError('FORBIDDEN', 'header locked; scope changes require a Variation');
       const data: any = {};
       for (const f of HEADER_FIELDS) if (f in b) data[f] = b[f];
+      if ('logoOverride' in b) {
+        if (!isAdminOrDirector(req.ctx.roles)) throw new AppError('FORBIDDEN');
+        data.logoOverride = await normalizeOptionalLogoOverride(b.logoOverride);
+      }
       const branch = 'branch' in b ? branchForCreate(req.ctx, b.branch) : jo.branch;
       if ('branch' in b) data.branch = branch;
       if ('clientId' in b || 'vesselId' in b || 'newClientName' in b || 'newVesselName' in b || 'branch' in b) {
@@ -702,11 +816,65 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
     if (typeof b.checked !== 'boolean') throw new AppError('VALIDATION_ERROR', 'checked must be boolean');
     return prisma.$transaction(async (tx) => {
       const jo = await findScopedVisibleJobOrder(tx, id, req.ctx);
-      if (isTech(req.ctx.roles) && technicianAccessFor(jo, req.ctx.userId).readOnly) throw new AppError('FORBIDDEN');
+      if (isTech(req.ctx.roles)) {
+        if (technicianAccessFor(jo, req.ctx.userId).readOnly) throw new AppError('FORBIDDEN');
+      } else {
+        assertCompletionReviewEditor(jo, req.ctx.roles);
+      }
       const existing = await tx.jobOrderChecklistItem.findFirst({ where: { id: itemId, jobOrderId: id } });
       if (!existing) throw new AppError('NOT_FOUND');
       const updated = await tx.jobOrderChecklistItem.update({ where: { id: itemId }, data: { checked: b.checked } });
       await appendAudit(tx, req.ctx, { entityType: 'JobOrderChecklistItem', entityId: itemId, action: 'UPDATE', diff: { checked: b.checked } });
+      return updated;
+    });
+  });
+
+  app.patch('/api/v1/job-orders/:id/observations/:observationId', authed, async (req) => {
+    const { id, observationId } = req.params as any;
+    const b = (req.body ?? {}) as any;
+    const body = typeof b.body === 'string' ? b.body.trim() : '';
+    if (!body) throw new AppError('VALIDATION_ERROR', 'body required');
+    return prisma.$transaction(async (tx) => {
+      const jo = await findScopedVisibleJobOrder(tx, id, req.ctx);
+      assertCompletionReviewEditor(jo, req.ctx.roles);
+      const existing = await tx.observation.findFirst({ where: { id: observationId, jobOrderId: id } });
+      if (!existing) throw new AppError('NOT_FOUND');
+      const updated = await tx.observation.update({ where: { id: observationId }, data: { body } });
+      await appendAudit(tx, req.ctx, { entityType: 'Observation', entityId: observationId, action: 'UPDATE', diff: { body } });
+      return updated;
+    });
+  });
+
+  app.patch('/api/v1/job-orders/:id/materials/:materialId', authed, async (req) => {
+    const { id, materialId } = req.params as any;
+    const b = (req.body ?? {}) as any;
+    const description = typeof b.description === 'string' ? b.description.trim() : '';
+    const quantity = Number(b.quantity);
+    const unit = typeof b.unit === 'string' ? b.unit.trim() : '';
+    const unitCostAmountMinor = b.unitCostAmountMinor;
+    const unitCostCurrency = typeof b.unitCostCurrency === 'string' ? b.unitCostCurrency.trim().toUpperCase() : '';
+    if (!description) throw new AppError('VALIDATION_ERROR', 'description required');
+    if (!Number.isFinite(quantity) || quantity <= 0) throw new AppError('VALIDATION_ERROR', 'quantity must be greater than zero');
+    if (!unit) throw new AppError('VALIDATION_ERROR', 'unit required');
+    if (typeof unitCostAmountMinor !== 'number' || !Number.isInteger(unitCostAmountMinor)) {
+      throw new AppError('VALIDATION_ERROR', 'unitCostAmountMinor must be an integer');
+    }
+    if (!ALLOWED_CURRENCIES.has(unitCostCurrency)) throw new AppError('VALIDATION_ERROR', 'unitCostCurrency must be one of SGD, MYR, USD, IDR');
+    return prisma.$transaction(async (tx) => {
+      const jo = await findScopedVisibleJobOrder(tx, id, req.ctx);
+      assertCompletionReviewEditor(jo, req.ctx.roles);
+      const existing = await tx.materialLine.findFirst({ where: { id: materialId, jobOrderId: id, deletedAt: null } });
+      if (!existing) throw new AppError('NOT_FOUND');
+      const updated = await tx.materialLine.update({
+        where: { id: materialId },
+        data: { description, quantity, unit, unitCostAmountMinor, unitCostCurrency, version: { increment: 1 } },
+      });
+      await appendAudit(tx, req.ctx, {
+        entityType: 'MaterialLine',
+        entityId: materialId,
+        action: 'UPDATE',
+        diff: { description, quantity, unit, unitCostAmountMinor, unitCostCurrency },
+      });
       return updated;
     });
   });
@@ -728,6 +896,28 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
     if (!jo.reportObjectKey) return { status: 'PENDING' };
     const url = await Storage.fromEnv().presignGet(jo.reportObjectKey, 900);
     return { status: 'READY', url, objectKey: jo.reportObjectKey };
+  });
+
+  app.post('/api/v1/job-orders/:id/report/regenerate', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('jobOrder:read')] }, async (req) => {
+    const { id } = req.params as any;
+    if (!isAdminOrDirector(req.ctx.roles)) throw new AppError('FORBIDDEN');
+
+    await prisma.$transaction(async (tx) => {
+      const jo = await tx.jobOrder.findFirst({ where: { id, deletedAt: null, archivedAt: null, purgedAt: null } });
+      if (!jo) throw new AppError('NOT_FOUND');
+      assertBranchAccess(req.ctx, jo.branch);
+      if (!['COMPLETED', 'INVOICED', 'CLOSED'].includes(jo.state)) {
+        throw new AppError('VALIDATION_ERROR', 'report can only be regenerated once the job order is completed');
+      }
+      if (!jo.reportObjectKey) {
+        throw new AppError('VALIDATION_ERROR', 'report has not been generated yet');
+      }
+      await tx.jobOrder.update({ where: { id }, data: { reportObjectKey: null } });
+      await appendAudit(tx, req.ctx, { entityType: 'JobOrder', entityId: id, action: 'REGENERATE_REPORT', diff: { previousObjectKey: jo.reportObjectKey } });
+    });
+
+    await enqueueJobOrderReportGeneration(id);
+    return { status: 'QUEUED' };
   });
 
   app.post('/api/v1/job-orders/:id/transition', authed, async (req) => {

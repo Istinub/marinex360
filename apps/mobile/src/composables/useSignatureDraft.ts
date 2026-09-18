@@ -3,7 +3,6 @@ import { Preferences } from '@capacitor/preferences';
 export interface SignatureDraft {
   jobOrderId: string;
   signerName: string;
-  technicianId: string;
   signerPhone: string;
   signerEmail: string;
   imageLocalPath: string;
@@ -24,7 +23,6 @@ export async function loadSignatureDraft(jobOrderId: string): Promise<SignatureD
     if (
       parsed.jobOrderId !== jobOrderId ||
       typeof parsed.signerName !== 'string' ||
-      typeof parsed.technicianId !== 'string' ||
       typeof parsed.signerPhone !== 'string' ||
       typeof parsed.signerEmail !== 'string' ||
       typeof parsed.imageLocalPath !== 'string' ||

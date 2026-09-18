@@ -22,12 +22,14 @@ async function logoDataUri(filename: string): Promise<BrandingLogo> {
   return { filename, dataUri: `data:image/png;base64,${Buffer.from(bytes).toString('base64')}` };
 }
 
-export async function loadBrandingLogo(prisma: PrismaClient): Promise<BrandingLogo> {
+export async function loadBrandingLogo(prisma: PrismaClient, preferredFilename?: string | null): Promise<BrandingLogo> {
   const [settings, available] = await Promise.all([
     prisma.brandingSettings.findUnique({ where: { id: BRANDING_SETTINGS_ID } }),
     listLogoFilenames(),
   ]);
-  const filename = settings?.logoFilename && available.includes(settings.logoFilename)
+  const filename = preferredFilename && available.includes(preferredFilename)
+    ? preferredFilename
+    : settings?.logoFilename && available.includes(settings.logoFilename)
     ? settings.logoFilename
     : DEFAULT_LOGO_FILENAME;
   return logoDataUri(filename);

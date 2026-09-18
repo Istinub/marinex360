@@ -80,6 +80,9 @@ jobs:
           PGPASSWORD=localdev psql -h localhost -U marinex -d marinex360 \
             -v app_password="'localdev_app'" \
             -f infra/postgres/provision-app-role.sql
+          PGPASSWORD=localdev psql -h localhost -U marinex -d marinex360 \
+            -v readonly_password="'localdev_readonly'" \
+            -f infra/postgres/provision-readonly-role.sql
 
       - name: Prisma validate
         run: npx prisma validate

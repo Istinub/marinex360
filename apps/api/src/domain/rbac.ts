@@ -2,6 +2,7 @@
 // LEGEND in comments:  [CONTRACT] = explicitly fixed by INTERFACE_CONTRACT v1.1 / QA criteria.
 //                      [INFERRED] = reasonable Phase-1 default; PM/TL to confirm (flagged in HANDOFF).
 import { AppError } from '../lib/errors.js';
+import type { PrismaClient } from '@prisma/client';
 
 export type Role = 'SYSTEM_ADMIN' | 'DIRECTOR' | 'FINANCE' | 'OPS_SUPERVISOR' | 'TECHNICIAN' | 'CLIENT';
 export const ALL_ROLES: Role[] = ['SYSTEM_ADMIN', 'DIRECTOR', 'FINANCE', 'OPS_SUPERVISOR', 'TECHNICIAN', 'CLIENT'];
@@ -10,7 +11,7 @@ export type Action =
   | 'client:read' | 'client:write'
   | 'contact:read' | 'contact:write'
   | 'vessel:read' | 'vessel:write'
-  | 'jobOrder:read' | 'jobOrder:create' | 'jobOrder:updateHeader' | 'jobOrder:assign'
+  | 'jobOrder:read' | 'jobOrder:create' | 'jobOrder:updateHeader' | 'jobOrder:assign' | 'jobOrder:share'
   | 'jobRequest:read' | 'jobRequest:create' | 'jobRequest:convert' | 'jobRequest:decline'
   | 'variation:create' | 'variation:approve' | 'variation:reject'
   | 'review:read' | 'review:resolve'
@@ -20,31 +21,32 @@ export type Action =
   | 'vendor:read' | 'vendor:write'
   | 'material:write'
   | 'audit:read'
-  | 'user:admin';
+  | 'user:admin'
+  | 'admin:devTools';
 
 // Roles that MAY reach across branches (RBAC-CROSS-1). Everyone else is branch-pinned.
 export const CROSS_BRANCH_ROLES: ReadonlySet<Role> = new Set<Role>(['SYSTEM_ADMIN', 'DIRECTOR']); // [CONTRACT]
 
 // Roles that MUST complete TOTP at login (NFR-07; work order "role ∈ {Admin, Finance}"). [CONTRACT]
-export const MFA_REQUIRED_ROLES: ReadonlySet<Role> = new Set<Role>([]); // TEMP: disabled pending enrollment-flow bug fix — was ['SYSTEM_ADMIN', 'FINANCE']
+export const MFA_REQUIRED_ROLES: ReadonlySet<Role> = new Set<Role>(['SYSTEM_ADMIN', 'FINANCE']);
 
 const MATRIX: Record<Role, ReadonlySet<Action>> = {
   // [INFERRED] admin superset (routine ownership); PM confirm scope of SYSTEM_ADMIN.
   SYSTEM_ADMIN: new Set<Action>([
     'client:read', 'client:write', 'contact:read', 'contact:write', 'vessel:read', 'vessel:write',
-    'jobOrder:read', 'jobOrder:create', 'jobOrder:updateHeader', 'jobOrder:assign',
+    'jobOrder:read', 'jobOrder:create', 'jobOrder:updateHeader', 'jobOrder:assign', 'jobOrder:share',
     'jobRequest:read', 'jobRequest:create', 'jobRequest:convert', 'jobRequest:decline',
     'variation:create', 'variation:approve', 'variation:reject',
     'review:read', 'review:resolve', 'invoice:read', 'invoice:create', 'invoice:issue', 'invoice:recordPayment',
     'document:read', 'document:write', 'certificate:read', 'certificate:write',
     'vendor:read', 'vendor:write',
-    'material:write', 'audit:read', 'user:admin',
+    'material:write', 'audit:read', 'user:admin', 'admin:devTools',
   ]),
   // Director: approves/rejects EVERY variation (D-003) [CONTRACT]; consolidated cross-branch
   // READ (RBAC-CROSS-1) [CONTRACT]. Not wired for routine CRUD [INFERRED].
   DIRECTOR: new Set<Action>([
     'client:read', 'client:write', 'contact:read', 'contact:write', 'vessel:read', 'vessel:write',
-    'jobOrder:read', 'jobOrder:create', 'jobOrder:updateHeader', 'jobOrder:assign',
+    'jobOrder:read', 'jobOrder:create', 'jobOrder:updateHeader', 'jobOrder:assign', 'jobOrder:share',
     'jobRequest:read', 'jobRequest:create', 'jobRequest:convert', 'jobRequest:decline',
     'variation:create', 'variation:approve', 'variation:reject', 'review:read', 'review:resolve',
     'invoice:read', 'invoice:create', 'invoice:issue', 'invoice:recordPayment', 'document:read', 'document:write',
@@ -61,7 +63,7 @@ const MATRIX: Record<Role, ReadonlySet<Action>> = {
   // consistent with JOSM gating in contract]. NOT variation:approve (Director/System Admin only) [CONTRACT].
   OPS_SUPERVISOR: new Set<Action>([
     'client:read', 'client:write', 'contact:read', 'contact:write', 'vessel:read', 'vessel:write',
-    'jobOrder:read', 'jobOrder:create', 'jobOrder:updateHeader', 'jobOrder:assign',
+    'jobOrder:read', 'jobOrder:create', 'jobOrder:updateHeader', 'jobOrder:assign', 'jobOrder:share',
     'jobRequest:read', 'jobRequest:create', 'jobRequest:convert', 'jobRequest:decline',
     'variation:create', 'review:read', 'review:resolve', 'material:write', 'invoice:read',
     'document:read', 'document:write', 'certificate:read', 'certificate:write', 'vendor:read', 'vendor:write',
@@ -82,4 +84,10 @@ export function assertCan(roles: Role[], action: Action): void {
 }
 
 export const isCrossBranch = (roles: Role[]) => roles.some((r) => CROSS_BRANCH_ROLES.has(r));
-export const requiresMfaAtLogin = (roles: Role[]) => roles.some((r) => MFA_REQUIRED_ROLES.has(r));
+export const roleRequiresMfaAtLogin = (roles: Role[]) => roles.some((r) => MFA_REQUIRED_ROLES.has(r));
+
+export async function requiresMfaAtLogin(prisma: PrismaClient, roles: Role[]): Promise<boolean> {
+  if (!roleRequiresMfaAtLogin(roles)) return false;
+  const flag = await prisma.featureFlag.findUnique({ where: { key: 'MFA_REQUIRED' } });
+  return flag?.enabled === true;
+}

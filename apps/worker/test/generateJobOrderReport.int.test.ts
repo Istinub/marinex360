@@ -32,7 +32,7 @@ run('generateJobOrderReport worker integration', () => {
         quotedCurrency: 'SGD',
         state: 'COMPLETED',
         createdBy: user.id,
-        checklistItems: { create: [{ label: 'Sea trial complete', sortOrder: 1, checked: true }] },
+        checklistItems: { create: [{ label: 'Sea trial complete', checked: true }] },
         observations: { create: [{ body: 'All checks passed.', authorId: user.id }] },
         materials: {
           create: [{

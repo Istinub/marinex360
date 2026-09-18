@@ -4,6 +4,7 @@ import puppeteer from 'puppeteer-core';
 import { Storage } from '@marinex360/storage';
 import { renderJobOrderReportHtml } from '../lib/jobOrderReportTemplate.js';
 import { loadBrandingLogo } from '../lib/branding.js';
+import { pdfPageMargins, renderPdfFooterTemplate } from '../lib/pdfLetterhead.js';
 
 const prisma = new PrismaClient();
 const storage = Storage.fromEnv();
@@ -29,7 +30,7 @@ export async function generateJobOrderReport(jobOrderId: string): Promise<{ repo
       signature: true,
     },
   });
-  const brandingLogo = await loadBrandingLogo(prisma);
+  const brandingLogo = await loadBrandingLogo(prisma, jobOrder.logoOverride);
   const html = renderJobOrderReportHtml(jobOrder, brandingLogo);
 
   const execPath = process.env.PUPPETEER_EXECUTABLE_PATH ?? '/usr/bin/chromium';
@@ -42,7 +43,14 @@ export async function generateJobOrderReport(jobOrderId: string): Promise<{ repo
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'load' });
-    pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
+    pdfBuffer = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      displayHeaderFooter: true,
+      headerTemplate: '<div></div>',
+      footerTemplate: renderPdfFooterTemplate(),
+      margin: pdfPageMargins,
+    });
   } finally {
     await browser.close();
   }

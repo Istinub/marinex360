@@ -12,12 +12,15 @@ import {
 export interface AuthIdentity {
   userId: string;
   name?: string;
+  email?: string;
   roles: string[];
   branch: string;
 }
 
 interface AccessClaims {
   sub: string;
+  name?: string;
+  email?: string;
   roles: string[];
   branch: string;
   mfaComplete?: boolean;
@@ -67,6 +70,8 @@ function decodeAccessClaims(access: string): AccessClaims | null {
 
     return {
       sub: claims.sub,
+      name: typeof claims.name === 'string' ? claims.name : undefined,
+      email: typeof claims.email === 'string' ? claims.email : undefined,
       roles: claims.roles.filter((role): role is string => typeof role === 'string'),
       branch: claims.branch,
       mfaComplete: claims.mfaComplete,
@@ -84,6 +89,8 @@ function identityFromAccess(access: string): AuthIdentity | null {
 
   return {
     userId: claims.sub,
+    name: claims.name,
+    email: claims.email,
     roles: claims.roles,
     branch: claims.branch,
   };

@@ -5,7 +5,7 @@ import Calendar from 'primevue/calendar';
 import DataTable from 'primevue/datatable';
 import InputText from 'primevue/inputtext';
 import { computed, onMounted, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import MonoText from '@/components/common/MonoText.vue';
 import { jobOrderStateClass, jobOrderStateLabel } from '@/composables/useJobOrderStateMeta';
 import { ApiResponseError } from '@/lib/api/errors';
@@ -19,14 +19,15 @@ const auth = useAuthStore();
 const clientsStore = useClientsStore();
 const jobOrdersStore = useJobOrdersStore();
 const vesselsStore = useVesselsStore();
+const route = useRoute();
 const router = useRouter();
-const stateFilter = ref<JobState | ''>('');
 const search = ref('');
 const plannedFrom = ref<Date | null>(null);
 const plannedTo = ref<Date | null>(null);
 const errorMessage = ref<string | null>(null);
 const createRoles = ['SYSTEM_ADMIN', 'DIRECTOR', 'OPS_SUPERVISOR'];
 const canCreateJobOrder = computed(() => (auth.identity?.roles ?? []).some((role) => createRoles.includes(role)));
+const isAdmin = computed(() => auth.identity?.roles.includes('SYSTEM_ADMIN') ?? false);
 
 const jobStates: JobState[] = [
   'DRAFT',
@@ -40,15 +41,24 @@ const jobStates: JobState[] = [
   'CANCELLED',
 ];
 
+const queryState = typeof route.query.state === 'string' && jobStates.includes(route.query.state as JobState) ? route.query.state as JobState : '';
+const stateFilter = ref<JobState | ''>(queryState);
+const overdueOnly = ref(route.query.overdue === '1');
 const clientNameById = computed(() => new Map(clientsStore.clients.map((client) => [client.id, client.name])));
 const vesselNameById = computed(() => new Map(vesselsStore.vessels.map((vessel) => [vessel.id, vessel.name])));
-const hasActiveFilters = computed(() => Boolean(stateFilter.value || search.value.trim() || plannedFrom.value || plannedTo.value));
+const terminalStates = new Set<JobState>(['COMPLETED', 'INVOICED', 'CLOSED', 'CANCELLED']);
+const hasActiveFilters = computed(() => Boolean(stateFilter.value || overdueOnly.value || search.value.trim() || plannedFrom.value || plannedTo.value));
 const stateOptions = computed(() => jobStates.map((state) => ({ value: state, label: jobOrderStateLabel(state) })));
 
 const filteredJobOrders = computed(() => {
   const query = search.value.trim().toLowerCase();
   return jobOrdersStore.sortedJobOrders.filter((jobOrder) => {
     if (stateFilter.value && jobOrder.state !== stateFilter.value) return false;
+    if (overdueOnly.value) {
+      if (!jobOrder.deadline) return false;
+      if (new Date(jobOrder.deadline).getTime() >= Date.now()) return false;
+      if (terminalStates.has(jobOrder.state)) return false;
+    }
 
     if (query) {
       const clientName = clientLabel(jobOrder);
@@ -98,11 +108,11 @@ function dateFilterValue(value: Date | null): string {
 }
 
 function clientLabel(jobOrder: JobOrder): string {
-  return clientNameById.value.get(jobOrder.clientId) ?? jobOrder.clientId;
+  return clientNameById.value.get(jobOrder.clientId) ?? (isAdmin.value ? jobOrder.clientId : 'Unnamed client');
 }
 
 function vesselLabel(jobOrder: JobOrder): string {
-  return vesselNameById.value.get(jobOrder.vesselId) ?? jobOrder.vesselId;
+  return vesselNameById.value.get(jobOrder.vesselId) ?? (isAdmin.value ? jobOrder.vesselId : 'Unnamed vessel');
 }
 
 function openJobOrder(jobOrder: JobOrder): void {

@@ -1,4 +1,5 @@
 import { authenticatedFetch, currentSessionSnapshot } from './useAuth.ts';
+import { cacheExecutionDetailsFromJobOrder } from './useExecutionSummary.ts';
 import { apiBase, type MobileSqlAdapter } from './useOfflineExecution.ts';
 
 export type JobState =
@@ -48,6 +49,10 @@ export interface MobileJobOrder {
   client?: NamedRelation | null;
   vessel?: NamedRelation | null;
   checklistItems?: JobOrderChecklistItem[];
+  observations?: JobOrderObservation[];
+  photos?: JobOrderPhoto[];
+  materials?: JobOrderMaterial[];
+  signature?: JobOrderSignature | null;
   workers?: JobOrderWorker[];
 }
 
@@ -65,6 +70,53 @@ export interface JobOrderWorker {
   jobOrderId: string;
   name: string;
   addedAt: string;
+}
+
+export interface JobOrderObservation {
+  id: string;
+  jobOrderId?: string | null;
+  templateKey?: string | null;
+  body: string;
+  authorId?: string | null;
+  createdAt?: string | null;
+}
+
+export interface JobOrderPhoto {
+  id: string;
+  jobOrderId?: string | null;
+  s3Key?: string | null;
+  phase: string;
+  geoLat?: number | null;
+  geoLng?: number | null;
+  takenAt?: string | null;
+  capturedById?: string | null;
+}
+
+export interface JobOrderMaterial {
+  id: string;
+  jobOrderId?: string | null;
+  partCatalogId?: string | null;
+  description: string;
+  quantity: string | number;
+  unit: string;
+  unitCostAmountMinor: number;
+  unitCostCurrency: string;
+  source?: string | null;
+  addedById?: string | null;
+  version?: number | null;
+}
+
+export interface JobOrderSignature {
+  id: string;
+  jobOrderId?: string | null;
+  imageS3Key?: string | null;
+  signerName?: string | null;
+  signerRole?: string | null;
+  signedAt?: string | null;
+  deviceId?: string | null;
+  geoLat?: number | null;
+  geoLng?: number | null;
+  documentHash?: string | null;
 }
 
 interface JoCacheRow {
@@ -302,6 +354,7 @@ export async function loadLiveJobOrder(id: string): Promise<MobileJobOrder> {
   });
   const job = await jsonResponse<MobileJobOrder>(response);
   await cacheJobOrder(job);
+  await cacheExecutionDetailsFromJobOrder(job);
   return job;
 }
 

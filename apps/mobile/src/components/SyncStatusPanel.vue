@@ -157,7 +157,7 @@ function rowSummary(row: OpQueueRow): string {
   if (row.entity === 'Observation') return stringField(payload, 'body') ?? `${job} observation`;
   if (row.entity === 'WorkLog') return `${job} work log`;
   if (row.entity === 'Photo') return stringField(payload, 'phase') ?? `${job} photo`;
-  if (row.entity === 'ChecklistInstance') return stringField(payload, 'templateId', 'template_id') ?? `${job} checklist`;
+  if (row.entity === 'ChecklistInstance') return `${job} checklist`;
   if (row.entity === 'ESignature') return stringField(payload, 'signerName', 'signer_name') ?? `${job} signature`;
 
   return `${job} ${row.action.toLowerCase()}`;

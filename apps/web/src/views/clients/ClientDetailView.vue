@@ -2,23 +2,26 @@
 import Button from 'primevue/button';
 import Column from 'primevue/column';
 import DataTable from 'primevue/datatable';
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import BackLink from '@/components/common/BackLink.vue';
 import MonoText from '@/components/common/MonoText.vue';
 import NotFoundState from '@/components/common/NotFoundState.vue';
 import { ApiResponseError } from '@/lib/api/errors';
 import type { ClientDetail } from '@/lib/api/types';
+import { useAuthStore } from '@/stores/auth';
 import { useClientsStore } from '@/stores/clients';
 
 const route = useRoute();
 const router = useRouter();
+const auth = useAuthStore();
 const clientsStore = useClientsStore();
 
 const client = ref<ClientDetail | null>(null);
 const isLoading = ref(true);
 const isNotFound = ref(false);
 const errorMessage = ref<string | null>(null);
+const isAdmin = computed(() => auth.identity?.roles.includes('SYSTEM_ADMIN') ?? false);
 
 onMounted(async () => {
   try {
@@ -56,10 +59,6 @@ onMounted(async () => {
 
       <dl class="detail-grid">
         <div>
-          <dt>ID</dt>
-          <dd><MonoText :value="client.id" /></dd>
-        </div>
-        <div>
           <dt>Status</dt>
           <dd>{{ client.status }}</dd>
         </div>
@@ -92,6 +91,16 @@ onMounted(async () => {
         </div>
       </dl>
 
+      <details v-if="isAdmin" class="technical-details">
+        <summary>Technical details</summary>
+        <dl class="detail-grid detail-grid--single">
+          <div>
+            <dt>Client ID</dt>
+            <dd><MonoText :value="client.id" /></dd>
+          </div>
+        </dl>
+      </details>
+
       <section class="crm-section" aria-labelledby="client-vessels-title">
         <h2 id="client-vessels-title" class="crm-section__title">Vessels</h2>
 
@@ -120,3 +129,24 @@ onMounted(async () => {
     </template>
   </main>
 </template>
+
+<style scoped>
+.technical-details {
+  margin-top: 16px;
+  padding: 12px;
+  border: 0.5px dashed #C2CCD4;
+  border-radius: 8px;
+  background: #F4F7FA;
+  color: #5C7081;
+}
+
+.technical-details summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.technical-details .detail-grid {
+  margin-top: 10px;
+}
+</style>

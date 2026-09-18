@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { can, assertCan, isCrossBranch, requiresMfaAtLogin } from '../src/domain/rbac.js';
+import { can, assertCan, isCrossBranch, roleRequiresMfaAtLogin } from '../src/domain/rbac.js';
 
 describe('RBAC — Director variation approval (D-003)', () => {
   it('Director may approve/reject variations', () => {
@@ -40,13 +40,13 @@ describe('RBAC — cross-branch (RBAC-CROSS-1)', () => {
 });
 
 describe('RBAC — MFA at login (RBAC-MFA-1/2, NFR-07)', () => {
-  it('Admin and Finance require TOTP', () => {
-    expect(requiresMfaAtLogin(['SYSTEM_ADMIN'])).toBe(true);
-    expect(requiresMfaAtLogin(['FINANCE'])).toBe(true);
+  it('Admin and Finance are the roles eligible for MFA enforcement', () => {
+    expect(roleRequiresMfaAtLogin(['SYSTEM_ADMIN'])).toBe(true);
+    expect(roleRequiresMfaAtLogin(['FINANCE'])).toBe(true);
   });
   it('Technician and Supervisor do not', () => {
-    expect(requiresMfaAtLogin(['TECHNICIAN'])).toBe(false);
-    expect(requiresMfaAtLogin(['OPS_SUPERVISOR'])).toBe(false);
+    expect(roleRequiresMfaAtLogin(['TECHNICIAN'])).toBe(false);
+    expect(roleRequiresMfaAtLogin(['OPS_SUPERVISOR'])).toBe(false);
   });
 });
 

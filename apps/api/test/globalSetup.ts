@@ -42,7 +42,7 @@ export default function setup(): void {
   if (!process.env.RUN_DB_TESTS) return;
 
   forceTestDatabaseEnv();
-  const { databaseUrl, directDatabaseUrl, maintenanceUrl } = testDatabaseUrls();
+  const { databaseUrl, directDatabaseUrl, maintenanceUrl, readonlyDatabaseUrl } = testDatabaseUrls();
   const env = {
     ...process.env,
     DATABASE_URL: directDatabaseUrl,
@@ -50,7 +50,10 @@ export default function setup(): void {
   };
   const appPassword = new URL(databaseUrl).password || 'localdev_app';
   const appPasswordVar = `app_password='${appPassword.replace(/'/g, "''")}'`;
+  const readonlyPassword = new URL(readonlyDatabaseUrl).password || 'localdev_readonly';
+  const readonlyPasswordVar = `readonly_password='${readonlyPassword.replace(/'/g, "''")}'`;
   const provisionSql = readFileSync(new URL('../../../infra/postgres/provision-app-role.sql', import.meta.url), 'utf8');
+  const provisionReadonlySql = readFileSync(new URL('../../../infra/postgres/provision-readonly-role.sql', import.meta.url), 'utf8');
 
   runPsql(maintenanceUrl, ['-v', 'ON_ERROR_STOP=1'], env, `
 SELECT 'CREATE DATABASE marinex360_test'
@@ -58,10 +61,13 @@ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'marinex360_test')\\ge
 `);
 
   runPsql(directDatabaseUrl, ['-v', 'ON_ERROR_STOP=1', '-v', appPasswordVar], env, provisionSql);
+  runPsql(directDatabaseUrl, ['-v', 'ON_ERROR_STOP=1', '-v', readonlyPasswordVar], env, provisionReadonlySql);
   run('npx', ['prisma', 'migrate', 'deploy', '--schema', 'prisma/schema.prisma'], env);
   runPsql(directDatabaseUrl, ['-v', 'ON_ERROR_STOP=1', '-v', appPasswordVar], env, provisionSql);
+  runPsql(directDatabaseUrl, ['-v', 'ON_ERROR_STOP=1', '-v', readonlyPasswordVar], env, provisionReadonlySql);
   run('npx', ['prisma', 'db', 'seed', '--schema', 'prisma/schema.prisma'], env);
 
   process.env.DATABASE_URL = databaseUrl;
   process.env.DIRECT_DATABASE_URL = directDatabaseUrl;
+  process.env.DATABASE_URL_READONLY = readonlyDatabaseUrl;
 }

@@ -569,6 +569,104 @@ run('Core Job Order sequence (integration)', () => {
     await expect(prisma.eSignature.findUnique({ where: { id: ops[4].entityId } })).resolves.toMatchObject({ documentHash: ops[4].payload.documentHash });
   });
 
+  it('returns completion details and allows Director/Admin review edits only while PENDING_REVIEW', async () => {
+    const jo = await createJobOrder('PENDING_REVIEW', tech);
+    const checklistItem = await prisma.jobOrderChecklistItem.create({
+      data: { jobOrderId: jo.id, label: 'Verify insulation resistance', checked: false },
+    });
+    const observation = await prisma.observation.create({
+      data: {
+        jobOrderId: jo.id,
+        body: 'Original observation text.',
+        authorId: tech.id,
+      },
+    });
+    const material = await prisma.materialLine.create({
+      data: {
+        jobOrderId: jo.id,
+        description: 'Original gasket',
+        quantity: '1',
+        unit: 'pcs',
+        unitCostAmountMinor: 5000,
+        unitCostCurrency: 'SGD',
+        source: 'FIELD',
+        addedById: tech.id,
+      },
+    });
+    await prisma.photo.create({
+      data: {
+        jobOrderId: jo.id,
+        s3Key: 'SG/job-orders/review/photo.jpg',
+        phase: 'DURING',
+        takenAt: new Date('2026-09-04T01:00:00.000Z'),
+        capturedById: tech.id,
+      },
+    });
+    await prisma.eSignature.create({
+      data: {
+        jobOrderId: jo.id,
+        imageS3Key: 'SG/job-orders/review/signature.png',
+        signerName: 'Tariq Technician',
+        signerRole: 'TECHNICIAN',
+        signedAt: new Date('2026-09-04T01:10:00.000Z'),
+      },
+    });
+
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/v1/job-orders/${jo.id}`,
+      headers: { authorization: bearer(director) },
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().checklistItems).toEqual(expect.arrayContaining([expect.objectContaining({ id: checklistItem.id, checked: false })]));
+    expect(detail.json().observations).toEqual(expect.arrayContaining([expect.objectContaining({ id: observation.id, body: 'Original observation text.' })]));
+    expect(detail.json().materials).toEqual(expect.arrayContaining([expect.objectContaining({ id: material.id, description: 'Original gasket' })]));
+    expect(detail.json().photos[0]).toMatchObject({ s3Key: 'SG/job-orders/review/photo.jpg' });
+    expect(detail.json().signature).toMatchObject({ signerName: 'Tariq Technician', imageS3Key: 'SG/job-orders/review/signature.png' });
+
+    const editedChecklist = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/job-orders/${jo.id}/checklist-items/${checklistItem.id}`,
+      headers: { authorization: bearer(director) },
+      payload: { checked: true },
+    });
+    expect(editedChecklist.statusCode).toBe(200);
+    expect(editedChecklist.json().checked).toBe(true);
+
+    const editedObservation = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/job-orders/${jo.id}/observations/${observation.id}`,
+      headers: { authorization: bearer(admin) },
+      payload: { body: 'Reviewed observation text.' },
+    });
+    expect(editedObservation.statusCode).toBe(200);
+    expect(editedObservation.json().body).toBe('Reviewed observation text.');
+
+    const editedMaterial = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/job-orders/${jo.id}/materials/${material.id}`,
+      headers: { authorization: bearer(director) },
+      payload: {
+        description: 'Reviewed gasket',
+        quantity: 2,
+        unit: 'sets',
+        unitCostAmountMinor: 6000,
+        unitCostCurrency: 'SGD',
+      },
+    });
+    expect(editedMaterial.statusCode).toBe(200);
+    expect(editedMaterial.json()).toMatchObject({ description: 'Reviewed gasket', unit: 'sets', unitCostAmountMinor: 6000 });
+
+    await prisma.jobOrder.update({ where: { id: jo.id }, data: { state: 'COMPLETED' } });
+    const blocked = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/job-orders/${jo.id}/observations/${observation.id}`,
+      headers: { authorization: bearer(director) },
+      payload: { body: 'Too late.' },
+    });
+    expect(blocked.statusCode).toBe(403);
+  });
+
   it('technician submits IN_PROGRESS for review and office roles complete PENDING_REVIEW jobs', async () => {
     const jo = await createJobOrder('IN_PROGRESS', tech);
     const submitted = await app.inject({

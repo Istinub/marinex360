@@ -8,17 +8,20 @@ import { useRoute, useRouter } from 'vue-router';
 import MonoText from '@/components/common/MonoText.vue';
 import { ApiResponseError } from '@/lib/api/errors';
 import type { Vessel } from '@/lib/api/types';
+import { useAuthStore } from '@/stores/auth';
 import { useClientsStore } from '@/stores/clients';
 import { useVesselsStore } from '@/stores/vessels';
 
 const route = useRoute();
 const router = useRouter();
+const auth = useAuthStore();
 const clientsStore = useClientsStore();
 const vesselsStore = useVesselsStore();
 const search = ref('');
 const selectedClientId = ref(typeof route.query.clientId === 'string' ? route.query.clientId : '');
 const errorMessage = ref<string | null>(null);
 const clientNameById = computed(() => new Map(clientsStore.clients.map((client) => [client.id, client.name])));
+const isAdmin = computed(() => auth.identity?.roles.includes('SYSTEM_ADMIN') ?? false);
 
 const filteredVessels = computed(() => {
   const query = search.value.trim().toLowerCase();
@@ -49,7 +52,7 @@ async function loadPage(): Promise<void> {
 }
 
 function clientLabel(vessel: Vessel): string {
-  return clientNameById.value.get(vessel.clientId) ?? vessel.clientId;
+  return clientNameById.value.get(vessel.clientId) ?? (isAdmin.value ? vessel.clientId : 'Unnamed client');
 }
 
 watch(selectedClientId, (clientId) => {

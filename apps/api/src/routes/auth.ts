@@ -13,10 +13,12 @@ import {
 import { requiresMfaAtLogin, type Role } from '../domain/rbac.js';
 
 const hashCode = (c: string) => createHash('sha256').update(c.trim().toUpperCase()).digest('hex');
+const isAdminMfaBypassEnabled = () => process.env.SKIP_ADMIN_MFA === 'true';
+const canBypassAdminMfa = (roles: string[]) => isAdminMfaBypassEnabled() && roles.includes('SYSTEM_ADMIN');
 
 export async function issueSession(
   prisma: PrismaClient, secret: string,
-  user: { id: string; roles: string[]; branch: string; mfaComplete: boolean; deviceId?: string | null },
+  user: { id: string; name?: string; email?: string; roles: string[]; branch: string; mfaComplete: boolean; deviceId?: string | null },
   longLived: boolean,
 ) {
   const family = newFamilyId();
@@ -25,7 +27,15 @@ export async function issueSession(
   await prisma.refreshToken.create({
     data: { userId: user.id, deviceId: user.deviceId ?? null, tokenHash: hashRefresh(raw), family, longLived, expiresAt: new Date(Date.now() + ttl * 1000) },
   });
-  const access = signAccessToken({ sub: user.id, roles: user.roles as Role[], branch: user.branch, mfaComplete: user.mfaComplete, deviceId: user.deviceId ?? null }, secret);
+  const access = signAccessToken({
+    sub: user.id,
+    name: user.name,
+    email: user.email,
+    roles: user.roles as Role[],
+    branch: user.branch,
+    mfaComplete: user.mfaComplete,
+    deviceId: user.deviceId ?? null,
+  }, secret);
   return { access, refresh: raw };
 }
 
@@ -37,15 +47,16 @@ export function authRoutes(app: FastifyInstance, prisma: PrismaClient, accessSec
     if (!user || !user.active || !(await verifyPassword(password, user.passwordHash))) {
       throw new AppError('UNAUTHORIZED', 'invalid credentials');
     }
-    const mfaRequired = requiresMfaAtLogin(user.roles as Role[]);
-    if (mfaRequired && user.mfaEnrolled) {
+    const mfaRequired = await requiresMfaAtLogin(prisma, user.roles as Role[]);
+    const adminMfaBypass = canBypassAdminMfa(user.roles);
+    if (mfaRequired && user.mfaEnrolled && !adminMfaBypass) {
       if (!totp || !user.totpSecret || !verifyTotp(user.totpSecret, String(totp))) {
         throw new AppError('UNAUTHORIZED', 'valid TOTP required');
       }
     }
-    const mfaComplete = !mfaRequired || user.mfaEnrolled;
-    const session = await issueSession(prisma, accessSecret, { id: user.id, roles: user.roles, branch: user.branch, mfaComplete }, !!longLived);
-    return reply.send({ ...session, mfaEnrollmentRequired: mfaRequired && !user.mfaEnrolled });
+    const mfaComplete = adminMfaBypass || !mfaRequired || user.mfaEnrolled;
+    const session = await issueSession(prisma, accessSecret, { id: user.id, name: user.name, email: user.email, roles: user.roles, branch: user.branch, mfaComplete }, !!longLived);
+    return reply.send({ ...session, mfaEnrollmentRequired: !adminMfaBypass && mfaRequired && !user.mfaEnrolled });
   });
 
   app.post('/api/v1/auth/refresh', async (req, reply) => {
@@ -68,8 +79,16 @@ export function authRoutes(app: FastifyInstance, prisma: PrismaClient, accessSec
       prisma.refreshToken.update({ where: { tokenHash: presented }, data: { revokedAt: new Date() } }),
       prisma.refreshToken.create({ data: { userId: user.id, deviceId: row!.deviceId ?? null, tokenHash: hashRefresh(raw), family: row!.family, longLived: useLong, expiresAt: new Date(Date.now() + ttl * 1000) } }),
     ]);
-    const mfaComplete = !requiresMfaAtLogin(user.roles as Role[]) || user.mfaEnrolled;
-    const access = signAccessToken({ sub: user.id, roles: user.roles as Role[], branch: user.branch, mfaComplete, deviceId: row!.deviceId ?? null }, accessSecret);
+    const mfaComplete = !(await requiresMfaAtLogin(prisma, user.roles as Role[])) || user.mfaEnrolled;
+    const access = signAccessToken({
+      sub: user.id,
+      name: user.name,
+      email: user.email,
+      roles: user.roles as Role[],
+      branch: user.branch,
+      mfaComplete,
+      deviceId: row!.deviceId ?? null,
+    }, accessSecret);
     return reply.send({ access, refresh: raw });
   });
 
@@ -109,7 +128,7 @@ export function authRoutes(app: FastifyInstance, prisma: PrismaClient, accessSec
     const h = hashCode(String(code));
     if (!user.recoveryCodes.includes(h)) throw new AppError('UNAUTHORIZED', 'invalid recovery code');
     await prisma.user.update({ where: { id: user.id }, data: { recoveryCodes: user.recoveryCodes.filter((x) => x !== h) } }); // consume
-    const session = await issueSession(prisma, accessSecret, { id: user.id, roles: user.roles, branch: user.branch, mfaComplete: true }, !!longLived);
+    const session = await issueSession(prisma, accessSecret, { id: user.id, name: user.name, email: user.email, roles: user.roles, branch: user.branch, mfaComplete: true }, !!longLived);
     return reply.send(session);
   });
 }

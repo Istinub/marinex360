@@ -1,4 +1,5 @@
 import { authenticatedFetch, currentSessionSnapshot } from './useAuth.ts';
+import { cacheExecutionPullChange } from './useExecutionSummary.ts';
 import { apiBase, type MobileSqlAdapter } from './useOfflineExecution.ts';
 
 type WritableEntity = 'WorkLog' | 'Photo' | 'Observation' | 'ChecklistInstance' | 'MaterialLine' | 'ESignature';
@@ -231,7 +232,10 @@ function networkMessage(error: unknown): string {
 
 async function applyPull(db: MobileSqlAdapter, changes: PullChange[], cursorValue: string | null): Promise<void> {
   for (const change of changes) {
-    if (change.entity !== 'JobOrder') continue;
+    if (change.entity !== 'JobOrder') {
+      await cacheExecutionPullChange(db, change);
+      continue;
+    }
 
     const jo = change.row;
     await db.execute(

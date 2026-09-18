@@ -7,6 +7,8 @@ export interface MobileSession {
   access: string;
   refresh: string;
   userId: string;
+  name?: string;
+  email?: string;
   roles: string[];
   branch: string;
 }
@@ -17,6 +19,8 @@ export interface LoginResult extends MobileSession {
 
 interface AccessClaims {
   sub: string;
+  name?: string;
+  email?: string;
   roles: string[];
   branch: string;
 }
@@ -92,7 +96,13 @@ function decodeAccessClaims(access: string): AccessClaims {
   const roles = record.roles.filter((role): role is string => typeof role === 'string');
   if (roles.length !== record.roles.length) throw new Error('Access token roles claim is invalid.');
 
-  return { sub: record.sub, roles, branch: record.branch };
+  return {
+    sub: record.sub,
+    name: typeof record.name === 'string' ? record.name : undefined,
+    email: typeof record.email === 'string' ? record.email : undefined,
+    roles,
+    branch: record.branch,
+  };
 }
 
 function isMobileSession(value: unknown): value is MobileSession {
@@ -101,6 +111,8 @@ function isMobileSession(value: unknown): value is MobileSession {
   return typeof session.access === 'string'
     && typeof session.refresh === 'string'
     && typeof session.userId === 'string'
+    && (session.name == null || typeof session.name === 'string')
+    && (session.email == null || typeof session.email === 'string')
     && Array.isArray(session.roles)
     && session.roles.every((role) => typeof role === 'string')
     && typeof session.branch === 'string';
@@ -135,6 +147,8 @@ function sessionFromAccess(access: string, refresh: string): MobileSession {
     access,
     refresh,
     userId: claims.sub,
+    name: claims.name,
+    email: claims.email,
     roles: claims.roles,
     branch: claims.branch,
   };

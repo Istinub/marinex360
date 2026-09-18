@@ -22,6 +22,17 @@ async function vendorTagForBranch(
 }
 
 export function variationRoutes(app: FastifyInstance, prisma: PrismaClient): void {
+  async function withApprover<T extends { approverId?: string | null } | null>(variation: T): Promise<T extends null ? null : NonNullable<T> & { approver: { id: string; name: string; email: string } | null }> {
+    if (!variation) return null as T extends null ? null : never;
+    const approver = variation.approverId
+      ? await prisma.user.findUnique({
+          where: { id: variation.approverId },
+          select: { id: true, name: true, email: true },
+        })
+      : null;
+    return { ...variation, approver } as T extends null ? null : NonNullable<T> & { approver: { id: string; name: string; email: string } | null };
+  }
+
   app.post('/api/v1/job-orders/:id/variations', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('variation:create')] }, async (req, reply) => {
     const { id } = req.params as any;
     const { reason, amountMinor, amountCurrency } = (req.body ?? {}) as any;
@@ -53,7 +64,7 @@ export function variationRoutes(app: FastifyInstance, prisma: PrismaClient): voi
       });
       return variation;
     });
-    return reply.status(201).send(v);
+    return reply.status(201).send(await withApprover(v));
   });
 
   const resolve = (status: 'APPROVED' | 'REJECTED', action: 'variation:approve' | 'variation:reject') =>
@@ -73,7 +84,7 @@ export function variationRoutes(app: FastifyInstance, prisma: PrismaClient): voi
         await appendAudit(tx, req.ctx, { entityType: 'Variation', entityId: id, action: status === 'APPROVED' ? 'APPROVE' : 'REJECT', diff: { reason: reason ?? null } });
         return tx.variation.findUnique({ where: { id } });
       });
-      return reply.send(out);
+      return reply.send(await withApprover(out));
     };
 
   app.post('/api/v1/variations/:id/approve', { preHandler: [app.authenticate, app.requireMfaEnrolled, app.requireAction('variation:approve')] }, resolve('APPROVED', 'variation:approve'));

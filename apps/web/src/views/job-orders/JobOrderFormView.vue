@@ -115,6 +115,7 @@ const isEditMode = computed(() => Boolean(editJobOrderId.value));
 const pageTitle = computed(() => (isEditMode.value ? 'Edit job order' : 'New job order'));
 const canScheduleOnCreate = computed(() => !isEditMode.value && (auth.identity?.roles.some((role) => ['SYSTEM_ADMIN', 'DIRECTOR'].includes(role)) ?? false));
 const canChooseBranch = computed(() => auth.identity?.roles.some((role) => ['SYSTEM_ADMIN', 'DIRECTOR'].includes(role)) ?? false);
+const isAdmin = computed(() => auth.identity?.roles.includes('SYSTEM_ADMIN') ?? false);
 const canCreateVariation = computed(() => {
   const state = editableJobOrder.value?.state;
   return Boolean(
@@ -304,9 +305,9 @@ async function prefillJobOrder(jobOrder: JobOrder): Promise<void> {
     form.quotedAmount = minorUnitsToDecimal(jobOrder.quotedAmountMinor);
     form.quotedCurrency = jobOrder.quotedCurrency;
 
-    clientSearch.value = jobOrder.client?.name ?? selectedClient.value?.name ?? jobOrder.clientId;
+    clientSearch.value = jobOrder.client?.name ?? selectedClient.value?.name ?? (isAdmin.value ? jobOrder.clientId : 'Unnamed client');
     debouncedClientSearch.value = clientSearch.value;
-    vesselSearch.value = jobOrder.vessel?.name ?? selectedVessel.value?.name ?? jobOrder.vesselId;
+    vesselSearch.value = jobOrder.vessel?.name ?? selectedVessel.value?.name ?? (isAdmin.value ? jobOrder.vesselId : 'Unnamed vessel');
     debouncedVesselSearch.value = vesselSearch.value;
     vendorSearch.value = jobOrder.vendor?.name ?? selectedVendor.value?.name ?? '';
     debouncedVendorSearch.value = vendorSearch.value;

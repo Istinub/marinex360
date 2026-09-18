@@ -343,34 +343,33 @@ onMounted(() => {
     </section>
 
     <section v-if="jobOrder" class="job-detail__card" aria-label="Job details">
-      <dl class="job-detail__facts">
-        <div>
-          <dt>Client</dt>
-          <dd :class="{ 'job-detail__empty-value': isEmptyField(clientName) }">{{ clientName }}</dd>
-        </div>
-        <div>
-          <dt>Vessel</dt>
-          <dd :class="{ 'job-detail__empty-value': isEmptyField(vesselName) }">{{ vesselName }}</dd>
-        </div>
-        <div>
-          <dt>Category</dt>
-          <dd :class="{ 'job-detail__empty-value': isEmptyField(categoryText) }">{{ categoryText }}</dd>
-        </div>
-        <div>
-          <dt>Deadline</dt>
-          <dd :class="{ 'job-detail__empty-value': isEmptyField(deadlineText) }">{{ deadlineText }}</dd>
-        </div>
-        <div>
-          <dt>Description</dt>
-          <dd :class="{ 'job-detail__empty-value': isEmptyField(scopeSummary) }">{{ scopeSummary }}</dd>
-        </div>
-        <!-- TODO(ux): Director-controlled per-field visibility is future scope; this pass only restores missing technician-safe detail fields. -->
-      </dl>
+      <div class="job-detail__facts-layout">
+        <dl class="job-detail__facts">
+          <div>
+            <dt>Category</dt>
+            <dd :class="{ 'job-detail__empty-value': isEmptyField(categoryText) }">{{ categoryText }}</dd>
+          </div>
+          <div>
+            <dt>Deadline</dt>
+            <dd :class="{ 'job-detail__empty-value': isEmptyField(deadlineText) }">{{ deadlineText }}</dd>
+          </div>
+        </dl>
 
-      <RouterLink v-if="!jobOrder.readOnly" class="job-detail__documents-link" :to="documentsPath">
-        <i class="pi pi-file" aria-hidden="true" />
-        Documents
-      </RouterLink>
+        <div class="job-detail__facts-side">
+          <dl class="job-detail__facts">
+            <div>
+              <dt>Description</dt>
+              <dd :class="{ 'job-detail__empty-value': isEmptyField(scopeSummary) }">{{ scopeSummary }}</dd>
+            </div>
+            <!-- TODO(ux): Director-controlled per-field visibility is future scope; this pass only restores missing technician-safe detail fields. -->
+          </dl>
+
+          <RouterLink v-if="!jobOrder.readOnly" class="job-detail__documents-link" :to="documentsPath">
+            <i class="pi pi-file" aria-hidden="true" />
+            Documents
+          </RouterLink>
+        </div>
+      </div>
     </section>
 
     <section v-if="jobOrder && ['IN_PROGRESS', 'ON_HOLD', 'PENDING_REVIEW', 'COMPLETED', 'INVOICED', 'CLOSED'].includes(jobOrder.state)" class="job-detail__card" aria-label="Workers on this job">
@@ -565,6 +564,12 @@ onMounted(() => {
   padding: var(--sp-4);
   border-bottom: var(--border-1);
   background: var(--color-surface);
+}
+
+.job-detail__facts-layout,
+.job-detail__facts-side {
+  display: grid;
+  gap: var(--sp-4);
 }
 
 .job-detail__facts {
@@ -854,6 +859,11 @@ onMounted(() => {
 }
 
 @media (min-width: 720px) {
+  .job-detail__facts-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+    gap: var(--sp-4);
+  }
+
   .job-detail__status {
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;

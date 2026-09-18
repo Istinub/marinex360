@@ -9,6 +9,7 @@ import NotFoundState from '@/components/common/NotFoundState.vue';
 import { get, post } from '@/lib/api/client';
 import { ApiResponseError } from '@/lib/api/errors';
 import type { JobOrder } from '@/lib/api/types';
+import { useAuthStore } from '@/stores/auth';
 
 interface JobRequestClient {
   id: string;
@@ -33,6 +34,7 @@ interface JobRequest {
 
 const route = useRoute();
 const router = useRouter();
+const auth = useAuthStore();
 const requestId = computed(() => String(route.params.id));
 const request = ref<JobRequest | null>(null);
 const isLoading = ref(true);
@@ -43,6 +45,8 @@ const declineReason = ref('Declined by operations');
 
 const sourceLabel = computed(() => (request.value?.clientId ? 'Client portal' : 'Guest'));
 const companyLabel = computed(() => request.value?.client?.name ?? request.value?.guestCompany ?? request.value?.guestName ?? '-');
+const requestTitle = computed(() => request.value?.guestCompany ?? request.value?.client?.name ?? request.value?.guestName ?? 'Service request');
+const isAdmin = computed(() => auth.identity?.roles.includes('SYSTEM_ADMIN') ?? false);
 
 function formatDate(value?: string | null): string {
   if (!value) return '-';
@@ -109,9 +113,12 @@ onMounted(load);
       <header class="crm-page__header">
         <div>
           <BackLink to="/job-requests" label="Job requests" />
-          <h1 id="job-request-title" class="crm-page__title">Service request</h1>
+          <h1 id="job-request-title" class="crm-page__title">{{ requestTitle }}</h1>
           <p class="record-form__version">
-            ID <MonoText :value="request.id" /> · {{ sourceLabel }}
+            {{ sourceLabel }}
+            <template v-if="isAdmin">
+              · Request ID <MonoText :value="request.id" />
+            </template>
           </p>
         </div>
         <Tag :value="request.status" severity="warn" />

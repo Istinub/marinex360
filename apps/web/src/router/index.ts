@@ -18,18 +18,24 @@ import VesselFormView from '@/views/vessels/VesselFormView.vue';
 import VesselListView from '@/views/vessels/VesselListView.vue';
 import VesselServiceHistoryView from '@/views/vessels/VesselServiceHistoryView.vue';
 import ServiceRequestView from '@/views/public/ServiceRequestView.vue';
+import JobProgressView from '@/views/public/JobProgressView.vue';
 import ClientDashboardView from '@/views/client/ClientDashboardView.vue';
 import AnalyticsView from '@/views/analytics/AnalyticsView.vue';
 import JobRequestDetailView from '@/views/job-requests/JobRequestDetailView.vue';
 import JobRequestQueueView from '@/views/job-requests/JobRequestQueueView.vue';
 import InvoiceDetailView from '@/views/invoices/InvoiceDetailView.vue';
+import QuotationDetailView from '@/views/quotations/QuotationDetailView.vue';
+import QuotationFormView from '@/views/quotations/QuotationFormView.vue';
+import QuotationListView from '@/views/quotations/QuotationListView.vue';
 import ReportsView from '@/views/reports/ReportsView.vue';
 import AccountManagementView from '@/views/settings/AccountManagementView.vue';
 import BrandingSettingsView from '@/views/settings/BrandingSettingsView.vue';
+import DatabaseView from '@/views/settings/DatabaseView.vue';
 import DeviceTroubleshootingView from '@/views/settings/DeviceTroubleshootingView.vue';
 import DevicesView from '@/views/settings/DevicesView.vue';
 import JobExecutionSettingsView from '@/views/settings/JobExecutionSettingsView.vue';
 import PlaceholderSettingsView from '@/views/settings/PlaceholderSettingsView.vue';
+import SecuritySettingsView from '@/views/settings/SecuritySettingsView.vue';
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -58,6 +64,12 @@ const routes = [
     path: '/request-service',
     name: 'public-service-request',
     component: ServiceRequestView,
+    meta: { public: true },
+  },
+  {
+    path: '/track/:token',
+    name: 'public-job-progress',
+    component: JobProgressView,
     meta: { public: true },
   },
   {
@@ -172,6 +184,30 @@ const routes = [
         meta: { requireAuth: true, requireMfaEnrolled: true },
       },
       {
+        path: 'quotations',
+        name: 'quotations',
+        component: QuotationListView,
+        meta: { requireAuth: true, requireMfaEnrolled: true },
+      },
+      {
+        path: 'quotations/new',
+        name: 'quotation-new',
+        component: QuotationFormView,
+        meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['OPS_SUPERVISOR', 'DIRECTOR', 'SYSTEM_ADMIN'] },
+      },
+      {
+        path: 'quotations/:id/edit',
+        name: 'quotation-edit',
+        component: QuotationFormView,
+        meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['OPS_SUPERVISOR', 'DIRECTOR', 'SYSTEM_ADMIN'] },
+      },
+      {
+        path: 'quotations/:id',
+        name: 'quotation-detail',
+        component: QuotationDetailView,
+        meta: { requireAuth: true, requireMfaEnrolled: true },
+      },
+      {
         path: 'invoices/:id',
         name: 'invoice-detail',
         component: InvoiceDetailView,
@@ -212,6 +248,18 @@ const routes = [
         name: 'settings-branding',
         component: BrandingSettingsView,
         meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
+      },
+      {
+        path: 'settings/security',
+        name: 'settings-security',
+        component: SecuritySettingsView,
+        meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['SYSTEM_ADMIN'] },
+      },
+      {
+        path: 'settings/database',
+        name: 'settings-database',
+        component: DatabaseView,
+        meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['SYSTEM_ADMIN'] },
       },
       {
         path: 'settings/account-management',
@@ -303,7 +351,7 @@ router.beforeEach((to) => {
     return auth.identity?.roles.includes('CLIENT') ? '/client-dashboard' : '/dashboard';
   }
 
-  if (auth.identity?.roles.includes('CLIENT') && to.path !== '/client-dashboard' && to.path !== '/request-service') {
+  if (auth.identity?.roles.includes('CLIENT') && to.path !== '/client-dashboard' && to.path !== '/request-service' && to.name !== 'public-job-progress') {
     return '/client-dashboard';
   }
 

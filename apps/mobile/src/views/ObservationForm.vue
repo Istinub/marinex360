@@ -179,9 +179,9 @@ onMounted(() => {
           <Button type="button" label="Choose from gallery" icon="pi pi-image" severity="secondary" @click="attachPhoto(CameraSource.Photos)" />
         </div>
         <ul v-if="attachedPhotos.length > 0" class="observation-form__photo-list">
-          <li v-for="photo in attachedPhotos" :key="photo.opId">
+          <li v-for="(photo, index) in attachedPhotos" :key="photo.opId">
             <span>{{ photo.source }}</span>
-            <small>{{ photo.opId }}</small>
+            <small>Queued photo #{{ index + 1 }}</small>
           </li>
         </ul>
       </section>

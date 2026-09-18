@@ -471,7 +471,7 @@ onBeforeUnmount(() => {
                 <span class="job-documents__row-main">
                   <span class="job-documents__name">{{ document.filename }}</span>
                   <span class="job-documents__meta">{{ document.mimeType }}</span>
-                  <span class="job-documents__meta">Uploaded by {{ document.uploadedById || 'unknown' }}</span>
+                  <span class="job-documents__meta">Uploaded by field user</span>
                 </span>
                 <span class="job-documents__row-side">
                   <time :datetime="document.createdAt ?? undefined">{{ formatDate(document.createdAt) }}</time>

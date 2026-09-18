@@ -25,12 +25,14 @@ export function deviceRoutes(app: FastifyInstance, prisma: PrismaClient, accessS
     await unlockRateLimiter.close();
   });
 
-  async function sendDeviceSession(reply: FastifyReply, device: { id: string; assignedUser: { id: string; roles: string[]; branch: string } }) {
+  async function sendDeviceSession(reply: FastifyReply, device: { id: string; assignedUser: { id: string; name?: string; email?: string; roles: string[]; branch: string } }) {
     const session = await issueSession(
       prisma,
       accessSecret,
       {
         id: device.assignedUser.id,
+        name: device.assignedUser.name,
+        email: device.assignedUser.email,
         roles: device.assignedUser.roles,
         branch: device.assignedUser.branch,
         mfaComplete: true,

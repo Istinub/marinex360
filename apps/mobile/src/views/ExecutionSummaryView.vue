@@ -35,6 +35,8 @@ const showSuccess = ref(false);
 const errorMessage = ref<string | null>(null);
 const signatureDraft = ref<SignatureDraft | null>(null);
 const hasPreviewContent = computed(() => hasContent.value || (!isReport.value && signatureDraft.value != null));
+const hasSignaturePreview = computed(() => Boolean(signatureDraft.value) || Boolean(summary.value?.signatures.length));
+const hasChecklistPreview = computed(() => Boolean(summary.value?.checklists.length || summary.value?.checkedChecklistItems.length));
 
 function money(amountMinor: number, currency: string): string {
   return `${currency} ${(amountMinor / 100).toFixed(2)}`;
@@ -43,7 +45,8 @@ function money(amountMinor: number, currency: string): string {
 function resultText(value: unknown): string {
   if (value && typeof value === 'object') {
     const record = value as Record<string, unknown>;
-    return `${String(record.itemId ?? 'Item')}: ${String(record.na ? 'N/A' : record.value ?? 'No value')}`;
+    const label = typeof record.label === 'string' && record.label.trim() ? record.label : 'Checklist item';
+    return `${label}: ${String(record.na ? 'N/A' : record.value ?? 'No value')}`;
   }
   return String(value ?? 'No value');
 }
@@ -62,16 +65,27 @@ async function captureGeo(): Promise<{ lat: number | null; lng: number | null }>
 
 async function load(): Promise<void> {
   errorMessage.value = null;
+  const [jobResult, draftResult] = await Promise.allSettled([
+    loadLiveJobOrder(jobOrderId.value),
+    isReport.value ? Promise.resolve(null) : loadSignatureDraft(jobOrderId.value),
+  ]);
+
+  if (jobResult.status === 'fulfilled') {
+    jobOrder.value = jobResult.value;
+  } else {
+    errorMessage.value = jobResult.reason instanceof Error ? jobResult.reason.message : 'Unable to load job order.';
+  }
+
   try {
-    const [job, , draft] = await Promise.all([
-      loadLiveJobOrder(jobOrderId.value),
-      loadSummary(),
-      isReport.value ? Promise.resolve(null) : loadSignatureDraft(jobOrderId.value),
-    ]);
-    jobOrder.value = job;
-    signatureDraft.value = draft;
+    await loadSummary();
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'Unable to load completion summary.';
+    if (!errorMessage.value) errorMessage.value = error instanceof Error ? error.message : 'Unable to load completion summary.';
+  }
+
+  if (draftResult.status === 'fulfilled') {
+    signatureDraft.value = draftResult.value;
+  } else if (!errorMessage.value) {
+    errorMessage.value = draftResult.reason instanceof Error ? draftResult.reason.message : 'Unable to load signature draft.';
   }
 }
 
@@ -87,7 +101,7 @@ async function confirmSubmission(): Promise<void> {
     await offlineExecution.authorESignature(
       jobOrderId.value,
       draft.signerName,
-      draft.technicianId,
+      null,
       geo.lat,
       geo.lng,
       draft.imageLocalPath,
@@ -137,7 +151,7 @@ onMounted(() => {
       {{ errorMessage ?? summaryErrorMessage }}
     </Message>
 
-    <Message v-if="!hasContent && !isSummaryLoading" severity="info" :closable="false">
+    <Message v-if="!hasPreviewContent && !isSummaryLoading" severity="info" :closable="false">
       No execution data has been captured for this job yet.
     </Message>
 
@@ -147,9 +161,13 @@ onMounted(() => {
           <h2>Checklist</h2>
           <RouterLink v-if="!isReport" :to="`/jobs/${jobOrderId}/checklist`">Edit</RouterLink>
         </header>
-        <p v-if="summary.checklists.length === 0" class="execution-summary__empty">No checklist responses.</p>
+        <p v-if="!hasChecklistPreview" class="execution-summary__empty">No checklist responses.</p>
+        <article v-for="item in summary.checkedChecklistItems" :key="item.id" class="execution-summary__item">
+          <strong>{{ item.label }}</strong>
+          <span>Checked{{ item.updatedAt ? ` · ${item.updatedAt}` : '' }}</span>
+        </article>
         <article v-for="checklist in summary.checklists" :key="checklist.id" class="execution-summary__item">
-          <strong>{{ checklist.templateId }}</strong>
+          <strong>Checklist response</strong>
           <span>{{ checklist.completedAt ?? 'Pending time' }} · {{ checklist.syncState }}</span>
           <ul>
             <li v-for="(result, index) in checklist.results" :key="index">{{ resultText(result) }}</li>
@@ -191,7 +209,7 @@ onMounted(() => {
         <article v-for="photo in summary.photos" :key="photo.id" class="execution-summary__item">
           <strong>{{ photo.phase }}</strong>
           <span>{{ photo.takenAt }} · {{ photo.syncState }}</span>
-          <small>{{ photo.localPath ?? photo.s3Key ?? 'Queued image' }}</small>
+          <small>{{ photo.localPath || photo.s3Key ? 'Image attached' : 'Queued image' }}</small>
         </article>
       </section>
 
@@ -200,7 +218,14 @@ onMounted(() => {
           <h2>Signature</h2>
           <RouterLink v-if="!isReport" :to="`/jobs/${jobOrderId}/sign`">Edit</RouterLink>
         </header>
-        <p v-if="summary.signatures.length === 0" class="execution-summary__empty">No signature.</p>
+        <p v-if="!hasSignaturePreview" class="execution-summary__empty">No signature.</p>
+        <article v-if="signatureDraft && !isReport" class="execution-summary__item">
+          <strong>{{ signatureDraft.signerName || 'Signer pending' }}</strong>
+          <span>Ready to submit · {{ signatureDraft.updatedAt }}</span>
+          <span v-if="signatureDraft.signerPhone">Phone: {{ signatureDraft.signerPhone }}</span>
+          <span v-if="signatureDraft.signerEmail">Email: {{ signatureDraft.signerEmail }}</span>
+          <img class="execution-summary__signature-image" :src="signatureDraft.imageDataUrl" alt="Captured signature" />
+        </article>
         <article v-for="signature in summary.signatures" :key="signature.id" class="execution-summary__item">
           <strong>{{ signature.signerName ?? 'Signer pending' }}</strong>
           <span>{{ signature.signerRole ?? 'Role pending' }} · {{ signature.signedAt ?? 'Pending time' }} · {{ signature.syncState }}</span>
@@ -323,6 +348,17 @@ onMounted(() => {
 .execution-summary__item ul,
 .execution-summary__empty {
   margin: 0;
+}
+
+.execution-summary__signature-image {
+  width: min(100%, 360px);
+  min-height: 96px;
+  display: block;
+  padding: var(--sp-2);
+  border: var(--border-1);
+  border-radius: var(--radius-sm);
+  background: #FFFFFF;
+  object-fit: contain;
 }
 
 .execution-summary__actions {

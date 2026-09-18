@@ -29,6 +29,28 @@ type FieldErrorKey =
   | 'unitCostCurrency'
   | 'jobOrderId';
 
+interface JobCurrencyRow {
+  quoted_currency: string | null;
+}
+
+interface MobileSqlAdapter {
+  select<T>(sql: string, params?: unknown[]): Promise<T[]>;
+}
+
+interface MobileRuntime {
+  marinex360?: {
+    db?: MobileSqlAdapter;
+  };
+}
+
+function mobileRuntime(): MobileRuntime {
+  return globalThis as typeof globalThis & MobileRuntime;
+}
+
+function db(): MobileSqlAdapter | null {
+  return mobileRuntime().marinex360?.db ?? null;
+}
+
 const props = defineProps<{
   jobOrderId?: string;
 }>();
@@ -40,16 +62,28 @@ const errors = reactive<Partial<Record<FieldErrorKey, string>>>({});
 const successMessage = ref<string | null>(null);
 const materials = ref<LocalMaterialEntry[]>([]);
 const editingEntry = ref<LocalMaterialEntry | null>(null);
+const jobCurrency = ref('SGD');
 
 const form = reactive({
   description: '',
   quantity: '',
   unit: '',
   unitCostText: '',
-  unitCostCurrency: 'SGD',
 });
 
-const currencyOptions = ['SGD', 'USD', 'EUR'];
+const unitOptions = [
+  { label: 'pcs', value: 'pcs' },
+  { label: 'meters (m)', value: 'm' },
+  { label: 'liters (L)', value: 'L' },
+  { label: 'kilograms (kg)', value: 'kg' },
+  { label: 'boxes', value: 'boxes' },
+  { label: 'sets', value: 'sets' },
+  { label: 'hours', value: 'hours' },
+];
+const visibleUnitOptions = computed(() => {
+  if (!form.unit || unitOptions.some((option) => option.value === form.unit)) return unitOptions;
+  return [{ label: form.unit, value: form.unit }, ...unitOptions];
+});
 
 const resolvedJobOrderId = computed(() => {
   const routeId = route.params.id ?? route.params.jobOrderId;
@@ -66,9 +100,20 @@ function resetForm(): void {
   form.quantity = '';
   form.unit = '';
   form.unitCostText = '';
-  form.unitCostCurrency = 'SGD';
   editingEntry.value = null;
 }
+
+function moneyLabel(amountMinor: number, currency = jobCurrency.value): string {
+  return `${currency} ${(amountMinor / 100).toFixed(2)}`;
+}
+
+const savedSubtotalMinor = computed(() =>
+  materials.value.reduce((total, entry) => {
+    const quantity = Number(entry.quantity);
+    if (!Number.isFinite(quantity)) return total;
+    return total + Math.round(quantity * entry.unitCostAmountMinor);
+  }, 0),
+);
 
 function validatedInput(): MaterialLineCreateInput | null {
   clearErrors();
@@ -79,7 +124,7 @@ function validatedInput(): MaterialLineCreateInput | null {
   const quantity = normalizeQuantity(form.quantity);
   const unit = form.unit.trim();
   const unitCostAmountMinor = moneyTextToMinorUnits(form.unitCostText);
-  const unitCostCurrency = normalizeCurrency(form.unitCostCurrency);
+  const unitCostCurrency = normalizeCurrency(jobCurrency.value);
 
   if (!jobOrderId) errors.jobOrderId = 'Job order is required.';
   if (!description) errors.description = 'Description is required.';
@@ -103,7 +148,7 @@ function validatedInput(): MaterialLineCreateInput | null {
   };
 }
 
-async function submitLine(addAnother = false): Promise<void> {
+async function submitLine(): Promise<void> {
   const input = validatedInput();
   if (!input) return;
 
@@ -123,13 +168,18 @@ async function submitLine(addAnother = false): Promise<void> {
     }
     await refreshEntries();
     resetForm();
-
-    if (addAnother) {
-      return;
-    }
   } catch (error) {
     errors.jobOrderId = error instanceof Error ? error.message : 'Unable to queue material line.';
   }
+}
+
+async function loadJobCurrency(): Promise<void> {
+  const adapter = db();
+  const jobOrderId = resolvedJobOrderId.value;
+  if (!adapter || !jobOrderId) return;
+
+  const rows = await adapter.select<JobCurrencyRow>('SELECT quoted_currency FROM jo_cache WHERE id=?', [jobOrderId]);
+  jobCurrency.value = normalizeCurrency(rows[0]?.quoted_currency ?? '') ?? 'SGD';
 }
 
 async function refreshEntries(): Promise<void> {
@@ -143,7 +193,6 @@ function editMaterial(entry: LocalMaterialEntry): void {
   form.quantity = entry.quantity;
   form.unit = entry.unit;
   form.unitCostText = (entry.unitCostAmountMinor / 100).toFixed(2);
-  form.unitCostCurrency = entry.unitCostCurrency;
   successMessage.value = null;
 }
 
@@ -159,7 +208,7 @@ async function deleteMaterial(entry: LocalMaterialEntry): Promise<void> {
 }
 
 onMounted(() => {
-  void refreshEntries().catch((error) => {
+  void Promise.all([loadJobCurrency(), refreshEntries()]).catch((error) => {
     errors.jobOrderId = error instanceof Error ? error.message : 'Unable to load material lines.';
   });
 });
@@ -185,7 +234,7 @@ onMounted(() => {
       {{ errors.jobOrderId }}
     </Message>
 
-    <form class="material-line-form__body" @submit.prevent="submitLine(false)">
+    <form class="material-line-form__body" @submit.prevent="submitLine">
       <label class="material-line-form__field" for="material-description">
         <span>Description</span>
         <Textarea
@@ -205,8 +254,11 @@ onMounted(() => {
           <InputText
             id="material-quantity"
             v-model="form.quantity"
+            type="number"
             class="material-line-form__input material-line-form__input--mono"
             inputmode="decimal"
+            min="0"
+            step="0.001"
             autocomplete="off"
             required
           />
@@ -215,11 +267,14 @@ onMounted(() => {
 
         <label class="material-line-form__field" for="material-unit">
           <span>Unit</span>
-          <InputText
+          <Select
             id="material-unit"
             v-model="form.unit"
             class="material-line-form__input"
-            autocomplete="off"
+            :options="visibleUnitOptions"
+            option-label="label"
+            option-value="value"
+            placeholder="Select unit"
             required
           />
           <small v-if="errors.unit" class="material-line-form__error">{{ errors.unit }}</small>
@@ -229,12 +284,6 @@ onMounted(() => {
       <fieldset class="material-line-form__money">
         <legend>Unit cost</legend>
         <div class="material-line-form__money-row">
-          <Select
-            v-model="form.unitCostCurrency"
-            class="material-line-form__currency"
-            :options="currencyOptions"
-            aria-label="Unit cost currency"
-          />
           <InputText
             v-model="form.unitCostText"
             class="material-line-form__input material-line-form__input--mono"
@@ -243,19 +292,15 @@ onMounted(() => {
             aria-label="Unit cost amount"
             required
           />
+          <span class="material-line-form__currency-readonly" aria-label="Unit cost currency">
+            {{ jobCurrency }}
+          </span>
         </div>
         <small v-if="errors.unitCostCurrency" class="material-line-form__error">{{ errors.unitCostCurrency }}</small>
         <small v-if="errors.unitCostAmountMinor" class="material-line-form__error">{{ errors.unitCostAmountMinor }}</small>
       </fieldset>
 
       <div class="material-line-form__actions">
-        <Button
-          type="button"
-          label="Save and add another"
-          severity="secondary"
-          :loading="isSubmitting"
-          @click="submitLine(true)"
-        />
         <Button type="submit" :label="editingEntry ? 'Update' : 'Save line'" :loading="isSubmitting" />
       </div>
     </form>
@@ -273,6 +318,9 @@ onMounted(() => {
           <Button type="button" label="Delete" severity="secondary" outlined @click="deleteMaterial(entry)" />
         </div>
       </article>
+      <p class="material-line-form__subtotal">
+        Session subtotal <strong>{{ moneyLabel(savedSubtotalMinor) }}</strong>
+      </p>
     </section>
   </main>
 </template>
@@ -341,14 +389,27 @@ onMounted(() => {
 }
 
 .material-line-form__money-row {
-  grid-template-columns: minmax(var(--sp-16), auto) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(var(--sp-16), auto);
 }
 
-.material-line-form__input,
-.material-line-form__currency {
+.material-line-form__input {
   width: 100%;
   min-height: var(--tap-field);
   font-family: var(--font-ui);
+  font-size: var(--fs-body);
+}
+
+.material-line-form__currency-readonly {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap-field);
+  padding: 0 var(--sp-3);
+  border: var(--border-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-family: var(--font-code);
   font-size: var(--fs-body);
 }
 
@@ -385,9 +446,26 @@ onMounted(() => {
 }
 
 .material-line-form__entry span,
-.material-line-form__empty {
+.material-line-form__empty,
+.material-line-form__subtotal {
   color: var(--color-text-muted);
   font-size: var(--fs-body-sm);
+}
+
+.material-line-form__subtotal {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin: 0;
+  padding: var(--sp-3) var(--sp-4);
+  border: var(--border-1);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.material-line-form__subtotal strong {
+  color: var(--color-text);
+  font-family: var(--font-code);
 }
 
 .material-line-form__entry-actions {
@@ -412,7 +490,7 @@ onMounted(() => {
   }
 
   .material-line-form__actions {
-    grid-template-columns: repeat(2, minmax(0, max-content));
+    grid-template-columns: minmax(0, max-content);
     justify-content: end;
   }
 }

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { get, patch, post } from '@/lib/api/client';
-import type { ChecklistTemplate, JobOrder, JobState } from '@/lib/api/types';
+import type { ChecklistTemplate, JobOrder, JobOrderChecklistItem, JobOrderMaterialLine, JobOrderObservation, JobState } from '@/lib/api/types';
 
 export type JobOrderReportResponse =
   | { status: 'PENDING' }
@@ -30,6 +30,7 @@ export interface JobOrderCreateInput {
   labourRateCurrency?: string | null;
   plannedStartDate?: string | null;
   deadline?: string | null;
+  logoOverride?: string | null;
   checklistTemplateId?: string | null;
   checklistItems?: { label: string }[];
 }
@@ -52,6 +53,7 @@ export interface JobOrderPatchInput {
   vendorId?: string | null;
   isSubcontracted?: boolean;
   serviceCategories?: string[];
+  logoOverride?: string | null;
   checklistTemplateId?: string | null;
   checklistItems?: { label: string }[];
 }
@@ -67,6 +69,14 @@ export interface JobOrderTransitionInput {
   version: number;
   checklistTemplateId?: string | null;
   checklistItems?: { label: string }[];
+}
+
+export interface JobOrderMaterialReviewInput {
+  description: string;
+  quantity: number;
+  unit: string;
+  unitCostAmountMinor: number;
+  unitCostCurrency: string;
 }
 
 export const useJobOrdersStore = defineStore('jobOrders', () => {
@@ -127,6 +137,18 @@ export const useJobOrdersStore = defineStore('jobOrders', () => {
     return updated;
   }
 
+  async function updateChecklistItem(jobOrderId: string, itemId: string, checked: boolean): Promise<JobOrderChecklistItem> {
+    return patch<JobOrderChecklistItem, { checked: boolean }>(`/job-orders/${jobOrderId}/checklist-items/${itemId}`, { checked });
+  }
+
+  async function updateObservation(jobOrderId: string, observationId: string, body: string): Promise<JobOrderObservation> {
+    return patch<JobOrderObservation, { body: string }>(`/job-orders/${jobOrderId}/observations/${observationId}`, { body });
+  }
+
+  async function updateMaterial(jobOrderId: string, materialId: string, input: JobOrderMaterialReviewInput): Promise<JobOrderMaterialLine> {
+    return patch<JobOrderMaterialLine, JobOrderMaterialReviewInput>(`/job-orders/${jobOrderId}/materials/${materialId}`, input);
+  }
+
   async function transitionJobOrder(id: string, input: JobOrderTransitionInput): Promise<JobOrder> {
     const updated = await post<JobOrder, JobOrderTransitionInput>(`/job-orders/${id}/transition`, input);
     jobOrders.value = jobOrders.value.map((jobOrder) => (jobOrder.id === updated.id ? updated : jobOrder));
@@ -181,6 +203,9 @@ export const useJobOrdersStore = defineStore('jobOrders', () => {
     createJobOrder,
     updateJobOrder,
     updateJobOrderCategories,
+    updateChecklistItem,
+    updateObservation,
+    updateMaterial,
     transitionJobOrder,
     deleteJobOrder,
     archiveJobOrder,

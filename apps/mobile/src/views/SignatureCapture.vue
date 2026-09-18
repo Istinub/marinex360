@@ -55,7 +55,6 @@ const restoredImageDataUrl = ref<string | null>(null);
 
 const form = reactive({
   signerName: '',
-  technicianId: '',
   signerPhone: '',
   signerEmail: '',
 });
@@ -73,6 +72,7 @@ async function loadOwnerGate(): Promise<void> {
   isLoading.value = true;
   errorMessage.value = null;
   successMessage.value = null;
+  let canInitializePad = false;
 
   try {
     const adapter = db();
@@ -82,16 +82,17 @@ async function loadOwnerGate(): Promise<void> {
 
     const rows = await adapter.select<OwnerRow>('SELECT execution_owner_id FROM jo_cache WHERE id=?', [jobOrderId.value]);
     isOwner.value = rows[0]?.execution_owner_id === userId;
-    if (isOwner.value) {
-      await nextTick();
-      resizeCanvas();
-      restoreDraftImage();
-    }
+    canInitializePad = isOwner.value;
   } catch (error) {
     isOwner.value = false;
     errorMessage.value = error instanceof Error ? error.message : 'Unable to check signing access.';
   } finally {
     isLoading.value = false;
+  }
+
+  if (canInitializePad) {
+    await nextTick();
+    resizeCanvas();
   }
 }
 
@@ -139,33 +140,96 @@ function pointFromEvent(event: PointerEvent): { x: number; y: number } {
   };
 }
 
+function pointFromClient(clientX: number, clientY: number): { x: number; y: number } {
+  const canvas = canvasRef.value;
+  if (!canvas) return { x: 0, y: 0 };
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: clientX - rect.left,
+    y: clientY - rect.top,
+  };
+}
+
+function beginStroke(point: { x: number; y: number }): void {
+  drawing = true;
+  lastPoint = point;
+}
+
+function continueStroke(point: { x: number; y: number }): void {
+  if (!drawing || !ctx || !lastPoint) return;
+
+  restoredImageDataUrl.value = null;
+  ctx.beginPath();
+  ctx.moveTo(lastPoint.x, lastPoint.y);
+  ctx.lineTo(point.x, point.y);
+  ctx.stroke();
+  lastPoint = point;
+  hasInk.value = true;
+}
+
+function endStroke(): void {
+  drawing = false;
+  lastPoint = null;
+}
+
 function startDraw(event: PointerEvent): void {
   event.preventDefault();
   const canvas = canvasRef.value;
   if (!canvas || !ctx) return;
-  canvas.setPointerCapture(event.pointerId);
-  drawing = true;
-  lastPoint = pointFromEvent(event);
+  try {
+    canvas.setPointerCapture(event.pointerId);
+  } catch {
+    // Some webviews/test drivers expose PointerEvent but do not support capture for the active pointer.
+  }
+  beginStroke(pointFromEvent(event));
 }
 
 function draw(event: PointerEvent): void {
-  if (!drawing || !ctx || !lastPoint) return;
   event.preventDefault();
-  const next = pointFromEvent(event);
-  restoredImageDataUrl.value = null;
-  ctx.beginPath();
-  ctx.moveTo(lastPoint.x, lastPoint.y);
-  ctx.lineTo(next.x, next.y);
-  ctx.stroke();
-  lastPoint = next;
-  hasInk.value = true;
+  continueStroke(pointFromEvent(event));
 }
 
 function stopDraw(event: PointerEvent): void {
   if (!drawing) return;
   event.preventDefault();
-  drawing = false;
-  lastPoint = null;
+  endStroke();
+}
+
+function startMouseDraw(event: MouseEvent): void {
+  event.preventDefault();
+  if (!ctx) return;
+  beginStroke(pointFromClient(event.clientX, event.clientY));
+}
+
+function drawMouse(event: MouseEvent): void {
+  event.preventDefault();
+  continueStroke(pointFromClient(event.clientX, event.clientY));
+}
+
+function stopMouseDraw(event: MouseEvent): void {
+  if (!drawing) return;
+  event.preventDefault();
+  endStroke();
+}
+
+function startTouchDraw(event: TouchEvent): void {
+  const touch = event.touches[0];
+  if (!touch || !ctx) return;
+  event.preventDefault();
+  beginStroke(pointFromClient(touch.clientX, touch.clientY));
+}
+
+function drawTouch(event: TouchEvent): void {
+  const touch = event.touches[0];
+  if (!touch) return;
+  event.preventDefault();
+  continueStroke(pointFromClient(touch.clientX, touch.clientY));
+}
+
+function stopTouchDraw(event: TouchEvent): void {
+  if (!drawing) return;
+  event.preventDefault();
+  endStroke();
 }
 
 function clearPad(): void {
@@ -181,7 +245,6 @@ function validate(): boolean {
   successMessage.value = null;
 
   if (!form.signerName.trim()) errorMessage.value = 'Name is required.';
-  else if (!form.technicianId.trim()) errorMessage.value = 'Technician ID is required.';
   else if (!hasInk.value) errorMessage.value = 'Capture the signature before submitting.';
 
   return errorMessage.value == null;
@@ -222,7 +285,6 @@ async function submitSignature(): Promise<void> {
     await saveSignatureDraft({
       jobOrderId: jobOrderId.value,
       signerName: form.signerName.trim(),
-      technicianId: form.technicianId.trim(),
       signerPhone: form.signerPhone.trim(),
       signerEmail: form.signerEmail.trim(),
       imageLocalPath: localPath,
@@ -237,14 +299,10 @@ async function submitSignature(): Promise<void> {
 }
 
 async function loadDraftAndPrefill(): Promise<void> {
-  const session = currentSessionSnapshot();
-  form.technicianId = session?.userId ?? '';
-
   const draft = await loadSignatureDraft(jobOrderId.value);
   if (!draft) return;
 
   form.signerName = draft.signerName;
-  form.technicianId = draft.technicianId;
   form.signerPhone = draft.signerPhone;
   form.signerEmail = draft.signerEmail;
   restoredImageDataUrl.value = draft.imageDataUrl;
@@ -294,11 +352,6 @@ onBeforeUnmount(() => {
         <InputText id="signer-name" v-model="form.signerName" class="signature-capture__input" autocomplete="name" />
       </label>
 
-      <label class="signature-capture__field" for="technician-id">
-        <span>Technician ID</span>
-        <InputText id="technician-id" v-model="form.technicianId" class="signature-capture__input" autocomplete="off" />
-      </label>
-
       <label class="signature-capture__field" for="signer-phone">
         <span>Phone <small>optional</small></span>
         <InputText id="signer-phone" v-model="form.signerPhone" class="signature-capture__input" inputmode="tel" autocomplete="tel" />
@@ -310,6 +363,7 @@ onBeforeUnmount(() => {
       </label>
 
       <section class="signature-capture__pad-wrap" aria-label="Signature pad">
+        <span v-if="!hasInk" class="signature-capture__pad-hint" aria-hidden="true">Sign here</span>
         <canvas
           ref="canvasRef"
           class="signature-capture__pad"
@@ -318,6 +372,14 @@ onBeforeUnmount(() => {
           @pointerup="stopDraw"
           @pointercancel="stopDraw"
           @pointerleave="stopDraw"
+          @mousedown="startMouseDraw"
+          @mousemove="drawMouse"
+          @mouseup="stopMouseDraw"
+          @mouseleave="stopMouseDraw"
+          @touchstart="startTouchDraw"
+          @touchmove="drawTouch"
+          @touchend="stopTouchDraw"
+          @touchcancel="stopTouchDraw"
         />
       </section>
 
@@ -404,20 +466,34 @@ onBeforeUnmount(() => {
 }
 
 .signature-capture__pad-wrap {
+  position: relative;
+  z-index: 11;
   min-height: 240px;
   padding: var(--sp-2);
-  border: var(--border-2);
+  border: 2px dashed var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface);
 }
 
+.signature-capture__pad-hint {
+  position: absolute;
+  inset: var(--sp-2);
+  display: grid;
+  place-items: center;
+  color: var(--color-text-muted);
+  font-size: var(--fs-h3);
+  font-weight: var(--fw-semibold);
+  pointer-events: none;
+}
+
 .signature-capture__pad {
   width: 100%;
-  min-height: 220px;
+  height: 220px;
   display: block;
-  border: var(--border-1);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  background: var(--color-canvas);
+  background: #FFFFFF;
+  cursor: crosshair;
   touch-action: none;
 }
 

@@ -38,12 +38,14 @@ onMounted(loadDevices);
     <p v-if="errorMessage" class="auth-message auth-message--error">{{ errorMessage }}</p>
 
     <DataTable :value="devices" :loading="isLoading" data-key="id" striped-rows>
-      <Column field="id" header="Device ID" sortable />
       <Column field="name" header="Name" sortable>
-        <template #body="{ data }">{{ data.name ?? 'Unnamed device' }}</template>
+        <template #body="{ data }">
+          <span>{{ data.name ?? 'Unnamed device' }}</span>
+          <small class="record-form__version device-troubleshooting__technical-id">{{ data.id }}</small>
+        </template>
       </Column>
       <Column field="assignedUser.name" header="Assigned user" sortable>
-        <template #body="{ data }">{{ data.assignedUser?.name ?? data.assignedUserId }}</template>
+        <template #body="{ data }">{{ data.assignedUser?.name ?? 'Unassigned user' }}</template>
       </Column>
       <Column field="branch" header="Branch" sortable />
       <Column header="Online/Offline">
@@ -54,3 +56,9 @@ onMounted(loadDevices);
     </DataTable>
   </main>
 </template>
+
+<style scoped>
+.device-troubleshooting__technical-id {
+  display: block;
+}
+</style>

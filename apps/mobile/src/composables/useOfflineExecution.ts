@@ -191,7 +191,8 @@ async function requireCurrentUserId(): Promise<string> {
 }
 
 export async function currentUserDisplayName(): Promise<string> {
-  return (await currentSession())?.userId ?? '';
+  const session = await currentSession();
+  return session?.name ?? session?.email ?? session?.userId ?? '';
 }
 
 async function withTransaction<T>(db: MobileSqlAdapter, work: () => Promise<T>): Promise<T> {
@@ -231,7 +232,7 @@ async function signatureSnapshot(
   db: MobileSqlAdapter,
   jobOrderId: string,
   signerName: string,
-  signerRole: string,
+  signerRole: string | null,
   signedAt: string,
   evidence: ESignatureEvidence = {},
 ): Promise<Record<string, unknown>> {
@@ -333,10 +334,8 @@ async function completeUpload(db: MobileSqlAdapter, upload: BinaryUploadRow, ent
     [entity, upload.id, upload.id],
   );
   const op = rows[0];
-  if (!op) throw new Error(`Missing blocked metadata op for binary upload ${upload.id}.`);
-
-  const payload = JSON.parse(op.payload_json) as Record<string, unknown>;
-  payload[field] = s3Key;
+  const payload = op ? JSON.parse(op.payload_json) as Record<string, unknown> : null;
+  if (payload) payload[field] = s3Key;
 
   await withTransaction(db, async () => {
     await db.execute(
@@ -346,12 +345,14 @@ async function completeUpload(db: MobileSqlAdapter, upload: BinaryUploadRow, ent
       [s3Key, upload.id],
     );
     await db.execute(`UPDATE ${entityTable} SET ${entityColumn}=? WHERE id=?`, [s3Key, upload.id]);
-    await db.execute(
-      `UPDATE op_queue
-       SET payload_json=?, blocks_on_op=NULL, updated_at=?
-       WHERE op_id=?`,
-      [JSON.stringify(payload), nowIso(), op.op_id],
-    );
+    if (op && payload) {
+      await db.execute(
+        `UPDATE op_queue
+         SET payload_json=?, blocks_on_op=NULL, updated_at=?
+         WHERE op_id=?`,
+        [JSON.stringify(payload), nowIso(), op.op_id],
+      );
+    }
   });
 }
 
@@ -562,7 +563,7 @@ export function useOfflineExecution() {
   async function authorESignature(
     jobOrderId: string,
     signerName: string,
-    signerRole: string,
+    signerRole: string | null,
     geoLat: number | null,
     geoLng: number | null,
     imageLocalPath: string,
@@ -582,7 +583,7 @@ export function useOfflineExecution() {
     const signedAt = nowIso();
     const deviceId = await currentDeviceId();
     const cleanSignerName = signerName.trim();
-    const cleanSignerRole = signerRole.trim();
+    const cleanSignerRole = signerRole?.trim() || null;
     const cleanEvidence: ESignatureEvidence = {
       signerPhone: evidence.signerPhone?.trim() || null,
       signerEmail: evidence.signerEmail?.trim() || null,
@@ -636,7 +637,6 @@ export function useOfflineExecution() {
         jobOrderId,
         payload,
         clientTime: signedAt,
-        blocksOnOp: id,
       });
     });
 

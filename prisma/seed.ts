@@ -191,6 +191,40 @@ async function main() {
     create: { id: 'singleton', logoFilename: 'TKMR_Logo.png', updatedBy: admin.id },
   });
 
+  await prisma.featureFlag.upsert({
+    where: { key: 'DEV_TOOLS' },
+    update: {
+      enabled: false,
+      description: 'Admin table browser + read-only SQL console',
+      category: 'admin',
+      updatedBy: admin.id,
+    },
+    create: {
+      key: 'DEV_TOOLS',
+      enabled: false,
+      description: 'Admin table browser + read-only SQL console',
+      category: 'admin',
+      updatedBy: admin.id,
+    },
+  });
+
+  await prisma.featureFlag.upsert({
+    where: { key: 'MFA_REQUIRED' },
+    update: {
+      enabled: false,
+      description: 'Require MFA/TOTP at login for System Admin and Finance accounts',
+      category: 'security',
+      updatedBy: admin.id,
+    },
+    create: {
+      key: 'MFA_REQUIRED',
+      enabled: false,
+      description: 'Require MFA/TOTP at login for System Admin and Finance accounts',
+      category: 'security',
+      updatedBy: admin.id,
+    },
+  });
+
   void finance;
   console.log('Seeded: 7 users, 2 contacts, 2 clients, 2 vessels, 2 job orders (DRAFT + IN_PROGRESS), 5 devices, 6 checklist categories.');
   console.log(`Local login password for all seed users: ${PW}`);

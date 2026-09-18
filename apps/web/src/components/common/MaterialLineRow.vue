@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import Button from 'primevue/button';
+import Select from 'primevue/select';
 import { computed } from 'vue';
 import FieldError from '@/components/common/FieldError.vue';
+import { materialUnitOptions } from '@/lib/materialUnits';
 import { formatMoney } from '@/lib/money';
 
 interface MaterialLineDraft {
@@ -17,6 +19,7 @@ interface MaterialLineDraft {
 
 const props = defineProps<{
   line: MaterialLineDraft;
+  currency?: string;
   canRemove?: boolean;
   errors?: Partial<Record<keyof MaterialLineDraft, string>>;
 }>();
@@ -35,9 +38,14 @@ const amountMinor = computed(() => {
 const amountLabel = computed(() =>
   formatMoney({
     amountMinor: amountMinor.value,
-    currency: props.line.unitCost.currency || 'SGD',
+    currency: props.currency || props.line.unitCost.currency || 'SGD',
   }),
 );
+
+const visibleUnitOptions = computed(() => {
+  if (!props.line.unit || materialUnitOptions.some((option) => option.value === props.line.unit)) return materialUnitOptions;
+  return [{ label: props.line.unit, value: props.line.unit }, ...materialUnitOptions];
+});
 </script>
 
 <template>
@@ -56,12 +64,21 @@ const amountLabel = computed(() =>
 
     <label class="auth-field" :for="`material-unit-${line.id}`">
       <span>Unit</span>
-      <input :id="`material-unit-${line.id}`" v-model="line.unit" class="auth-input" required />
+      <Select
+        :id="`material-unit-${line.id}`"
+        v-model="line.unit"
+        class="auth-input material-line-row__select"
+        :options="visibleUnitOptions"
+        option-label="label"
+        option-value="value"
+        placeholder="Select unit"
+        required
+      />
       <FieldError :message="errors?.unit" />
     </label>
 
     <label class="auth-field" :for="`material-unit-cost-${line.id}`">
-      <span>Unit cost minor</span>
+      <span>Unit cost</span>
       <input
         :id="`material-unit-cost-${line.id}`"
         v-model="line.unitCost.amountMinor"
@@ -69,12 +86,6 @@ const amountLabel = computed(() =>
         inputmode="numeric"
         required
       />
-      <FieldError :message="errors?.unitCost" />
-    </label>
-
-    <label class="auth-field" :for="`material-currency-${line.id}`">
-      <span>Currency</span>
-      <input :id="`material-currency-${line.id}`" v-model="line.unitCost.currency" class="auth-input mono-input" required />
       <FieldError :message="errors?.unitCost" />
     </label>
 

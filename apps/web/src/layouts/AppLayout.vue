@@ -46,25 +46,18 @@ const navGroups: NavGroup[] = [
     items: [
       { label: 'Job Orders', to: '/job-orders', icon: 'pi pi-list-check', internal: true },
       { label: 'Job Requests', to: '/job-requests', icon: 'pi pi-inbox', internal: true, roles: ['OPS_SUPERVISOR', 'DIRECTOR', 'SYSTEM_ADMIN'] },
+      { label: 'Quotations', to: '/quotations', icon: 'pi pi-file-edit', internal: true },
       { label: 'Archive', to: '/job-orders/archive', icon: 'pi pi-folder', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
       { label: 'Trash', to: '/job-orders/trash', icon: 'pi pi-trash', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
     ],
   },
   {
-    label: 'Reports',
-    icon: 'pi pi-file-pdf',
-    internal: true,
-    items: [
-      // TODO(ux): pending PM decision on group/item label rename
-      { label: 'Reports', to: '/reports', icon: 'pi pi-file', internal: true },
-    ],
-  },
-  {
-    label: 'Business Analytics',
+    label: 'Reports & Analytics',
     icon: 'pi pi-chart-line',
     internal: true,
     items: [
       // TODO(ux): pending PM decision on group/item label rename
+      { label: 'Reports', to: '/reports', icon: 'pi pi-file', internal: true },
       { label: 'Analytics', to: '/analytics', icon: 'pi pi-chart-line', internal: true },
     ],
   },
@@ -76,6 +69,8 @@ const navGroups: NavGroup[] = [
       { label: 'Account Management', to: '/settings/account-management', icon: 'pi pi-users', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
       { label: 'Job Execution Settings', to: '/settings/job-execution', icon: 'pi pi-sliders-h', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
       { label: 'Branding', to: '/settings/branding', icon: 'pi pi-image', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
+      { label: 'Security', to: '/settings/security', icon: 'pi pi-shield', internal: true, roles: ['SYSTEM_ADMIN'] },
+      { label: 'Database', to: '/settings/database', icon: 'pi pi-database', internal: true, roles: ['SYSTEM_ADMIN'] },
       { label: 'Devices', to: '/settings/devices', icon: 'pi pi-tablet', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
     ],
   },
@@ -102,7 +97,7 @@ const navGroups: NavGroup[] = [
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
-const isUserMenuOpen = ref(false);
+const activeUserMenu = ref<'topbar' | 'sidebar' | null>(null);
 const isSidebarOpen = ref(false);
 const isNarrowLayout = ref(false);
 let sidebarMediaQuery: MediaQueryList | null = null;
@@ -121,13 +116,24 @@ const visibleNavGroups = computed(() => navGroups
     items: group.items.filter((item) => canSeeNavItem(item)),
   }))
   .filter((group) => group.items.length > 0));
+const userDisplayName = computed(() => auth.identity?.name ?? auth.identity?.email ?? auth.identity?.userId ?? 'Office User');
+const userInitials = computed(() => {
+  const parts = userDisplayName.value.trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  return userDisplayName.value.slice(0, 2).toUpperCase();
+});
+const userContextLabel = computed(() => {
+  const role = auth.identity?.roles?.[0]?.replace(/_/g, ' ');
+  const branch = auth.identity?.branch;
+  return [role, branch].filter(Boolean).join(' · ') || 'Branch';
+});
 
-function toggleUserMenu(): void {
-  isUserMenuOpen.value = !isUserMenuOpen.value;
+function toggleUserMenu(source: 'topbar' | 'sidebar'): void {
+  activeUserMenu.value = activeUserMenu.value === source ? null : source;
 }
 
 function closeUserMenu(): void {
-  isUserMenuOpen.value = false;
+  activeUserMenu.value = null;
 }
 
 function toggleSidebar(): void {
@@ -192,18 +198,18 @@ watch(() => route.fullPath, () => {
           class="app-layout__user-trigger"
           type="button"
           aria-haspopup="menu"
-          :aria-expanded="isUserMenuOpen"
-          @click="toggleUserMenu"
+          :aria-expanded="activeUserMenu === 'topbar'"
+          @click="toggleUserMenu('topbar')"
         >
           <span class="pi pi-user" aria-hidden="true" />
           <span class="app-layout__user-copy">
-            <span class="app-layout__user-name">{{ auth.identity?.name ?? auth.identity?.userId ?? 'Office User' }}</span>
+            <span class="app-layout__user-name">{{ userDisplayName }}</span>
             <span class="app-layout__user-branch">{{ auth.identity?.branch ?? 'Branch' }}</span>
           </span>
           <span class="pi pi-angle-down" aria-hidden="true" />
         </button>
 
-        <div v-if="isUserMenuOpen" class="app-layout__user-menu" role="menu">
+        <div v-if="activeUserMenu === 'topbar'" class="app-layout__user-menu" role="menu">
           <button class="app-layout__menu-item" type="button" role="menuitem" @click="logout">
             <span class="pi pi-sign-out" aria-hidden="true" />
             <span>Logout</span>
@@ -236,6 +242,32 @@ watch(() => route.fullPath, () => {
             </RouterLink>
           </section>
         </nav>
+
+        <footer class="app-layout__account-footer">
+          <span class="app-layout__account-avatar" aria-hidden="true">{{ userInitials }}</span>
+          <span class="app-layout__account-copy">
+            <strong>{{ userDisplayName }}</strong>
+            <small>{{ userContextLabel }}</small>
+          </span>
+          <div class="app-layout__account-menu">
+            <button
+              class="app-layout__account-menu-trigger"
+              type="button"
+              aria-label="Open account menu"
+              aria-haspopup="menu"
+              :aria-expanded="activeUserMenu === 'sidebar'"
+              @click="toggleUserMenu('sidebar')"
+            >
+              <span class="ti ti-dots-vertical" aria-hidden="true" />
+            </button>
+            <div v-if="activeUserMenu === 'sidebar'" class="app-layout__user-menu app-layout__user-menu--sidebar" role="menu">
+              <button class="app-layout__menu-item" type="button" role="menuitem" @click="logout">
+                <span class="pi pi-sign-out" aria-hidden="true" />
+                <span>Logout</span>
+              </button>
+            </div>
+          </div>
+        </footer>
       </aside>
 
       <section class="app-layout__content" aria-label="Workspace">

@@ -12,6 +12,7 @@
 import { Queue, Worker } from "bullmq";
 import { generateInvoicePdf } from "./jobs/generateInvoicePdf.js";
 import { generateJobOrderReport } from "./jobs/generateJobOrderReport.js";
+import { generateQuotationPdf } from "./jobs/generateQuotationPdf.js";
 import { sendInvoiceEmail } from "./jobs/sendInvoiceEmail.js";
 import { reconcileOverdueInvoices } from "./jobs/overdueReconciliation.js";
 import { reconcileCertificateExpiryAlerts } from "./jobs/certificateExpiryAlert.js";
@@ -80,6 +81,16 @@ const jobOrderReportWorker = new Worker(
   { connection },
 );
 jobOrderReportWorker.on("failed", (_job, err) => console.error("[worker] job order report generation failed", err));
+
+const quotationPdfWorker = new Worker(
+  "quotation-pdf-generation",
+  async (job) => {
+    const { quotationId } = job.data as { quotationId: string };
+    return generateQuotationPdf(quotationId);
+  },
+  { connection },
+);
+quotationPdfWorker.on("failed", (_job, err) => console.error("[worker] quotation PDF generation failed", err));
 
 const invoiceEmailWorker = new Worker(
   "invoice-email-delivery",

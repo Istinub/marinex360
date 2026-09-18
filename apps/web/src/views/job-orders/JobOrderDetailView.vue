@@ -9,9 +9,9 @@ import MaterialLineRow from '@/components/common/MaterialLineRow.vue';
 import MonoText from '@/components/common/MonoText.vue';
 import NotFoundState from '@/components/common/NotFoundState.vue';
 import VersionConflictDialog from '@/components/common/VersionConflictDialog.vue';
-import { post } from '@/lib/api/client';
+import { get, post } from '@/lib/api/client';
 import { ApiResponseError } from '@/lib/api/errors';
-import type { Invoice, JobOrder, JobOrderEditHistoryEntry, JobState, JobStatusHistoryEntry, Variation, VariationStatus } from '@/lib/api/types';
+import type { BrandingSettings, Invoice, JobOrder, JobOrderEditHistoryEntry, JobOrderMaterialLine, JobOrderObservation, JobState, JobStatusHistoryEntry, Variation, VariationStatus } from '@/lib/api/types';
 import { formatMoney } from '@/lib/money';
 import { jobOrderStateMeta } from '@/composables/useJobOrderStateMeta';
 import { useAuthStore } from '@/stores/auth';
@@ -51,6 +51,17 @@ interface MaterialLineDraft {
     amountMinor: string;
     currency: string;
   };
+}
+
+interface JobDocument {
+  id: string;
+  ownerType: 'JOB';
+  ownerId: string;
+  filename: string;
+  mimeType: string;
+  s3Key: string;
+  uploadedById?: string | null;
+  createdAt?: string | null;
 }
 
 const route = useRoute();
@@ -100,10 +111,27 @@ const lifecycleError = ref<string | null>(null);
 const reportError = ref<string | null>(null);
 const reportUrl = ref<string | null>(null);
 const isReportLoading = ref(false);
+const isReportRegenerating = ref(false);
 const invoicePdfError = ref<string | null>(null);
 const invoicePdfUrl = ref<string | null>(null);
 const isInvoicePdfLoading = ref(false);
+const completionError = ref<string | null>(null);
+const savingCompletionId = ref<string | null>(null);
+const jobDocuments = ref<JobDocument[]>([]);
+const showJobDocuments = ref(false);
+const isLoadingJobDocuments = ref(false);
+const jobDocumentsError = ref<string | null>(null);
+const hasLoadedJobDocuments = ref(false);
+const brandingSettings = ref<BrandingSettings | null>(null);
+const brandingError = ref<string | null>(null);
+const brandingSuccess = ref<string | null>(null);
+const isSavingLogoOverride = ref(false);
+const clientLinkUrl = ref<string | null>(null);
+const clientLinkMessage = ref<string | null>(null);
+const clientLinkError = ref<string | null>(null);
+const isClientLinkLoading = ref(false);
 const categoryOptions = computed(() => checklistCategoriesStore.options);
+const apiBase = import.meta.env.VITE_API_BASE as string;
 
 const officeRoles = ['OPS_SUPERVISOR', 'SYSTEM_ADMIN', 'DIRECTOR'];
 const schedulerRoles = ['SYSTEM_ADMIN', 'DIRECTOR'];
@@ -133,11 +161,14 @@ const josmRules: JosmRule[] = [
 ];
 
 const roles = computed(() => auth.identity?.roles ?? []);
+const isAdmin = computed(() => roles.value.includes('SYSTEM_ADMIN'));
+const canManageJobLogo = computed(() => roles.value.some((role) => ['SYSTEM_ADMIN', 'DIRECTOR'].includes(role)));
 const canApproveVariation = computed(() => roles.value.some((role) => variationApproveRoles.includes(role)));
 const canRejectVariation = computed(() => roles.value.some((role) => variationRejectRoles.includes(role)));
 const canManageLifecycle = computed(() => roles.value.some((role) => lifecycleRoles.includes(role)));
 const isHeaderEditable = computed(() => jobOrder.value?.state === 'DRAFT' || jobOrder.value?.state === 'SCHEDULED');
 const canEditJobOrderForm = computed(() => isHeaderEditable.value && roles.value.some((role) => officeRoles.includes(role)));
+const canShareJobOrder = computed(() => roles.value.some((role) => officeRoles.includes(role)));
 const approvedVariationAmountMinor = computed(() =>
   variations.value
     .filter((variation) => variation.status === 'APPROVED')
@@ -171,14 +202,19 @@ const earnedAmount = computed(() => {
   const paidMinor = (invoice.payments ?? []).reduce((total, payment) => total + payment.amountMinor, 0);
   return { amountMinor: paidMinor || invoice.totalAmountMinor, currency: invoice.totalCurrency };
 });
-const jobClientName = computed(() => jobOrder.value?.client?.name ?? jobOrder.value?.clientId ?? '—');
-const jobVesselName = computed(() => jobOrder.value?.vessel?.name ?? jobOrder.value?.vesselId ?? '—');
+const jobClientName = computed(() => jobOrder.value?.client?.name ?? 'Unnamed client');
+const jobVesselName = computed(() => jobOrder.value?.vessel?.name ?? 'Unnamed vessel');
 const jobVesselImo = computed(() => displayImo(jobOrder.value?.vessel?.imoNumber));
 const categoryLabels = computed(() =>
   (jobOrder.value?.serviceCategories ?? []).map((category) =>
     categoryOptions.value.find((option) => option.value === category)?.label ?? category,
   ),
 );
+const availableLogoFilenames = computed(() => brandingSettings.value?.availableLogoFilenames ?? []);
+// Photo.jobOrderId is a direct FK (prisma/schema.prisma) — there is no Photo.observationId, so
+// every photo captured on this job (whether or not a technician also referenced it from an
+// Observation on mobile) is already in this flat list. No per-observation aggregation needed.
+const completionPhotos = computed(() => jobOrder.value?.photos ?? []);
 const recentHistory = computed(() => [
   ...sortedHistory.value.map((entry) => ({ id: `status-${entry.id}`, type: 'status' as const, at: entry.at, entry })),
   ...(jobOrder.value?.editHistory ?? []).map((entry) => ({ id: `edit-${entry.id}`, type: 'edit' as const, at: entry.createdAt, entry })),
@@ -199,9 +235,19 @@ const variationCreateHelper = computed(() =>
 const canGenerateCompletionOutput = computed(() => jobOrder.value?.state === 'COMPLETED');
 const canViewClosedOutput = computed(() => jobOrder.value?.state === 'CLOSED');
 const canUseCompletionReport = computed(() => jobOrder.value ? ['COMPLETED', 'INVOICED', 'CLOSED'].includes(jobOrder.value.state) : false);
+const canRegenerateReport = computed(() =>
+  canUseCompletionReport.value
+  && Boolean(jobOrder.value?.reportObjectKey)
+  && roles.value.some((role) => ['SYSTEM_ADMIN', 'DIRECTOR'].includes(role)),
+);
 const canUseInvoicePdf = computed(() => Boolean(latestInvoice.value) && Boolean(jobOrder.value && ['COMPLETED', 'INVOICED', 'CLOSED'].includes(jobOrder.value.state)));
 const canOpenInvoiceDraft = computed(() => latestInvoice.value?.status === 'DRAFT');
 const showRenewAction = computed(() => jobOrder.value?.state === 'CANCELLED');
+const showCompletionDetails = computed(() => jobOrder.value ? ['PENDING_REVIEW', 'COMPLETED', 'INVOICED', 'CLOSED'].includes(jobOrder.value.state) : false);
+const canEditCompletionDetails = computed(() =>
+  jobOrder.value?.state === 'PENDING_REVIEW'
+  && roles.value.some((role) => ['SYSTEM_ADMIN', 'DIRECTOR'].includes(role)),
+);
 
 function firstHistoryTo(state: JobState): JobStatusHistoryEntry | null {
   return sortedHistory.value.find((entry) => entry.toState === state) ?? null;
@@ -277,6 +323,19 @@ function moneyLabel(amountMinor: number, currency?: string | null): string {
   return formatMoney({ amountMinor, currency: currency || jobOrder.value?.quotedCurrency || 'SGD' });
 }
 
+function brandingAssetUrl(filename: string): string {
+  return `${apiBase}/branding-settings/assets/${encodeURIComponent(filename)}`;
+}
+
+function materialLineTotal(line: JobOrderMaterialLine): number {
+  return Math.round(Number(line.quantity) * line.unitCostAmountMinor);
+}
+
+function materialQuantityLabel(quantity: string | number): string {
+  const numeric = Number(quantity);
+  return Number.isFinite(numeric) ? numeric.toLocaleString(undefined, { maximumFractionDigits: 3 }) : String(quantity);
+}
+
 function invoiceMoneyLabel(invoice: Invoice | null): string {
   if (!invoice) return '—';
   return moneyLabel(invoice.totalAmountMinor, invoice.totalCurrency);
@@ -297,20 +356,24 @@ function displayImo(value?: string | null): string {
 }
 
 function historyActor(entry?: JobStatusHistoryEntry | null): string {
-  return entry?.actor?.name ?? entry?.actor?.email ?? entry?.actorId ?? '—';
+  return entry?.actor?.name ?? entry?.actor?.email ?? 'Unknown user';
 }
 
 function editHistoryActor(entry?: JobOrderEditHistoryEntry | null): string {
-  return entry?.actor?.name ?? entry?.actor?.email ?? entry?.actorId ?? '—';
+  return entry?.actor?.name ?? entry?.actor?.email ?? 'Unknown user';
 }
 
 function historyDevice(entry?: JobStatusHistoryEntry | null): string {
-  return entry?.device?.name ?? entry?.deviceId ?? '—';
+  return entry?.device?.name ?? (entry?.deviceId ? 'Unknown device' : '—');
 }
 
 function historyDeviceSuffix(entry?: JobStatusHistoryEntry | null): string {
   const device = historyDevice(entry);
   return device === '—' ? '' : ` (${device})`;
+}
+
+function variationApprover(variation: Variation): string {
+  return variation.approver?.name ?? variation.approver?.email ?? (variation.approverId ? 'Unknown approver' : '—');
 }
 
 function editFieldLabel(field: string): string {
@@ -446,12 +509,90 @@ async function loadJobOrder(overwriteForm = true): Promise<void> {
   reportError.value = null;
   invoicePdfUrl.value = null;
   invoicePdfError.value = null;
+  completionError.value = null;
   if (['COMPLETED', 'INVOICED', 'CLOSED'].includes(loaded.state) && loaded.reportObjectKey) {
     void refreshReportUrl();
   }
   const invoice = loaded.invoices?.[0] ?? null;
   if (invoice?.pdfObjectKey) {
     void refreshInvoicePdfUrl();
+  }
+}
+
+async function loadBrandingSettings(): Promise<void> {
+  brandingError.value = null;
+  try {
+    brandingSettings.value = await get<BrandingSettings>('/branding-settings');
+  } catch (error) {
+    brandingError.value = error instanceof ApiResponseError ? error.message : 'Unable to load logo choices.';
+  }
+}
+
+async function saveLogoOverride(logoOverride: string | null): Promise<void> {
+  if (!jobOrder.value || !canManageJobLogo.value) return;
+  if ((jobOrder.value.logoOverride ?? null) === logoOverride) return;
+  brandingError.value = null;
+  brandingSuccess.value = null;
+  isSavingLogoOverride.value = true;
+  try {
+    const updated = await jobOrdersStore.updateJobOrder(jobOrder.value.id, {
+      version: jobOrder.value.version,
+      logoOverride,
+    });
+    jobOrder.value = updated;
+    brandingSuccess.value = 'Report logo saved.';
+  } catch (error) {
+    brandingError.value = error instanceof ApiResponseError ? error.message : 'Unable to save report logo.';
+  } finally {
+    isSavingLogoOverride.value = false;
+  }
+}
+
+async function saveChecklistItem(itemId: string, checked: boolean): Promise<void> {
+  if (!jobOrder.value) return;
+  completionError.value = null;
+  savingCompletionId.value = itemId;
+  try {
+    await jobOrdersStore.updateChecklistItem(jobOrder.value.id, itemId, checked);
+    await loadJobOrder(false);
+  } catch (error) {
+    completionError.value = error instanceof ApiResponseError ? error.message : 'Unable to save checklist item.';
+  } finally {
+    savingCompletionId.value = null;
+  }
+}
+
+async function saveObservation(observation: JobOrderObservation): Promise<void> {
+  if (!jobOrder.value) return;
+  completionError.value = null;
+  savingCompletionId.value = observation.id;
+  try {
+    await jobOrdersStore.updateObservation(jobOrder.value.id, observation.id, observation.body);
+    await loadJobOrder(false);
+  } catch (error) {
+    completionError.value = error instanceof ApiResponseError ? error.message : 'Unable to save observation.';
+  } finally {
+    savingCompletionId.value = null;
+  }
+}
+
+async function saveMaterial(line: JobOrderMaterialLine): Promise<void> {
+  if (!jobOrder.value) return;
+  completionError.value = null;
+  savingCompletionId.value = line.id;
+  try {
+    await jobOrdersStore.updateMaterial(jobOrder.value.id, line.id, {
+      description: line.description,
+      quantity: Number(line.quantity),
+      unit: line.unit,
+      unitCostAmountMinor: line.unitCostAmountMinor,
+      unitCostCurrency: line.unitCostCurrency,
+    });
+    await loadJobOrder(false);
+  } catch (error) {
+    completionError.value = error instanceof ApiResponseError ? error.message : 'Unable to save material line.';
+  } finally {
+    savingCompletionId.value = null;
   }
 }
 
@@ -477,6 +618,53 @@ async function openReport(): Promise<void> {
 async function downloadReport(): Promise<void> {
   if (!reportUrl.value) await refreshReportUrl();
   if (reportUrl.value) triggerDownload(reportUrl.value, `${jobOrder.value?.joNumber ?? 'job-order'}-report.pdf`);
+}
+
+async function regenerateReport(): Promise<void> {
+  if (!jobOrder.value) return;
+  reportError.value = null;
+  isReportRegenerating.value = true;
+  try {
+    await post<{ status: 'QUEUED' }, Record<string, never>>(`/job-orders/${jobOrder.value.id}/report/regenerate`, {});
+    await loadJobOrder(false);
+  } catch (error) {
+    reportError.value = error instanceof ApiResponseError ? error.message : 'Unable to regenerate completion report.';
+  } finally {
+    isReportRegenerating.value = false;
+  }
+}
+
+async function requestClientLink(): Promise<void> {
+  if (!jobOrder.value) return;
+  clientLinkError.value = null;
+  clientLinkMessage.value = null;
+  isClientLinkLoading.value = true;
+  try {
+    const result = await post<{ url: string }, Record<string, never>>(`/job-orders/${jobOrder.value.id}/share-link`, {});
+    clientLinkUrl.value = result.url;
+    await navigator.clipboard.writeText(result.url);
+    clientLinkMessage.value = 'Client link copied to clipboard.';
+  } catch (error) {
+    clientLinkError.value = error instanceof ApiResponseError ? error.message : 'Unable to generate client link.';
+  } finally {
+    isClientLinkLoading.value = false;
+  }
+}
+
+async function copyClientLink(): Promise<void> {
+  if (clientLinkUrl.value) {
+    clientLinkError.value = null;
+    await navigator.clipboard.writeText(clientLinkUrl.value);
+    clientLinkMessage.value = 'Client link copied to clipboard.';
+    return;
+  }
+  await requestClientLink();
+}
+
+async function regenerateClientLink(): Promise<void> {
+  const proceed = window.confirm('Regenerating the client link will immediately stop the old link from working. Continue?');
+  if (!proceed) return;
+  await requestClientLink();
 }
 
 async function refreshInvoicePdfUrl(): Promise<void> {
@@ -517,6 +705,25 @@ function triggerDownload(url: string, filename: string): void {
 
 function openInvoiceDraft(): void {
   if (latestInvoice.value) void router.push(`/invoices/${latestInvoice.value.id}`);
+}
+
+async function loadJobDocuments(): Promise<void> {
+  if (!jobOrder.value) return;
+  isLoadingJobDocuments.value = true;
+  jobDocumentsError.value = null;
+  try {
+    jobDocuments.value = await get<JobDocument[]>(`/documents?ownerType=JOB&ownerId=${encodeURIComponent(jobOrder.value.id)}`);
+    hasLoadedJobDocuments.value = true;
+  } catch (error) {
+    jobDocumentsError.value = error instanceof ApiResponseError ? error.message : 'Unable to load job documents.';
+  } finally {
+    isLoadingJobDocuments.value = false;
+  }
+}
+
+async function toggleJobDocuments(): Promise<void> {
+  showJobDocuments.value = !showJobDocuments.value;
+  if (showJobDocuments.value && !hasLoadedJobDocuments.value) await loadJobDocuments();
 }
 
 async function saveHeader(isConflictConfirm = false): Promise<void> {
@@ -642,7 +849,7 @@ function newMaterialLine(): MaterialLineDraft {
     id: crypto.randomUUID(),
     description: '',
     quantity: '1',
-    unit: 'EA',
+    unit: 'pcs',
     unitCost: {
       amountMinor: '',
       currency: variationCurrency.value,
@@ -736,7 +943,7 @@ async function decideVariation(variation: Variation, decision: VariationDecision
 onMounted(async () => {
   isLoading.value = true;
   try {
-    await checklistCategoriesStore.load();
+    await Promise.all([checklistCategoriesStore.load(), loadBrandingSettings()]);
     await loadJobOrder();
   } catch (error) {
     if (error instanceof ApiResponseError && error.code === 'NOT_FOUND') {
@@ -754,7 +961,7 @@ watch(jobOrderId, async () => {
   isNotFound.value = false;
   formError.value = null;
   try {
-    await Promise.all([checklistCategoriesStore.load(), loadJobOrder()]);
+    await Promise.all([checklistCategoriesStore.load(), loadBrandingSettings(), loadJobOrder()]);
   } catch (error) {
     if (error instanceof ApiResponseError && error.code === 'NOT_FOUND') {
       isNotFound.value = true;
@@ -798,6 +1005,24 @@ watch(jobOrderId, async () => {
             {{ stateMeta.label }}
           </span>
           <Button
+            v-if="canShareJobOrder"
+            :label="clientLinkUrl ? 'Copy client link' : 'Get client link'"
+            icon="pi pi-link"
+            severity="secondary"
+            outlined
+            :loading="isClientLinkLoading"
+            @click="copyClientLink"
+          />
+          <Button
+            v-if="canShareJobOrder && clientLinkUrl"
+            label="Regenerate link"
+            icon="pi pi-refresh"
+            severity="secondary"
+            text
+            :loading="isClientLinkLoading"
+            @click="regenerateClientLink"
+          />
+          <Button
             v-if="canEditJobOrderForm"
             label="Edit"
             icon="pi pi-pencil"
@@ -807,6 +1032,9 @@ watch(jobOrderId, async () => {
           />
         </div>
       </header>
+
+      <p v-if="clientLinkMessage" class="crm-empty" role="status">{{ clientLinkMessage }}</p>
+      <p v-if="clientLinkError" class="auth-message auth-message--error" role="alert">{{ clientLinkError }}</p>
 
       <div class="jo-detail-layout">
         <div class="jo-detail-layout__main">
@@ -871,6 +1099,7 @@ watch(jobOrderId, async () => {
                   v-for="line in variationLines"
                   :key="line.id"
                   :line="line"
+                  :currency="variationCurrency"
                   :can-remove="variationLines.length > 1"
                   @remove="removeVariationLine"
                 />
@@ -881,7 +1110,7 @@ watch(jobOrderId, async () => {
                 Computed amount <span class="mx-money">{{ moneyLabel(variationDraftAmountMinor, variationCurrency) }}</span>
               </p>
 
-              <div class="record-form__actions">
+              <div class="record-form__actions jo-variation-form__actions">
                 <Button label="Add line" severity="secondary" type="button" @click="addVariationLine" />
                 <Button label="Cancel" severity="secondary" type="button" @click="showVariationForm = false" />
                 <Button label="Submit variation" icon="pi pi-save" type="submit" :loading="isSaving" />
@@ -889,10 +1118,15 @@ watch(jobOrderId, async () => {
             </form>
 
             <div v-if="variations.length" class="variation-list">
-              <article v-for="variation in variations" :key="variation.id" class="variation-item">
+              <article v-for="(variation, index) in variations" :key="variation.id" class="variation-item">
                 <div class="variation-item__header">
                   <div>
-                    <p class="record-form__version">Variation <MonoText :value="variation.id" /></p>
+                    <p class="record-form__version">
+                      Variation #{{ variations.length - index }}
+                      <template v-if="isAdmin">
+                        · ID <MonoText :value="variation.id" />
+                      </template>
+                    </p>
                     <h3 class="variation-item__title">{{ variation.reason }}</h3>
                   </div>
                   <span class="jo-chip" :class="variationStatusClass(variation.status)">
@@ -911,7 +1145,7 @@ watch(jobOrderId, async () => {
                   </div>
                   <div>
                     <dt>Approver</dt>
-                    <dd><MonoText :value="variation.approverId" /></dd>
+                    <dd>{{ variationApprover(variation) }}</dd>
                   </div>
                 </dl>
 
@@ -927,73 +1161,106 @@ watch(jobOrderId, async () => {
             </p>
           </section>
 
-          <section class="jo-detail-card" aria-labelledby="job-order-documents-title">
-            <div class="jo-detail-card__header">
-              <h2 id="job-order-documents-title" class="crm-section__title">Documents</h2>
-            </div>
-            <div class="jo-document-chip-list">
-              <span class="jo-document-chip">
-                <i class="ti ti-file-text" aria-hidden="true" />
-                Job documents
-              </span>
-              <span v-if="jobOrder.reportObjectKey" class="jo-document-chip">
-                <i class="ti ti-file-report" aria-hidden="true" />
-                Completion report
-              </span>
-              <span v-if="latestInvoice?.pdfObjectKey" class="jo-document-chip">
-                <i class="ti ti-receipt" aria-hidden="true" />
-                Invoice PDF
-              </span>
-            </div>
-          </section>
-
           <section
-            v-if="canGenerateCompletionOutput || canViewClosedOutput || showRenewAction || canUseCompletionReport"
             class="jo-detail-card"
             aria-labelledby="job-order-output-title"
           >
             <div class="jo-detail-card__header">
-              <h2 id="job-order-output-title" class="crm-section__title">Output</h2>
+              <h2 id="job-order-output-title" class="crm-section__title">Documents</h2>
             </div>
-            <div class="record-form__actions record-form__actions--left">
-              <Button
-                v-if="canUseCompletionReport"
-                :label="reportUrl || jobOrder.reportObjectKey ? 'Preview report' : 'Generating...'"
-                icon="pi pi-file-pdf"
-                severity="secondary"
-                :loading="isReportLoading"
-                :disabled="!jobOrder.reportObjectKey"
-                @click="openReport"
-              />
-              <Button
-                v-if="canUseCompletionReport && jobOrder.reportObjectKey"
-                label="Download report"
-                icon="pi pi-download"
-                severity="secondary"
-                :loading="isReportLoading"
-                @click="downloadReport"
-              />
-              <Button v-if="canOpenInvoiceDraft" label="Create Invoice" icon="pi pi-receipt" severity="secondary" @click="openInvoiceDraft" />
-              <Button v-else-if="canGenerateCompletionOutput && latestInvoice" label="Go to invoice" icon="pi pi-receipt" severity="secondary" @click="openInvoiceDraft" />
-              <Button v-if="canViewClosedOutput" label="View invoice" icon="pi pi-receipt" severity="secondary" @click="openInvoiceDraft" />
-              <Button
-                v-if="canUseInvoicePdf"
-                :label="invoicePdfUrl || latestInvoice?.pdfObjectKey ? 'Preview invoice PDF' : 'Invoice PDF generating...'"
-                icon="pi pi-file-pdf"
-                severity="secondary"
-                :loading="isInvoicePdfLoading"
-                :disabled="!latestInvoice?.pdfObjectKey"
-                @click="openInvoicePdf"
-              />
-              <Button
-                v-if="canUseInvoicePdf && latestInvoice?.pdfObjectKey"
-                label="Download invoice PDF"
-                icon="pi pi-download"
-                severity="secondary"
-                :loading="isInvoicePdfLoading"
-                @click="downloadInvoicePdf"
-              />
-              <Button v-if="showRenewAction" label="Renew" icon="pi pi-refresh" severity="secondary" @click="router.push('/job-orders/new')" />
+            <div class="jo-output-groups">
+              <div class="jo-output-group">
+                <h3>Job Documents</h3>
+                <button
+                  type="button"
+                  class="jo-document-chip"
+                  :aria-expanded="showJobDocuments"
+                  @click="toggleJobDocuments"
+                >
+                  <i class="ti ti-file-text" aria-hidden="true" />
+                  Job documents
+                </button>
+
+                <p v-if="jobDocumentsError" class="auth-message auth-message--error" role="alert">
+                  {{ jobDocumentsError }}
+                </p>
+                <p v-else-if="isLoadingJobDocuments" class="crm-empty">Loading documents...</p>
+                <ul v-else-if="showJobDocuments && jobDocuments.length" class="jo-document-list">
+                  <li v-for="document in jobDocuments" :key="document.id">
+                    <i class="ti ti-file-text" aria-hidden="true" />
+                    <span>
+                      <strong>{{ document.filename }}</strong>
+                      <small>{{ document.mimeType }}<template v-if="document.createdAt"> · {{ formatDateTime(document.createdAt) }}</template></small>
+                    </span>
+                  </li>
+                </ul>
+                <p v-else-if="showJobDocuments" class="crm-empty">No documents.</p>
+              </div>
+
+              <div class="jo-output-group">
+                <h3>Report</h3>
+                <div v-if="canUseCompletionReport" class="record-form__actions record-form__actions--left">
+                  <Button
+                    :label="reportUrl || jobOrder.reportObjectKey ? 'Preview report' : 'Generating...'"
+                    icon="pi pi-file-pdf"
+                    severity="secondary"
+                    :loading="isReportLoading"
+                    :disabled="!jobOrder.reportObjectKey"
+                    @click="openReport"
+                  />
+                  <Button
+                    v-if="jobOrder.reportObjectKey"
+                    label="Download report"
+                    icon="pi pi-download"
+                    severity="secondary"
+                    :loading="isReportLoading"
+                    @click="downloadReport"
+                  />
+                  <Button
+                    v-if="canRegenerateReport"
+                    label="Regenerate report"
+                    icon="pi pi-refresh"
+                    severity="secondary"
+                    :loading="isReportRegenerating"
+                    @click="regenerateReport"
+                  />
+                </div>
+                <p v-else class="crm-empty">Completion report is not available yet.</p>
+              </div>
+
+              <div class="jo-output-group">
+                <h3>Invoice</h3>
+                <div v-if="canOpenInvoiceDraft || (canGenerateCompletionOutput && latestInvoice) || canViewClosedOutput || canUseInvoicePdf" class="record-form__actions record-form__actions--left">
+                  <Button v-if="canOpenInvoiceDraft" label="Create Invoice" icon="pi pi-receipt" severity="secondary" @click="openInvoiceDraft" />
+                  <Button v-else-if="canGenerateCompletionOutput && latestInvoice" label="Go to invoice" icon="pi pi-receipt" severity="secondary" @click="openInvoiceDraft" />
+                  <Button v-if="canViewClosedOutput" label="View invoice" icon="pi pi-receipt" severity="secondary" @click="openInvoiceDraft" />
+                  <Button
+                    v-if="canUseInvoicePdf"
+                    :label="invoicePdfUrl || latestInvoice?.pdfObjectKey ? 'Preview invoice PDF' : 'Invoice PDF generating...'"
+                    icon="pi pi-file-pdf"
+                    severity="secondary"
+                    :loading="isInvoicePdfLoading"
+                    :disabled="!latestInvoice?.pdfObjectKey"
+                    @click="openInvoicePdf"
+                  />
+                  <Button
+                    v-if="canUseInvoicePdf && latestInvoice?.pdfObjectKey"
+                    label="Download invoice PDF"
+                    icon="pi pi-download"
+                    severity="secondary"
+                    :loading="isInvoicePdfLoading"
+                    @click="downloadInvoicePdf"
+                  />
+                </div>
+                <p v-else class="crm-empty">Invoice is not available yet.</p>
+              </div>
+
+              <div v-if="showRenewAction" class="jo-output-group">
+                <h3>Renewal</h3>
+                <div class="record-form__actions record-form__actions--left">
+                  <Button label="Renew" icon="pi pi-refresh" severity="secondary" @click="router.push('/job-orders/new')" />
+                </div>
+              </div>
             </div>
             <p v-if="reportError" class="auth-message auth-message--error" role="alert">
               {{ reportError }}
@@ -1001,6 +1268,151 @@ watch(jobOrderId, async () => {
             <p v-if="invoicePdfError" class="auth-message auth-message--error" role="alert">
               {{ invoicePdfError }}
             </p>
+          </section>
+
+          <section v-if="showCompletionDetails" class="jo-detail-card" aria-labelledby="job-order-completion-title">
+            <div class="jo-detail-card__header">
+              <div>
+                <h2 id="job-order-completion-title" class="crm-section__title">Completion details</h2>
+                <p class="record-form__version">
+                  {{ canEditCompletionDetails ? 'Director/Admin review edits are available before completion.' : 'Read-only execution capture.' }}
+                </p>
+              </div>
+            </div>
+
+            <p v-if="completionError" class="auth-message auth-message--error" role="alert">
+              {{ completionError }}
+            </p>
+
+            <div class="completion-details">
+              <section class="completion-details__panel" aria-labelledby="completion-checklist-title">
+                <h3 id="completion-checklist-title">Checklist</h3>
+                <p v-if="!jobOrder.checklistItems?.length" class="crm-empty">No checklist items captured.</p>
+                <ul v-else class="completion-checklist">
+                  <li v-for="item in jobOrder.checklistItems" :key="item.id" class="completion-checklist__item">
+                    <label class="completion-checklist__label">
+                      <input
+                        v-model="item.checked"
+                        type="checkbox"
+                        :disabled="!canEditCompletionDetails || savingCompletionId === item.id"
+                        @change="saveChecklistItem(item.id, item.checked)"
+                      />
+                      <span>{{ item.label }}</span>
+                    </label>
+                    <span class="record-form__version">{{ item.checked ? 'Checked' : 'Unticked' }}</span>
+                  </li>
+                </ul>
+              </section>
+
+              <section class="completion-details__panel" aria-labelledby="completion-observations-title">
+                <h3 id="completion-observations-title">Observations</h3>
+                <p v-if="!jobOrder.observations?.length" class="crm-empty">No observations captured.</p>
+                <article v-for="observation in jobOrder.observations" :key="observation.id" class="completion-entry">
+                  <textarea
+                    v-if="canEditCompletionDetails"
+                    v-model="observation.body"
+                    class="auth-input record-form__textarea completion-entry__textarea"
+                    :disabled="savingCompletionId === observation.id"
+                  />
+                  <p v-else>{{ observation.body }}</p>
+                  <div class="completion-entry__meta">
+                    <span>{{ formatDateTime(observation.createdAt) }}</span>
+                    <Button
+                      v-if="canEditCompletionDetails"
+                      label="Save"
+                      size="small"
+                      severity="secondary"
+                      :loading="savingCompletionId === observation.id"
+                      @click="saveObservation(observation)"
+                    />
+                  </div>
+                </article>
+              </section>
+
+              <section class="completion-details__panel" aria-labelledby="completion-photos-title">
+                <h3 id="completion-photos-title">Photos</h3>
+                <p v-if="!completionPhotos.length" class="crm-empty">No photos captured.</p>
+                <div v-else class="completion-photo-grid">
+                  <figure v-for="photo in completionPhotos" :key="photo.id" class="completion-photo">
+                    <img v-if="photo.url" :src="photo.url" :alt="`${photo.phase} photo`" />
+                    <div v-else class="completion-photo__placeholder">
+                      <i class="ti ti-photo" aria-hidden="true" />
+                    </div>
+                    <figcaption>
+                      {{ photo.phase }} · {{ formatDateTime(photo.takenAt) }}
+                    </figcaption>
+                  </figure>
+                </div>
+              </section>
+
+              <section class="completion-details__panel" aria-labelledby="completion-materials-title">
+                <h3 id="completion-materials-title">Materials</h3>
+                <p v-if="!jobOrder.materials?.length" class="crm-empty">No materials captured.</p>
+                <div v-else class="completion-material-list">
+                  <article v-for="line in jobOrder.materials" :key="line.id" class="completion-material">
+                    <template v-if="canEditCompletionDetails">
+                      <label class="auth-field" :for="`completion-material-description-${line.id}`">
+                        <span>Description</span>
+                        <input :id="`completion-material-description-${line.id}`" v-model="line.description" class="auth-input" />
+                      </label>
+                      <label class="auth-field" :for="`completion-material-quantity-${line.id}`">
+                        <span>Qty</span>
+                        <input :id="`completion-material-quantity-${line.id}`" v-model.number="line.quantity" class="auth-input mono-input" type="number" min="0" step="0.001" />
+                      </label>
+                      <label class="auth-field" :for="`completion-material-unit-${line.id}`">
+                        <span>Unit</span>
+                        <input :id="`completion-material-unit-${line.id}`" v-model="line.unit" class="auth-input" />
+                      </label>
+                      <label class="auth-field" :for="`completion-material-cost-${line.id}`">
+                        <span>Unit cost</span>
+                        <input :id="`completion-material-cost-${line.id}`" v-model.number="line.unitCostAmountMinor" class="auth-input mono-input" type="number" min="0" step="1" />
+                      </label>
+                      <label class="auth-field" :for="`completion-material-currency-${line.id}`">
+                        <span>Currency</span>
+                        <input :id="`completion-material-currency-${line.id}`" v-model="line.unitCostCurrency" class="auth-input mono-input" />
+                      </label>
+                      <div class="completion-material__actions">
+                        <span class="mx-money">{{ moneyLabel(materialLineTotal(line), line.unitCostCurrency) }}</span>
+                        <Button
+                          label="Save"
+                          size="small"
+                          severity="secondary"
+                          :loading="savingCompletionId === line.id"
+                          @click="saveMaterial(line)"
+                        />
+                      </div>
+                    </template>
+                    <template v-else>
+                      <div>
+                        <strong>{{ line.description }}</strong>
+                        <p class="record-form__version">
+                          {{ materialQuantityLabel(line.quantity) }} {{ line.unit }} ·
+                          {{ moneyLabel(line.unitCostAmountMinor, line.unitCostCurrency) }} each
+                        </p>
+                      </div>
+                      <span class="mx-money">{{ moneyLabel(materialLineTotal(line), line.unitCostCurrency) }}</span>
+                    </template>
+                  </article>
+                </div>
+              </section>
+
+              <section class="completion-details__panel" aria-labelledby="completion-signature-title">
+                <h3 id="completion-signature-title">Signature</h3>
+                <p v-if="!jobOrder.signature" class="crm-empty">No signature captured.</p>
+                <article v-else class="completion-signature">
+                  <img v-if="jobOrder.signature.imageUrl" :src="jobOrder.signature.imageUrl" alt="Captured signature" />
+                  <div v-else class="completion-photo__placeholder">
+                    <i class="ti ti-signature" aria-hidden="true" />
+                  </div>
+                  <div>
+                    <strong>{{ jobOrder.signature.signerName ?? 'Signer pending' }}</strong>
+                    <p class="record-form__version">
+                      {{ jobOrder.signature.signerRole ?? 'Role pending' }} · {{ formatDateTime(jobOrder.signature.signedAt) }}
+                    </p>
+                  </div>
+                </article>
+              </section>
+            </div>
           </section>
 
           <section class="jo-detail-card" aria-labelledby="job-order-history-title">
@@ -1095,12 +1507,17 @@ watch(jobOrderId, async () => {
           <section class="jo-detail-card" aria-labelledby="job-order-client-title">
             <h2 id="job-order-client-title" class="crm-section__title">Client</h2>
             <p class="jo-card-primary">{{ jobClientName }}</p>
-            <p class="record-form__version"><MonoText :value="jobOrder.clientId" /></p>
+            <p v-if="isAdmin" class="record-form__version jo-technical-id">
+              Client ID <MonoText :value="jobOrder.clientId" />
+            </p>
           </section>
 
           <section class="jo-detail-card" aria-labelledby="job-order-vessel-title">
             <h2 id="job-order-vessel-title" class="crm-section__title">Vessel</h2>
             <p class="jo-card-primary">{{ jobVesselName }}</p>
+            <p v-if="isAdmin" class="record-form__version jo-technical-id">
+              Vessel ID <MonoText :value="jobOrder.vesselId" />
+            </p>
             <p v-if="jobVesselImo" class="record-form__version">
               IMO <MonoText :value="jobVesselImo" />
             </p>
@@ -1143,6 +1560,41 @@ watch(jobOrderId, async () => {
                 <dd><MonoText :value="latestInvoice.invoiceNumber" /> · <span class="mx-money">{{ invoiceMoneyLabel(latestInvoice) }}</span></dd>
               </div>
             </dl>
+          </section>
+
+          <section class="jo-detail-card" aria-labelledby="job-order-logo-title">
+            <h2 id="job-order-logo-title" class="crm-section__title">Report logo</h2>
+            <p class="record-form__version">
+              {{ jobOrder.logoOverride ? `Override: ${jobOrder.logoOverride}` : 'Using global Branding setting' }}
+            </p>
+            <p v-if="brandingError" class="auth-message auth-message--error" role="alert">{{ brandingError }}</p>
+            <p v-if="brandingSuccess" class="auth-message auth-message--success" role="status">{{ brandingSuccess }}</p>
+            <div v-if="canManageJobLogo" class="jo-logo-picker">
+              <button
+                type="button"
+                class="jo-logo-picker__card"
+                :class="{ 'jo-logo-picker__card--active': !jobOrder.logoOverride }"
+                :disabled="isSavingLogoOverride"
+                @click="saveLogoOverride(null)"
+              >
+                <span class="jo-logo-picker__placeholder">Global default</span>
+                <span class="branding-logo-card__name">Use default</span>
+              </button>
+              <button
+                v-for="filename in availableLogoFilenames"
+                :key="filename"
+                type="button"
+                class="jo-logo-picker__card"
+                :class="{ 'jo-logo-picker__card--active': filename === jobOrder.logoOverride }"
+                :disabled="isSavingLogoOverride"
+                @click="saveLogoOverride(filename)"
+              >
+                <span class="branding-logo-card__image">
+                  <img :src="brandingAssetUrl(filename)" :alt="filename" />
+                </span>
+                <span class="branding-logo-card__name">{{ filename }}</span>
+              </button>
+            </div>
           </section>
 
           <section class="jo-worklog-placeholder" aria-labelledby="job-order-worklog-title">
@@ -1351,6 +1803,7 @@ watch(jobOrderId, async () => {
 .jo-detail-layout__aside {
   display: grid;
   gap: 16px;
+  min-width: 0;
 }
 
 .jo-detail-card {
@@ -1358,6 +1811,7 @@ watch(jobOrderId, async () => {
   border: 0.5px solid #D3DCE3;
   border-radius: 8px;
   background: #FFFFFF;
+  min-width: 0;
 }
 
 .jo-detail-card__header {
@@ -1366,6 +1820,10 @@ watch(jobOrderId, async () => {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
+}
+
+.jo-variation-form__actions {
+  margin-bottom: var(--sp-4);
 }
 
 .jo-port-pill {
@@ -1411,10 +1869,84 @@ watch(jobOrderId, async () => {
 }
 
 .jo-document-chip {
+  width: fit-content;
   gap: 6px;
   padding: 5px 10px;
+  border: 0;
+  border-radius: 999px;
   background: #F4F7FA;
   color: #34495C;
+  cursor: pointer;
+  font: inherit;
+}
+
+.jo-document-chip:hover {
+  background: #EAF2FA;
+}
+
+.jo-output-groups {
+  display: grid;
+  gap: 12px;
+}
+
+.jo-output-group {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 0.5px solid #D3DCE3;
+  border-radius: 8px;
+  background: #FFFFFF;
+}
+
+.jo-output-group h3 {
+  margin: 0;
+  color: #34495C;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.jo-document-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.jo-document-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #F4F7FA;
+}
+
+.jo-document-list i {
+  color: #5C7081;
+}
+
+.jo-document-list span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.jo-document-list strong,
+.jo-document-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jo-document-list strong {
+  color: #11202E;
+  font-size: 13px;
+}
+
+.jo-document-list small {
+  color: #5C7081;
+  font-size: 12px;
 }
 
 .jo-history-list {
@@ -1483,6 +2015,67 @@ watch(jobOrderId, async () => {
   font-weight: 600;
 }
 
+.jo-technical-id {
+  color: #5C7081;
+  font-size: 12px;
+}
+
+.jo-logo-picker {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.jo-logo-picker__card {
+  display: grid;
+  gap: var(--sp-2);
+  justify-items: start;
+  padding: var(--sp-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.jo-logo-picker__card--active {
+  border-color: var(--color-brand);
+  box-shadow: inset 3px 0 0 var(--color-brand);
+}
+
+.jo-logo-picker__card:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.branding-logo-card__image,
+.jo-logo-picker__placeholder {
+  width: 100%;
+  min-height: 54px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: #F4F7FA;
+}
+
+.branding-logo-card__image img {
+  max-width: 100%;
+  max-height: 48px;
+  object-fit: contain;
+}
+
+.branding-logo-card__name {
+  color: #5C7081;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.jo-logo-picker__placeholder {
+  color: #5C7081;
+  font-size: 12px;
+  font-style: italic;
+}
+
 .jo-worklog-placeholder {
   display: flex;
   gap: 10px;
@@ -1503,12 +2096,165 @@ watch(jobOrderId, async () => {
   font-style: italic;
 }
 
+.completion-details {
+  display: grid;
+  gap: 14px;
+}
+
+.completion-details__panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 0.5px solid #D3DCE3;
+  border-radius: 8px;
+  background: #FFFFFF;
+}
+
+.completion-details__panel h3 {
+  margin: 0;
+  color: #11202E;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.completion-checklist,
+.completion-material-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.completion-checklist__item,
+.completion-material,
+.completion-entry,
+.completion-signature {
+  padding: 10px;
+  border-radius: 8px;
+  background: #F4F7FA;
+}
+
+.completion-checklist__item,
+.completion-signature {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.completion-checklist__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #11202E;
+  font-size: 13px;
+}
+
+.completion-entry {
+  display: grid;
+  gap: 8px;
+}
+
+.completion-entry p {
+  margin: 0;
+  color: #11202E;
+  line-height: 1.5;
+}
+
+.completion-entry__textarea {
+  min-height: 92px;
+}
+
+.completion-entry__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #5C7081;
+  font-size: 12px;
+}
+
+.completion-photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  gap: 10px;
+}
+
+.completion-photo {
+  margin: 0;
+  overflow: hidden;
+  border: 0.5px solid #D3DCE3;
+  border-radius: 8px;
+  background: #FFFFFF;
+}
+
+.completion-photo img,
+.completion-signature img,
+.completion-photo__placeholder {
+  width: 100%;
+  height: 104px;
+  display: block;
+  object-fit: cover;
+  background: #ECEFF2;
+}
+
+.completion-photo__placeholder {
+  display: grid;
+  place-items: center;
+  color: #8B98A3;
+  font-size: 24px;
+}
+
+.completion-photo figcaption {
+  padding: 8px;
+  color: #5C7081;
+  font-size: 12px;
+}
+
+.completion-material {
+  display: grid;
+  grid-template-columns: minmax(160px, 2fr) minmax(72px, 0.6fr) minmax(80px, 0.7fr) minmax(110px, 1fr) minmax(88px, 0.8fr) minmax(120px, 1fr);
+  gap: 8px;
+  align-items: end;
+}
+
+.completion-material:not(:has(.auth-field)) {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.completion-material__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.completion-signature {
+  justify-content: flex-start;
+}
+
+.completion-signature img,
+.completion-signature .completion-photo__placeholder {
+  width: 220px;
+  height: 92px;
+  object-fit: contain;
+  border: 0.5px solid #D3DCE3;
+  border-radius: 6px;
+  background: #FFFFFF;
+}
+
 @media (max-width: 960px) {
   .jo-detail-layout {
     grid-template-columns: 1fr;
   }
 
   .detail-grid--compact {
+    grid-template-columns: 1fr;
+  }
+
+  .completion-material {
     grid-template-columns: 1fr;
   }
 

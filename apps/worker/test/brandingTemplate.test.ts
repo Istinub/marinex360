@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { loadBrandingLogo } from '../src/lib/branding.js';
 import { renderInvoiceHtml, type InvoiceForPdf } from '../src/lib/invoiceTemplate.js';
 import { renderJobOrderReportHtml } from '../src/lib/jobOrderReportTemplate.js';
+import { renderPdfFooterTemplate } from '../src/lib/pdfLetterhead.js';
 
 const logo = { filename: 'TKMR.png', dataUri: 'data:image/png;base64,VEVTVA==' };
 
@@ -56,5 +57,24 @@ describe('branding logo templates', () => {
     const activeLogo = await loadBrandingLogo(prisma as any);
     expect(activeLogo.filename).toBe('TKMR.png');
     expect(activeLogo.dataUri).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it('prefers a per-job logo override over BrandingSettings', async () => {
+    const prisma = {
+      brandingSettings: {
+        findUnique: async () => ({ id: 'singleton', logoFilename: 'TKMR.png' }),
+      },
+    };
+    const activeLogo = await loadBrandingLogo(prisma as any, 'TKMR_Engineering.png');
+    expect(activeLogo.filename).toBe('TKMR_Engineering.png');
+    expect(activeLogo.dataUri).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it('keeps the PDF footer certification and subtle electronic-generation disclaimer', () => {
+    const footer = renderPdfFooterTemplate();
+    expect(footer).toContain('Report auto generated electronically — powered by MarineX360.');
+    expect(footer).toContain('Certified by');
+    expect(footer).toContain('width: 45px;');
+    expect(footer).toContain('height: 45px;');
   });
 });

@@ -103,9 +103,9 @@ run('Invoices (integration)', () => {
     expect(Math.round((dueAt.getTime() - issuedAt.getTime()) / 86_400_000)).toBe(45);
     expect(body.version).toBe(invoice.version + 1);
     expect(await prisma.auditEntry.count({ where: { entityType: 'Invoice', entityId: invoice.id, action: 'ISSUE' } })).toBe(1);
-    const jobs = await pdfQueue.getJobs(['waiting', 'delayed', 'prioritized', 'paused']);
+    const jobs = await pdfQueue.getJobs(['waiting', 'delayed', 'prioritized', 'paused', 'active', 'completed', 'failed']);
     expect(jobs.some((job) => job.name === 'generate' && job.data.invoiceId === body.id)).toBe(true);
-    const emailJobs = await emailQueue.getJobs(['waiting', 'delayed', 'prioritized', 'paused']);
+    const emailJobs = await emailQueue.getJobs(['waiting', 'delayed', 'prioritized', 'paused', 'active', 'completed', 'failed']);
     expect(emailJobs.some((job) => job.name === 'send' && job.data.invoiceId === body.id)).toBe(true);
   });
 
@@ -147,6 +147,90 @@ run('Invoices (integration)', () => {
     expect(body.lines).toHaveLength(1);
     expect(body.payments).toHaveLength(1);
     expect(body.payments[0].amountMinor).toBe(25000);
+  });
+
+  it('allows Finance to edit DRAFT invoice lines before issuing, then locks edits after issue', async () => {
+    const invoice = await createInvoiceFixture('EDIT');
+    const line = await prisma.invoiceLine.create({
+      data: {
+        invoiceId: invoice.id,
+        kind: 'LABOUR',
+        description: 'Original labour',
+        quantity: 1,
+        unit: 'hr',
+        unitPriceAmountMinor: 100000,
+        unitPriceCurrency: 'SGD',
+        lineTotalAmountMinor: 100000,
+        lineTotalCurrency: 'SGD',
+      },
+    });
+
+    const update = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/invoices/${invoice.id}/lines/${line.id}`,
+      headers: { authorization: bearer(finance) },
+      payload: {
+        version: invoice.version,
+        kind: 'OTHER',
+        description: 'Adjusted labour',
+        quantity: 2,
+        unit: 'hr',
+        unitPriceAmountMinor: 75000,
+        unitPriceCurrency: 'SGD',
+      },
+    });
+
+    expect(update.statusCode).toBe(200);
+    const updated = update.json();
+    expect(updated.status).toBe('DRAFT');
+    expect(updated.totalAmountMinor).toBe(150000);
+    expect(updated.gstAmountMinor).toBe(13500);
+    expect(updated.version).toBe(invoice.version + 1);
+    expect(updated.lines[0].description).toBe('Adjusted labour');
+    expect(updated.lines[0].lineTotalAmountMinor).toBe(150000);
+
+    const add = await app.inject({
+      method: 'POST',
+      url: `/api/v1/invoices/${invoice.id}/lines`,
+      headers: { authorization: bearer(finance) },
+      payload: {
+        version: updated.version,
+        kind: 'OTHER',
+        description: 'Manual surcharge',
+        quantity: 1,
+        unit: null,
+        unitPriceAmountMinor: 25000,
+        unitPriceCurrency: 'SGD',
+      },
+    });
+    expect(add.statusCode).toBe(200);
+    expect(add.json().totalAmountMinor).toBe(175000);
+    expect(add.json().lines).toHaveLength(2);
+
+    const issue = await app.inject({
+      method: 'POST',
+      url: `/api/v1/invoices/${invoice.id}/issue`,
+      headers: { authorization: bearer(finance) },
+      payload: { version: add.json().version },
+    });
+    expect(issue.statusCode).toBe(200);
+    expect(issue.json().status).toBe('SENT');
+
+    const locked = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/invoices/${invoice.id}/lines/${line.id}`,
+      headers: { authorization: bearer(finance) },
+      payload: {
+        version: issue.json().version,
+        kind: 'OTHER',
+        description: 'Too late',
+        quantity: 1,
+        unit: 'hr',
+        unitPriceAmountMinor: 1,
+        unitPriceCurrency: 'SGD',
+      },
+    });
+    expect(locked.statusCode).toBe(403);
   });
 
   it('returns pending and ready states for invoice PDF access', async () => {

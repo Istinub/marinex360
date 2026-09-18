@@ -1,87 +1,14 @@
 <script setup lang="ts">
 import Button from 'primevue/button';
-import { defineStore } from 'pinia';
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-
-type ActionableQueueStatus = 'PENDING' | 'SYNCING' | 'CONFLICT' | 'ERROR';
-
-interface StatusCountRow {
-  status: ActionableQueueStatus;
-  n: number | string;
-}
-
-interface MobileSqlAdapter {
-  select<T>(sql: string, params?: unknown[]): Promise<T[]>;
-}
-
-interface MobileRuntime {
-  marinex360?: {
-    db?: MobileSqlAdapter;
-  };
-}
-
-const COUNT_SQL = `
-  SELECT status, COUNT(*) AS n
-  FROM op_queue
-  WHERE status IN ('PENDING','SYNCING','CONFLICT','ERROR')
-  GROUP BY status
-`;
+import { useSyncQueueCount } from '@/composables/useSyncQueueCount';
 
 const REFRESH_MS = 5000;
-
-function mobileRuntime(): MobileRuntime {
-  return globalThis as typeof globalThis & MobileRuntime;
-}
-
-function db(): MobileSqlAdapter | null {
-  return mobileRuntime().marinex360?.db ?? null;
-}
-
-const useSyncStatusChipStore = defineStore('syncStatusChip', () => {
-  const counts = ref<Record<ActionableQueueStatus, number>>({
-    PENDING: 0,
-    SYNCING: 0,
-    CONFLICT: 0,
-    ERROR: 0,
-  });
-
-  const totalActionable = computed(() => Object.values(counts.value).reduce((total, count) => total + count, 0));
-  const hasQueue = computed(() => totalActionable.value > 0);
-
-  async function loadCount(): Promise<void> {
-    const adapter = db();
-    if (!adapter) {
-      counts.value = { PENDING: 0, SYNCING: 0, CONFLICT: 0, ERROR: 0 };
-      return;
-    }
-
-    const nextCounts: Record<ActionableQueueStatus, number> = {
-      PENDING: 0,
-      SYNCING: 0,
-      CONFLICT: 0,
-      ERROR: 0,
-    };
-
-    try {
-      const rows = await adapter.select<StatusCountRow>(COUNT_SQL);
-      for (const row of rows) nextCounts[row.status] = Number(row.n);
-      counts.value = nextCounts;
-    } catch {
-      counts.value = nextCounts;
-    }
-  }
-
-  return {
-    counts,
-    totalActionable,
-    hasQueue,
-    loadCount,
-  };
-});
-
-const syncChipStore = useSyncStatusChipStore();
+const syncChipStore = useSyncQueueCount();
 const router = useRouter();
+const queuedCount = computed(() => syncChipStore.totalActionable.value);
+const hasQueue = computed(() => syncChipStore.hasQueue.value);
 let refreshTimer: number | null = null;
 
 function openPanel(): void {
@@ -105,13 +32,13 @@ onBeforeUnmount(() => {
 
 <template>
   <Button
-    v-if="syncChipStore.hasQueue"
+    v-if="hasQueue"
     class="sync-chip"
     icon="pi pi-cloud-upload"
-    :label="String(syncChipStore.totalActionable)"
+    :label="String(queuedCount)"
     rounded
     severity="warn"
-    :aria-label="`Open sync status, ${syncChipStore.totalActionable} queued`"
+    :aria-label="`Open sync status, ${queuedCount} queued`"
     @click="openPanel"
   />
 

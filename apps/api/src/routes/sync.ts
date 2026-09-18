@@ -80,7 +80,7 @@ function buildUpdateData(entity: WritableEntity, p: Record<string, unknown>) {
     case 'Photo': return { phase: p.phase, geoLat: p.geoLat, geoLng: p.geoLng };
     case 'Observation': return { body: p.body };
     case 'ChecklistInstance': return { results: p.results }; // validated separately before this is called
-    case 'MaterialLine': return { description: p.description, quantity: p.quantity, unitCostAmountMinor: p.unitCostAmountMinor, unitCostCurrency: p.unitCostCurrency };
+    case 'MaterialLine': return { description: p.description, quantity: p.quantity, unit: p.unit, unitCostAmountMinor: p.unitCostAmountMinor, unitCostCurrency: p.unitCostCurrency };
     case 'ESignature': return {}; // D-059: signatures are immutable; applyOp rejects UPDATE before this is used.
   }
 }

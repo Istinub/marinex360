@@ -8,6 +8,7 @@ import { crmRoutes } from './routes/crm.js';
 import { jobOrderRoutes } from './routes/jobOrders.js';
 import { variationRoutes } from './routes/variations.js';
 import { invoiceRoutes } from './routes/invoices.js';
+import { quotationRoutes } from './routes/quotations.js';
 import { reviewQueueRoutes } from './routes/reviewQueue.js';
 import { checklistRoutes } from './routes/checklists.js';
 import { checklistCategoryRoutes } from './routes/checklistCategories.js';
@@ -16,8 +17,11 @@ import { documentRoutes } from './routes/documents.js';
 import { certificateRoutes } from './routes/certificates.js';
 import { syncRoutes } from './routes/sync.js';
 import { jobRequestRoutes } from './routes/jobRequests.js';
+import { jobProgressRoutes } from './routes/jobProgress.js';
 import { deviceRoutes } from './routes/devices.js';
 import { brandingSettingsRoutes } from './routes/brandingSettings.js';
+import { adminDevToolsRoutes } from './routes/adminDevTools.js';
+import { adminSettingsRoutes } from './routes/adminSettings.js';
 
 export interface AppDeps { prisma: PrismaClient; accessSecret: string; presignPut: PresignPut; }
 
@@ -34,7 +38,7 @@ function serializeChangeSeq(payload: unknown, expose: boolean): unknown {
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify({ logger: true });
   registerErrorHandler(app);
-  registerAuthn(app, { accessSecret: deps.accessSecret });
+  registerAuthn(app, { accessSecret: deps.accessSecret, prisma: deps.prisma });
 
   // changeSeq is an internal sync cursor field. JSON has no bigint representation, so expose it
   // only on the sync delta endpoint as a decimal string and keep every existing REST DTO stable.
@@ -49,6 +53,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   jobOrderRoutes(app, deps.prisma);
   variationRoutes(app, deps.prisma);
   invoiceRoutes(app, deps.prisma);
+  quotationRoutes(app, deps.prisma);
   reviewQueueRoutes(app, deps.prisma);
   checklistCategoryRoutes(app, deps.prisma);
   checklistRoutes(app, deps.prisma);
@@ -57,8 +62,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   certificateRoutes(app, deps.prisma);
   syncRoutes(app, deps.prisma);
   jobRequestRoutes(app, deps.prisma);
+  jobProgressRoutes(app, deps.prisma);
   deviceRoutes(app, deps.prisma, deps.accessSecret);
   brandingSettingsRoutes(app, deps.prisma);
+  adminDevToolsRoutes(app, deps.prisma);
+  adminSettingsRoutes(app, deps.prisma);
 
   return app;
 }

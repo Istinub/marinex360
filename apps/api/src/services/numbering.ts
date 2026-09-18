@@ -35,3 +35,11 @@ export async function nextInvoiceNumber(tx: Prisma.TransactionClient, branch: st
   const n = (rows[0]?.max ? Number(rows[0].max) : 0) + 1;
   return `INV-${branch}-${y}-${String(n).padStart(4, '0')}`;
 }
+
+export async function nextQuotationNumber(tx: Prisma.TransactionClient, now = new Date()): Promise<string> {
+  const rows = await tx.$queryRawUnsafe<{ n: bigint | number | string }[]>('SELECT nextval(\'quotation_number_seq\') AS n');
+  const n = Number(rows[0]?.n ?? 0);
+  const yy = String(now.getUTCFullYear()).slice(-2);
+  const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
+  return `QT-PTTKMR-${yy}-${mm}-${String(n).padStart(3, '0')}`;
+}

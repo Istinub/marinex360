@@ -51,7 +51,7 @@ run('Job Orders (integration)', () => {
     const seedVessel = await prisma.vessel.findFirstOrThrow({ where: { deletedAt: null } });
     jo = await prisma.jobOrder.upsert({
       where: { id: JO_ID },
-      update: { state: 'DRAFT', version: 0, assignedTechnicianIds: [], executionOwnerId: null },
+      update: { state: 'DRAFT', version: 0, assignedTechnicianIds: [], executionOwnerId: null, logoOverride: null },
       create: {
         id: JO_ID, joNumber: 'SG-INTTEST-JOBS', branch: 'SG', clientId: seedClient.id, vesselId: seedVessel.id,
         scopeSummary: 'Job Orders integration fixture', origin: 'MANUAL',
@@ -107,6 +107,78 @@ run('Job Orders (integration)', () => {
     const body = res.json();
     expect(Array.isArray(body)).toBe(true);
     expect(body.some((jobOrder: any) => jobOrder.id === fixture.id)).toBe(true);
+  });
+
+  it('lets Director/Admin update logoOverride at any state and rejects non-brand filenames', async () => {
+    const logoFixture = await prisma.jobOrder.create({
+      data: {
+        joNumber: `SG-INTTEST-LOGO-${Date.now()}`,
+        branch: 'SG',
+        clientId: jo.clientId,
+        vesselId: jo.vesselId,
+        scopeSummary: 'Per-job logo override fixture',
+        origin: 'MANUAL',
+        quotedAmountMinor: 100000,
+        quotedCurrency: 'SGD',
+        state: 'IN_PROGRESS',
+        createdBy: director.id,
+      },
+    });
+    const locked = await prisma.jobOrder.update({
+      where: { id: logoFixture.id },
+      data: { state: 'IN_PROGRESS', version: { increment: 1 }, logoOverride: null },
+    });
+
+    const invalid = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/job-orders/${logoFixture.id}`,
+      headers: { authorization: bearer(director) },
+      payload: { version: locked.version, logoOverride: 'not-a-real-logo.png' },
+    });
+    expect(invalid.statusCode).toBe(400);
+
+    const updated = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/job-orders/${logoFixture.id}`,
+      headers: { authorization: bearer(director) },
+      payload: { version: locked.version, logoOverride: 'TKMR_Engineering.png' },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json().logoOverride).toBe('TKMR_Engineering.png');
+
+    const afterDirector = await prisma.jobOrder.findUniqueOrThrow({ where: { id: logoFixture.id } });
+    const cleared = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/job-orders/${logoFixture.id}`,
+      headers: { authorization: bearer(admin) },
+      payload: { version: afterDirector.version, logoOverride: null },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json().logoOverride).toBeNull();
+  });
+
+  it('blocks Ops Supervisor from setting a per-job logo override', async () => {
+    const current = await prisma.jobOrder.create({
+      data: {
+        joNumber: `SG-INTTEST-LOGO-OPS-${Date.now()}`,
+        branch: 'SG',
+        clientId: jo.clientId,
+        vesselId: jo.vesselId,
+        scopeSummary: 'Per-job logo override Ops forbidden fixture',
+        origin: 'MANUAL',
+        quotedAmountMinor: 100000,
+        quotedCurrency: 'SGD',
+        state: 'DRAFT',
+        createdBy: sup.id,
+      },
+    });
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/job-orders/${current.id}`,
+      headers: { authorization: bearer(sup) },
+      payload: { version: current.version, logoOverride: 'TKMR.png' },
+    });
+    expect(res.statusCode).toBe(403);
   });
 
   it('JOSM-5: non-owner cannot enter IN_PROGRESS (FORBIDDEN)', async () => {

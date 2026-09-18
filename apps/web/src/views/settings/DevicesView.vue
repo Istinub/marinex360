@@ -9,6 +9,7 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { get, patch } from '@/lib/api/client';
 import { ApiResponseError } from '@/lib/api/errors';
 import type { Device } from '@/lib/api/types';
+import { useAuthStore } from '@/stores/auth';
 
 interface DeviceForm {
   id: string | null;
@@ -17,6 +18,7 @@ interface DeviceForm {
 }
 
 const devices = ref<Device[]>([]);
+const auth = useAuthStore();
 const isLoading = ref(false);
 const isSaving = ref(false);
 const errorMessage = ref<string | null>(null);
@@ -29,6 +31,7 @@ const form = reactive<DeviceForm>({
 });
 
 const dialogTitle = computed(() => (form.id ? 'Edit device' : 'Device'));
+const isAdmin = computed(() => auth.identity?.roles.includes('SYSTEM_ADMIN') ?? false);
 
 async function load(): Promise<void> {
   isLoading.value = true;
@@ -96,12 +99,14 @@ onMounted(load);
     <p v-if="successMessage" class="auth-message auth-message--success">{{ successMessage }}</p>
 
     <DataTable :value="devices" :loading="isLoading" data-key="id" striped-rows>
-      <Column field="id" header="Device ID" sortable />
       <Column field="name" header="Name" sortable>
-        <template #body="{ data }">{{ data.name ?? 'Unnamed device' }}</template>
+        <template #body="{ data }">
+          <span>{{ data.name ?? 'Unnamed device' }}</span>
+          <small v-if="isAdmin" class="record-form__version devices-technical-id">{{ data.id }}</small>
+        </template>
       </Column>
       <Column field="assignedUser.name" header="Assigned user" sortable>
-        <template #body="{ data }">{{ data.assignedUser?.name ?? data.assignedUserId }}</template>
+        <template #body="{ data }">{{ data.assignedUser?.name ?? 'Unassigned user' }}</template>
       </Column>
       <Column field="branch" header="Branch" sortable />
       <Column header="Actions">
@@ -140,6 +145,12 @@ onMounted(load);
     </Dialog>
   </main>
 </template>
+
+<style scoped>
+.devices-technical-id {
+  display: block;
+}
+</style>
 
 <style scoped>
 .devices-dialog {
