@@ -181,7 +181,37 @@ export function crmRoutes(app: FastifyInstance, prisma: PrismaClient): void {
 
   app.get('/api/v1/vendors/:id', w('vendor:read'), async (req) => {
     const { id } = req.params as any;
-    const vendor = await prisma.vendor.findFirst({ where: { id, deletedAt: null } });
+    const vendor = await prisma.vendor.findFirst({
+      where: { id, deletedAt: null },
+      include: {
+        jobOrders: {
+          where: { deletedAt: null, purgedAt: null },
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            joNumber: true,
+            state: true,
+            scopeSummary: true,
+            createdAt: true,
+            client: { select: { id: true, name: true } },
+            vessel: { select: { id: true, name: true, imoNumber: true } },
+          },
+        },
+        variations: {
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            jobOrderId: true,
+            reason: true,
+            amountMinor: true,
+            amountCurrency: true,
+            status: true,
+            createdAt: true,
+            jobOrder: { select: { id: true, joNumber: true, state: true } },
+          },
+        },
+      },
+    });
     if (!vendor) throw new AppError('NOT_FOUND');
     assertBranchAccess(req.ctx, vendor.branch);
     return vendor;

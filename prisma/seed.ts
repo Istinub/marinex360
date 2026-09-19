@@ -10,7 +10,6 @@ const prisma = new PrismaClient({
 });
 const PW = 'MarineX360-dev!'; // local synthetic only
 const LEGACY_SEED_USER_EMAILS = ['client@tkmr.local'];
-
 async function main() {
   const pwHash = await hashPassword(PW);
   const mk = (email: string, name: string, roles: string[], branch: string, extra: Record<string, unknown> = {}) =>
@@ -184,6 +183,7 @@ async function main() {
       },
     });
   }
+
 
   await prisma.brandingSettings.upsert({
     where: { id: 'singleton' },

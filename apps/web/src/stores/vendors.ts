@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { get, patch, post } from '@/lib/api/client';
-import type { Vendor } from '@/lib/api/types';
+import type { Vendor, VendorDetail } from '@/lib/api/types';
 
 export interface VendorInput {
   name: string;
@@ -37,11 +37,17 @@ export const useVendorsStore = defineStore('vendors', () => {
     return created;
   }
 
+  async function loadVendor(id: string): Promise<VendorDetail> {
+    const vendor = await get<VendorDetail>(`/vendors/${id}`);
+    vendors.value = [vendor, ...vendors.value.filter((item) => item.id !== vendor.id)];
+    return vendor;
+  }
+
   async function updateVendor(id: string, input: VendorPatchInput): Promise<Vendor> {
     const updated = await patch<Vendor, VendorPatchInput>(`/vendors/${id}`, input);
     vendors.value = vendors.value.map((vendor) => (vendor.id === updated.id ? updated : vendor));
     return updated;
   }
 
-  return { vendors, isLoading, sortedVendors, loadVendors, createVendor, updateVendor };
+  return { vendors, isLoading, sortedVendors, loadVendors, loadVendor, createVendor, updateVendor };
 });

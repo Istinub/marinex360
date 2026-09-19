@@ -73,7 +73,7 @@ const jobOrderDetailInclude = {
       updatedAt: true,
     },
   },
-  workers: { orderBy: { addedAt: 'desc' } },
+  workers: { orderBy: { addedAt: 'asc' } },
   statusHistory: {
     orderBy: { at: 'asc' },
     include: {
@@ -524,7 +524,7 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
       const access = technicianAccessFor(jo, req.ctx.userId);
       if (!access.visible || !access.canOpen) throw new AppError('NOT_FOUND');
     }
-    return prisma.jobOrderWorker.findMany({ where: { jobOrderId: id }, orderBy: { addedAt: 'desc' } });
+    return prisma.jobOrderWorker.findMany({ where: { jobOrderId: id }, orderBy: { addedAt: 'asc' } });
   });
 
   app.post('/api/v1/job-orders/:id/workers', authed, async (req, reply) => {

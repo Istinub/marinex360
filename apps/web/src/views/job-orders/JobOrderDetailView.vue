@@ -1597,12 +1597,17 @@ watch(jobOrderId, async () => {
             </div>
           </section>
 
-          <section class="jo-worklog-placeholder" aria-labelledby="job-order-worklog-title">
-            <i class="ti ti-users" aria-hidden="true" />
-            <div>
-              <h2 id="job-order-worklog-title" class="crm-section__title">Technicians worked</h2>
-              <p>Technician work-log breakdown is coming soon.</p>
+          <section class="jo-worker-roster" aria-labelledby="job-order-worker-title">
+            <div class="jo-detail-card__header">
+              <h2 id="job-order-worker-title" class="crm-section__title">Technicians worked</h2>
             </div>
+            <p v-if="!jobOrder.workers?.length" class="crm-empty">No technicians logged.</p>
+            <ul v-else class="jo-worker-roster__list">
+              <li v-for="worker in jobOrder.workers" :key="worker.id">
+                <span class="pi pi-user" aria-hidden="true" />
+                <span>{{ worker.name }}</span>
+              </li>
+            </ul>
           </section>
         </aside>
       </div>
@@ -2076,24 +2081,34 @@ watch(jobOrderId, async () => {
   font-style: italic;
 }
 
-.jo-worklog-placeholder {
-  display: flex;
+.jo-worker-roster {
+  display: grid;
   gap: 10px;
   padding: 12px;
-  border: 0.5px dashed #C2CCD4;
+  border: 0.5px solid #D3DCE3;
   border-radius: 8px;
-  background: #F4F7FA;
+  background: #FFFFFF;
 }
 
-.jo-worklog-placeholder i {
-  color: #8B98A3;
-  font-size: 18px;
+.jo-worker-roster__list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-.jo-worklog-placeholder p {
-  margin: 6px 0 0;
-  color: #8B98A3;
-  font-style: italic;
+.jo-worker-roster__list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #11202E;
+  font-size: 13px;
+}
+
+.jo-worker-roster__list .pi {
+  color: #5C7081;
+  font-size: 14px;
 }
 
 .completion-details {

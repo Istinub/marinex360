@@ -37,6 +37,7 @@ const navGroups: NavGroup[] = [
     items: [
       { label: 'Clients', to: '/clients', icon: 'pi pi-building', internal: true },
       { label: 'Vessels', to: '/vessels', icon: 'pi pi-compass', internal: true },
+      { label: 'Vendors', to: '/vendors', icon: 'pi pi-briefcase', internal: true, roles: ['OPS_SUPERVISOR', 'DIRECTOR', 'SYSTEM_ADMIN'] },
     ],
   },
   {
@@ -46,9 +47,17 @@ const navGroups: NavGroup[] = [
     items: [
       { label: 'Job Orders', to: '/job-orders', icon: 'pi pi-list-check', internal: true },
       { label: 'Job Requests', to: '/job-requests', icon: 'pi pi-inbox', internal: true, roles: ['OPS_SUPERVISOR', 'DIRECTOR', 'SYSTEM_ADMIN'] },
-      { label: 'Quotations', to: '/quotations', icon: 'pi pi-file-edit', internal: true },
       { label: 'Archive', to: '/job-orders/archive', icon: 'pi pi-folder', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
       { label: 'Trash', to: '/job-orders/trash', icon: 'pi pi-trash', internal: true, roles: ['SYSTEM_ADMIN', 'DIRECTOR'] },
+    ],
+  },
+  {
+    label: 'Quotations',
+    icon: 'pi pi-file-edit',
+    internal: true,
+    items: [
+      { label: 'Quotations', to: '/quotations', icon: 'pi pi-file-edit', internal: true },
+      { label: 'Quotation Trash', to: '/quotations/trash', icon: 'pi pi-trash', internal: true, roles: ['OPS_SUPERVISOR', 'DIRECTOR', 'SYSTEM_ADMIN'] },
     ],
   },
   {
@@ -97,7 +106,7 @@ const navGroups: NavGroup[] = [
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
-const activeUserMenu = ref<'topbar' | 'sidebar' | null>(null);
+const isUserMenuOpen = ref(false);
 const isSidebarOpen = ref(false);
 const isNarrowLayout = ref(false);
 let sidebarMediaQuery: MediaQueryList | null = null;
@@ -117,23 +126,13 @@ const visibleNavGroups = computed(() => navGroups
   }))
   .filter((group) => group.items.length > 0));
 const userDisplayName = computed(() => auth.identity?.name ?? auth.identity?.email ?? auth.identity?.userId ?? 'Office User');
-const userInitials = computed(() => {
-  const parts = userDisplayName.value.trim().split(/\s+/).filter(Boolean);
-  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-  return userDisplayName.value.slice(0, 2).toUpperCase();
-});
-const userContextLabel = computed(() => {
-  const role = auth.identity?.roles?.[0]?.replace(/_/g, ' ');
-  const branch = auth.identity?.branch;
-  return [role, branch].filter(Boolean).join(' · ') || 'Branch';
-});
 
-function toggleUserMenu(source: 'topbar' | 'sidebar'): void {
-  activeUserMenu.value = activeUserMenu.value === source ? null : source;
+function toggleUserMenu(): void {
+  isUserMenuOpen.value = !isUserMenuOpen.value;
 }
 
 function closeUserMenu(): void {
-  activeUserMenu.value = null;
+  isUserMenuOpen.value = false;
 }
 
 function toggleSidebar(): void {
@@ -198,8 +197,8 @@ watch(() => route.fullPath, () => {
           class="app-layout__user-trigger"
           type="button"
           aria-haspopup="menu"
-          :aria-expanded="activeUserMenu === 'topbar'"
-          @click="toggleUserMenu('topbar')"
+          :aria-expanded="isUserMenuOpen"
+          @click="toggleUserMenu"
         >
           <span class="pi pi-user" aria-hidden="true" />
           <span class="app-layout__user-copy">
@@ -209,7 +208,7 @@ watch(() => route.fullPath, () => {
           <span class="pi pi-angle-down" aria-hidden="true" />
         </button>
 
-        <div v-if="activeUserMenu === 'topbar'" class="app-layout__user-menu" role="menu">
+        <div v-if="isUserMenuOpen" class="app-layout__user-menu" role="menu">
           <button class="app-layout__menu-item" type="button" role="menuitem" @click="logout">
             <span class="pi pi-sign-out" aria-hidden="true" />
             <span>Logout</span>
@@ -242,32 +241,6 @@ watch(() => route.fullPath, () => {
             </RouterLink>
           </section>
         </nav>
-
-        <footer class="app-layout__account-footer">
-          <span class="app-layout__account-avatar" aria-hidden="true">{{ userInitials }}</span>
-          <span class="app-layout__account-copy">
-            <strong>{{ userDisplayName }}</strong>
-            <small>{{ userContextLabel }}</small>
-          </span>
-          <div class="app-layout__account-menu">
-            <button
-              class="app-layout__account-menu-trigger"
-              type="button"
-              aria-label="Open account menu"
-              aria-haspopup="menu"
-              :aria-expanded="activeUserMenu === 'sidebar'"
-              @click="toggleUserMenu('sidebar')"
-            >
-              <span class="ti ti-dots-vertical" aria-hidden="true" />
-            </button>
-            <div v-if="activeUserMenu === 'sidebar'" class="app-layout__user-menu app-layout__user-menu--sidebar" role="menu">
-              <button class="app-layout__menu-item" type="button" role="menuitem" @click="logout">
-                <span class="pi pi-sign-out" aria-hidden="true" />
-                <span>Logout</span>
-              </button>
-            </div>
-          </div>
-        </footer>
       </aside>
 
       <section class="app-layout__content" aria-label="Workspace">

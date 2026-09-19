@@ -24,9 +24,13 @@ import AnalyticsView from '@/views/analytics/AnalyticsView.vue';
 import JobRequestDetailView from '@/views/job-requests/JobRequestDetailView.vue';
 import JobRequestQueueView from '@/views/job-requests/JobRequestQueueView.vue';
 import InvoiceDetailView from '@/views/invoices/InvoiceDetailView.vue';
+import VendorDetailView from '@/views/vendors/VendorDetailView.vue';
+import VendorFormView from '@/views/vendors/VendorFormView.vue';
+import VendorListView from '@/views/vendors/VendorListView.vue';
 import QuotationDetailView from '@/views/quotations/QuotationDetailView.vue';
 import QuotationFormView from '@/views/quotations/QuotationFormView.vue';
 import QuotationListView from '@/views/quotations/QuotationListView.vue';
+import QuotationTrashView from '@/views/quotations/QuotationTrashView.vue';
 import ReportsView from '@/views/reports/ReportsView.vue';
 import AccountManagementView from '@/views/settings/AccountManagementView.vue';
 import BrandingSettingsView from '@/views/settings/BrandingSettingsView.vue';
@@ -196,6 +200,12 @@ const routes = [
         meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['OPS_SUPERVISOR', 'DIRECTOR', 'SYSTEM_ADMIN'] },
       },
       {
+        path: 'quotations/trash',
+        name: 'quotations-trash',
+        component: QuotationTrashView,
+        meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['OPS_SUPERVISOR', 'DIRECTOR', 'SYSTEM_ADMIN'] },
+      },
+      {
         path: 'quotations/:id/edit',
         name: 'quotation-edit',
         component: QuotationFormView,
@@ -230,6 +240,30 @@ const routes = [
         name: 'vessel-service-history',
         component: VesselServiceHistoryView,
         meta: { requireAuth: true, requireMfaEnrolled: true },
+      },
+      {
+        path: 'vendors',
+        name: 'vendors',
+        component: VendorListView,
+        meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['OPS_SUPERVISOR', 'DIRECTOR', 'SYSTEM_ADMIN'] },
+      },
+      {
+        path: 'vendors/new',
+        name: 'vendor-new',
+        component: VendorFormView,
+        meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['OPS_SUPERVISOR', 'DIRECTOR', 'SYSTEM_ADMIN'] },
+      },
+      {
+        path: 'vendors/:id/edit',
+        name: 'vendor-edit',
+        component: VendorFormView,
+        meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['OPS_SUPERVISOR', 'DIRECTOR', 'SYSTEM_ADMIN'] },
+      },
+      {
+        path: 'vendors/:id',
+        name: 'vendor-detail',
+        component: VendorDetailView,
+        meta: { requireAuth: true, requireMfaEnrolled: true, roles: ['OPS_SUPERVISOR', 'DIRECTOR', 'SYSTEM_ADMIN'] },
       },
       {
         path: 'mfa/enroll',

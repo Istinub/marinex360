@@ -268,85 +268,6 @@ button {
   background: var(--color-canvas);
 }
 
-.app-layout__account-footer {
-  position: relative;
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px;
-  border-top: 0.5px solid #D3DCE3;
-  background: #FFFFFF;
-}
-
-.app-layout__account-avatar {
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
-  display: grid;
-  place-items: center;
-  border-radius: 999px;
-  background: #0B2A4A;
-  color: #FFFFFF;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.app-layout__account-copy {
-  min-width: 0;
-  flex: 1 1 auto;
-  display: grid;
-  gap: 2px;
-}
-
-.app-layout__account-copy strong,
-.app-layout__account-copy small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.app-layout__account-copy strong {
-  color: #11202E;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.app-layout__account-copy small {
-  color: #5C7081;
-  font-size: 11px;
-  text-transform: capitalize;
-}
-
-.app-layout__account-menu {
-  position: relative;
-  flex: 0 0 auto;
-}
-
-.app-layout__account-menu-trigger {
-  width: 32px;
-  height: 32px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: #5C7081;
-  cursor: pointer;
-}
-
-.app-layout__account-menu-trigger:hover {
-  background: #F4F7FA;
-  color: #0B2A4A;
-}
-
-.app-layout__user-menu--sidebar {
-  top: auto;
-  right: 0;
-  bottom: calc(100% + var(--sp-2));
-}
-
 .app-layout__backdrop {
   position: fixed;
   inset: 0;
@@ -820,6 +741,18 @@ button {
 
 .record-form__section:first-of-type .record-form__section-heading {
   margin-top: 0;
+}
+
+.record-form__section-header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.record-form__section-header .record-form__section-heading {
+  margin-bottom: 0;
 }
 
 .record-form__section-optional {

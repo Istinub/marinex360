@@ -6,11 +6,19 @@ export function daysBefore(now: Date, days: number): Date {
   return new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
 }
 
-export async function reconcileJobOrderLifecycle(now: Date = new Date()): Promise<{ purged: number; archived: number }> {
+export async function reconcileJobOrderLifecycle(now: Date = new Date()): Promise<{ purged: number; archived: number; quotationPurged: number }> {
   const trashCutoff = daysBefore(now, 30);
   const archiveCutoff = daysBefore(now, 15);
 
   const purged = await prisma.jobOrder.updateMany({
+    where: {
+      deletedAt: { lte: trashCutoff },
+      purgedAt: null,
+    },
+    data: { purgedAt: now },
+  });
+
+  const quotationPurged = await prisma.quotation.updateMany({
     where: {
       deletedAt: { lte: trashCutoff },
       purgedAt: null,
@@ -46,5 +54,5 @@ export async function reconcileJobOrderLifecycle(now: Date = new Date()): Promis
     })
     : { count: 0 };
 
-  return { purged: purged.count, archived: archived.count };
+  return { purged: purged.count, archived: archived.count, quotationPurged: quotationPurged.count };
 }

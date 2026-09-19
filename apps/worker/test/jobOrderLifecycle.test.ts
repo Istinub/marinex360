@@ -70,6 +70,47 @@ runDb('job order lifecycle job (integration)', () => {
     await expect(prisma.jobOrder.findUniqueOrThrow({ where: { id: freshTrash.id } })).resolves.toMatchObject({ purgedAt: null });
   });
 
+  it('auto-purges trashed quotations after 30 days through the same lifecycle job', async () => {
+    const now = new Date('2026-09-05T00:00:00Z');
+    const stamp = Date.now();
+    const oldTrash = await prisma.quotation.create({
+      data: {
+        quotationNumber: `QT-WORKER-TRASH-OLD-${stamp}`,
+        branch: 'SG',
+        manualClientName: 'Old quotation trash lifecycle fixture client',
+        manualVesselName: 'Old quotation trash lifecycle fixture vessel',
+        category: 'MECHANICAL',
+        quotationDate: now,
+        currency: 'SGD',
+        exclusionsText: 'Fixture exclusions',
+        deletedAt: new Date('2026-08-05T00:00:00Z'),
+        createdBy: actorId,
+        lines: { create: [{ description: 'Old trash quotation fixture line', unit: 'lot', quantity: 1, unitPrice: 100, amount: 100 }] },
+      },
+    });
+    const freshTrash = await prisma.quotation.create({
+      data: {
+        quotationNumber: `QT-WORKER-TRASH-FRESH-${stamp}`,
+        branch: 'SG',
+        manualClientName: 'Fresh quotation trash lifecycle fixture client',
+        manualVesselName: 'Fresh quotation trash lifecycle fixture vessel',
+        category: 'MECHANICAL',
+        quotationDate: now,
+        currency: 'SGD',
+        exclusionsText: 'Fixture exclusions',
+        deletedAt: new Date('2026-08-20T00:00:00Z'),
+        createdBy: actorId,
+        lines: { create: [{ description: 'Fresh trash quotation fixture line', unit: 'lot', quantity: 1, unitPrice: 100, amount: 100 }] },
+      },
+    });
+
+    const result = await reconcileJobOrderLifecycle(now);
+
+    expect(result.quotationPurged).toBeGreaterThanOrEqual(1);
+    await expect(prisma.quotation.findUniqueOrThrow({ where: { id: oldTrash.id } })).resolves.toMatchObject({ purgedAt: now });
+    await expect(prisma.quotation.findUniqueOrThrow({ where: { id: freshTrash.id } })).resolves.toMatchObject({ purgedAt: null });
+  });
+
   it('auto-archives completed job orders 15 days after their COMPLETED history entry', async () => {
     const now = new Date('2026-09-05T00:00:00Z');
     const completedOld = await prisma.jobOrder.create({

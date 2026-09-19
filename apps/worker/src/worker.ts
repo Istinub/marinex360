@@ -139,7 +139,7 @@ const jobOrderLifecycleWorker = new Worker(
   "job-order-lifecycle-reconciliation",
   async () => {
     const result = await reconcileJobOrderLifecycle();
-    console.log(`[worker] job order lifecycle: ${result.purged} purged, ${result.archived} archived`);
+    console.log(`[worker] job order lifecycle: ${result.purged} job orders purged, ${result.archived} archived, ${result.quotationPurged} quotations purged`);
     return result;
   },
   { connection },

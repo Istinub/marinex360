@@ -48,6 +48,32 @@ export interface Vendor {
   updatedAt: string;
 }
 
+export interface VendorJobOrderReference {
+  id: string;
+  joNumber: string;
+  state: JobState;
+  scopeSummary: string;
+  createdAt: string;
+  client?: Pick<Client, 'id' | 'name'> | null;
+  vessel?: Pick<Vessel, 'id' | 'name' | 'imoNumber'> | null;
+}
+
+export interface VendorVariationReference {
+  id: string;
+  jobOrderId: string;
+  reason: string;
+  amountMinor: number;
+  amountCurrency: string;
+  status: VariationStatus;
+  createdAt: string;
+  jobOrder?: Pick<JobOrder, 'id' | 'joNumber' | 'state'> | null;
+}
+
+export interface VendorDetail extends Vendor {
+  jobOrders: VendorJobOrderReference[];
+  variations: VendorVariationReference[];
+}
+
 export interface BrandingSettings {
   id: string;
   logoFilename: string;
