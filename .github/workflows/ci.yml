@@ -70,7 +70,7 @@ jobs:
           docker run -d --name minio-ci \
             -p 9000:9000 -p 9001:9001 \
             -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio server /data --console-address ":9001"
+            quay.io/minio/minio server /data --console-address ":9001"
 
       - name: Create shadow database
         run: PGPASSWORD=localdev psql -h localhost -U marinex -d marinex360 -c "CREATE DATABASE marinex360_shadow;" || true

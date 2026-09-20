@@ -1083,8 +1083,8 @@ export function assertTransition(input: TransitionInput): { to: JoState; kind: K
 |---|---|
 | `postgres` (postgres:16) | Primary DB — stand-in for AWS RDS PostgreSQL (ap-southeast-1). Provisions shadow DB + a least-privilege app role at init. |
 | `redis` (redis:7) | Cache + BullMQ job queue — stand-in for AWS ElastiCache. |
-| `minio` (minio/minio) | S3-compatible object storage — stand-in for AWS S3 (ap-southeast-1). |
-| `minio-init` (minio/mc) | One-shot readiness gate: waits for MinIO, creates the `marinex360-local` bucket, exits. |
+| `minio` (quay.io/minio/minio) | S3-compatible object storage — stand-in for AWS S3 (ap-southeast-1). |
+| `minio-init` (quay.io/minio/mc) | One-shot readiness gate: waits for MinIO, creates the `marinex360-local` bucket, exits. |
 | `maildev` (maildev/maildev) | Local SMTP + web UI — stand-in for SendGrid/SES transactional mail. |
 
 ### Worker service status
