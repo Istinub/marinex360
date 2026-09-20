@@ -59,10 +59,12 @@ run('Admin settings feature flags (integration)', () => {
       },
     });
     director = await prisma.user.findUniqueOrThrow({ where: { email: 'director@tkmr.local' } });
-    await prisma.featureFlag.upsert({
-      where: { key: 'MFA_REQUIRED' },
-      update: { enabled: false, description: 'Require MFA/TOTP at login for System Admin and Finance accounts', category: 'security' },
-      create: { key: 'MFA_REQUIRED', enabled: false, description: 'Require MFA/TOTP at login for System Admin and Finance accounts', category: 'security' },
+    await withMfaFlagLock(prisma, async () => {
+      await prisma.featureFlag.upsert({
+        where: { key: 'MFA_REQUIRED' },
+        update: { enabled: false, description: 'Require MFA/TOTP at login for System Admin and Finance accounts', category: 'security' },
+        create: { key: 'MFA_REQUIRED', enabled: false, description: 'Require MFA/TOTP at login for System Admin and Finance accounts', category: 'security' },
+      });
     });
     await prisma.featureFlag.upsert({
       where: { key: 'DEV_TOOLS' },
@@ -72,7 +74,10 @@ run('Admin settings feature flags (integration)', () => {
   });
 
   afterAll(async () => {
-    await prisma.featureFlag.updateMany({ where: { key: { in: ['MFA_REQUIRED', 'DEV_TOOLS'] } }, data: { enabled: false } });
+    await withMfaFlagLock(prisma, async () => {
+      await prisma.featureFlag.updateMany({ where: { key: 'MFA_REQUIRED' }, data: { enabled: false } });
+    });
+    await prisma.featureFlag.updateMany({ where: { key: 'DEV_TOOLS' }, data: { enabled: false } });
     await app.close();
     await prisma.$disconnect();
   });
