@@ -4,25 +4,14 @@ import { buildApp } from '../../src/app.js';
 import { signAccessToken } from '../../src/auth/tokens.js';
 import { hashPassword } from '../../src/auth/password.js';
 import { generateBase32Secret } from '../../src/auth/totp.js';
+import { withMfaFlagLock } from './mfaFlagLock.js';
 
 const run = process.env.RUN_DB_TESTS ? describe : describe.skip;
 const SECRET = process.env.JWT_ACCESS_SECRET ?? 'test-secret';
 const PASSWORD = 'MarineX360-test!';
-const MFA_FLAG_TEST_LOCK = 735001;
 
 const bearer = (user: { id: string; roles: string[]; branch: string }) =>
   `Bearer ${signAccessToken({ sub: user.id, roles: user.roles as any, branch: user.branch, mfaComplete: true }, SECRET)}`;
-
-async function withMfaFlagLock<T>(prisma: PrismaClient, work: () => Promise<T>): Promise<T> {
-  await prisma.$executeRaw`SELECT pg_advisory_lock(${MFA_FLAG_TEST_LOCK})`;
-  try {
-    await prisma.featureFlag.updateMany({ where: { key: 'MFA_REQUIRED' }, data: { enabled: false } });
-    return await work();
-  } finally {
-    await prisma.featureFlag.updateMany({ where: { key: 'MFA_REQUIRED' }, data: { enabled: false } });
-    await prisma.$executeRaw`SELECT pg_advisory_unlock(${MFA_FLAG_TEST_LOCK})`;
-  }
-}
 
 run('Admin settings feature flags (integration)', () => {
   let prisma: PrismaClient;

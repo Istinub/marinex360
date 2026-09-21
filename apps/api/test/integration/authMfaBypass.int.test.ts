@@ -4,27 +4,12 @@ import { buildApp } from '../../src/app.js';
 import { hashPassword } from '../../src/auth/password.js';
 import { generateBase32Secret, totpAt } from '../../src/auth/totp.js';
 import { verifyAccessToken } from '../../src/auth/tokens.js';
+import { withMfaFlagLock } from './mfaFlagLock.js';
 
 const run = process.env.RUN_DB_TESTS ? describe : describe.skip;
 const SECRET = process.env.JWT_ACCESS_SECRET ?? 'test-secret';
 const PASSWORD = 'MarineX360-test!';
 const previousSkipAdminMfa = process.env.SKIP_ADMIN_MFA;
-const MFA_FLAG_TEST_LOCK = 735001;
-
-async function withMfaFlagLock<T>(prisma: PrismaClient, work: () => Promise<T>): Promise<T> {
-  await prisma.$executeRaw`SELECT pg_advisory_lock(${MFA_FLAG_TEST_LOCK})`;
-  try {
-    await prisma.featureFlag.upsert({
-      where: { key: 'MFA_REQUIRED' },
-      update: { enabled: false, description: 'Require MFA/TOTP at login for System Admin and Finance accounts', category: 'security' },
-      create: { key: 'MFA_REQUIRED', enabled: false, description: 'Require MFA/TOTP at login for System Admin and Finance accounts', category: 'security' },
-    });
-    return await work();
-  } finally {
-    await prisma.featureFlag.updateMany({ where: { key: 'MFA_REQUIRED' }, data: { enabled: false } });
-    await prisma.$executeRaw`SELECT pg_advisory_unlock(${MFA_FLAG_TEST_LOCK})`;
-  }
-}
 
 run('Auth login MFA bypass (integration)', () => {
   let prisma: PrismaClient;
