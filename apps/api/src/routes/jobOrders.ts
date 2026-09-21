@@ -1,7 +1,7 @@
 // Job Order routes (P1-5) — create / read (scoped + IDOR) / header PATCH (locked) / assign /
 // JOSM transition. Everything goes through the service layer; audit + version + scope live here.
 import type { FastifyInstance } from 'fastify';
-import type { Prisma, PrismaClient } from '@prisma/client';
+import type { JobOrder, Prisma, PrismaClient } from '@prisma/client';
 import { AppError } from '../lib/errors.js';
 import { assertBranchAccess, scopeWhere, branchForCreate, clientIdForUser } from '../services/branchScope.js';
 import { appendAudit } from '../services/audit.js';
@@ -391,7 +391,7 @@ export function jobOrderRoutes(app: FastifyInstance, prisma: PrismaClient): void
     if (!isAdminOrDirector(roles)) throw new AppError('FORBIDDEN');
   }
 
-  async function listLifecycleBucket(req: any, where: Prisma.JobOrderWhereInput): Promise<Prisma.JobOrderGetPayload<{}>[]> {
+  async function listLifecycleBucket(req: any, where: Prisma.JobOrderWhereInput): Promise<JobOrder[]> {
     return prisma.jobOrder.findMany({
       where: { ...scopeWhere(req.ctx), ...where, purgedAt: null },
       orderBy: { createdAt: 'desc' },

@@ -102,7 +102,7 @@ async function resolveRefs(
   const manualClientName = cleanString(input.manualClientName ?? input.newClientName);
   const manualVesselName = cleanString(input.manualVesselName ?? input.newVesselName);
   let clientId = cleanString(input.clientId);
-  let vesselId = cleanString(input.vesselId);
+  const vesselId = cleanString(input.vesselId);
 
   if (clientId) {
     const client = await tx.client.findFirst({ where: { id: clientId, deletedAt: null } });

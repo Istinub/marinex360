@@ -17,6 +17,7 @@ export default tseslint.config(
     ignores: [
       "**/dist/**",
       "**/node_modules/**",
+      "chrome/**",
       "prisma/migrations/**",
       "**/*.mjs",
       "prisma/seed.js",

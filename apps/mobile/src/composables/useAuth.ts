@@ -23,6 +23,7 @@ interface AccessClaims {
   email?: string;
   roles: string[];
   branch: string;
+  exp: number;
 }
 
 interface LoginResponse {
@@ -89,7 +90,10 @@ function decodeAccessClaims(access: string): AccessClaims {
 
   if (!claims || typeof claims !== 'object') throw new Error('Access token claims are invalid.');
   const record = claims as Record<string, unknown>;
-  if (typeof record.sub !== 'string' || typeof record.branch !== 'string' || !Array.isArray(record.roles)) {
+  if (typeof record.sub !== 'string'
+    || typeof record.branch !== 'string'
+    || !Array.isArray(record.roles)
+    || typeof record.exp !== 'number') {
     throw new Error('Access token identity claims are invalid.');
   }
 
@@ -102,6 +106,7 @@ function decodeAccessClaims(access: string): AccessClaims {
     email: typeof record.email === 'string' ? record.email : undefined,
     roles,
     branch: record.branch,
+    exp: record.exp,
   };
 }
 
@@ -315,6 +320,11 @@ function isExpiredAccessResponse(response: Response, body: unknown): boolean {
   return response.status === 401 && error?.code === 'UNAUTHORIZED' && error.message === 'token expired';
 }
 
+function isAccessTokenExpired(access: string, skewMs = 30_000): boolean {
+  const claims = decodeAccessClaims(access);
+  return claims.exp * 1000 <= Date.now() + skewMs;
+}
+
 async function requestWithSession(input: RequestInfo | URL, init: RequestInit, session: MobileSession): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${session.access}`);
@@ -322,8 +332,12 @@ async function requestWithSession(input: RequestInfo | URL, init: RequestInit, s
 }
 
 export async function authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-  const session = await currentSession();
+  let session = await currentSession();
   if (!session) throw new SessionExpiredError();
+
+  if (isAccessTokenExpired(session.access)) {
+    session = await refresh();
+  }
 
   const response = await requestWithSession(input, init, session);
   if (response.status !== 401) return response;
