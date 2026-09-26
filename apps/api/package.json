@@ -14,7 +14,7 @@
     "@marinex360/storage": "^0.0.0",
     "@prisma/client": "^5.20.0",
     "bullmq": "^6.1.2",
-    "fastify": "^5.0.0",
+    "fastify": "^5.12.5",
     "ioredis": "^5.11.1",
     "pg": "^8.23.0",
     "pino": "^9.4.0"
