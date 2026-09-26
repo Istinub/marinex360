@@ -27,7 +27,7 @@
     "@capacitor/push-notifications": "^8.1.2",
     "@primevue/themes": "^4.0.0",
     "jeep-sqlite": "^2.8.0",
-    "pinia": "^3.0.0",
+    "pinia": "^4.0.3",
     "primeicons": "^7.0.0",
     "primevue": "^4.0.0",
     "sql.js": "1.11.0",
